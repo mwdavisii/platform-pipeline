@@ -712,11 +712,17 @@ def test_promote_says_plainly_when_the_approval_was_a_self_approval():
     run = promote_step("Attest, tag")["run"]
     assert run.count("Single-approver PoC mode: approved by the person who triggered it. Not valid for production use.") == 1
     assert "self_approved=$(jq -r .self_approved out/promotion-record.json)" in run
-    assert run.index("self_approved=") < run.index("self_note=")
+    assert "single_mode=$(jq -r .gate2_single_approver out/promotion-record.json)" in run
+    assert 'case "$v" in true|false) ;; *) echo "::error::' in run and "exit 1;; esac" in run
+    assert run.index("esac") < run.index("self_note=")
+    assert '[ "$self_approved" = "true" ] || [ "$single_mode" = "true" ]' in run
     # the note goes into the release notes (before the release is created) and into the job summary
     assert run.index('notes+=$\'\\n\\n\'"$self_note"') < run.index("gh release create")
     assert 'echo "- **$self_note**" >> "$GITHUB_STEP_SUMMARY"' in run
     # the mode is never an input of the workflow or a value passed to promotion-record
     record = promote_step("Record the approval")["run"]
     assert "single" not in record.lower() and "self_approved" not in record
+    docker_run = next(l for l in record.splitlines() if "docker run" in l)
+    assert not re.search(r"(^|\s)(-e|--env|--env-file)(\s|=)", docker_run)
+    assert len(re.findall(r"(^|\s)(-v|--volume)(\s|=)", docker_run)) == 1
     assert "single" not in " ".join(load(ROOT / ".github/workflows/golden-road-promote.yml")["on"]["workflow_call"]["inputs"])

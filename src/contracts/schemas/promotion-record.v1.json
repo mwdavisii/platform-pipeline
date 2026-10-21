@@ -10,6 +10,7 @@
     "image",
     "approvals",
     "self_approved",
+    "gate2_single_approver",
     "triggered_by",
     "actor",
     "run_attempt",
@@ -144,7 +145,12 @@
       ]
     },
     "self_approved": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "True only when every counted approver is the person who triggered the run (single-approver PoC mode)."
+    },
+    "gate2_single_approver": {
+      "type": "boolean",
+      "description": "The platform's gate2_single_approver flag when the record was made. self_approved and this field were added to v1 before the first proof run, so earlier v1 records are invalid."
     }
   }
 }

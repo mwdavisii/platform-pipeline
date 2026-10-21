@@ -85,6 +85,7 @@ def build_promotion_record(*, release, manifests_sha256, image, approvals, trigg
         "release": release,
         "manifests_sha256": manifests_sha256,
         "image": image,
+        "gate2_single_approver": single_approver,
         "self_approved": single_approver and all(login in triggerers for login in approved),
         "approvals": sorted(approved.values(), key=lambda a: a["login"].lower()),
         "triggered_by": triggered_by,

@@ -8,9 +8,8 @@ import os
 import sys
 from pathlib import Path
 
-from contracts.schema import validate
-
 from builder.config import gate2_single_approver, load_platform
+from contracts.schema import validate
 
 from . import authz_probe, checks, preview, record
 from .gate import evaluate, load_overrides

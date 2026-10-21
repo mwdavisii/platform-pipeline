@@ -40,9 +40,16 @@ def test_ruleset_requires_drift_check():
     assert {"context": "golden-road / drift", "integration_id": 15368} in checks["parameters"]["required_status_checks"]
 
 
+def single_approver_mode():
+    """The live tree's recorded Gate 2 mode: False when committed, True after configure.py --single-approver."""
+    mode = json.loads((ROOT / "platform/platform.json").read_text())["gate2_single_approver"]
+    assert type(mode) is bool
+    return mode
+
+
 def test_environment_prevents_self_review():
     doc = json.loads((APP / ".github/environment-prod.json").read_text())
-    assert doc["prevent_self_review"] is True and doc["reviewers"]
+    assert doc["prevent_self_review"] is (not single_approver_mode()) and doc["reviewers"]
 
 
 def test_builder_tag_ruleset_is_admin_only():
@@ -275,7 +282,9 @@ def test_enforcement_doc_describes_the_personal_poc_exception():
 def test_hello_app_requires_code_owner_review_for_dot_github():
     ruleset = json.loads((APP / ".github/rulesets/main.json").read_text())
     pr = next(r for r in ruleset["rules"] if r["type"] == "pull_request")
-    assert pr["parameters"]["require_code_owner_review"] is True
+    params = pr["parameters"]
+    keys = ("required_approving_review_count", "require_code_owner_review", "require_last_push_approval")
+    assert tuple(params[k] for k in keys) == ((0, False, False) if single_approver_mode() else (1, True, True))
     owners = (APP / ".github/CODEOWNERS").read_text().splitlines()
     rules = [l for l in owners if l.strip() and not l.startswith("#")]
     assert any(l.split()[0] == "/.github/" and len(l.split()) >= 2 for l in rules)
@@ -351,7 +360,9 @@ def test_enforcement_doc_requires_verifiers_to_reject_self_approved_promotions()
     contract = text[text.index("## Deploy-owner verification contract"):text.index("## What is public")]
     assert "`self_approved: true`" in contract
     jq = contract[contract.index("promo.jsonl\njq"):]
-    assert ".self_approved == false" in jq.split("```")[0]
+    jq = jq.split("```")[0]
+    assert ".self_approved == false" in jq and ".gate2_single_approver == false" in jq
+    assert "`gate2_single_approver: true`" in contract and "earlier v1 records are invalid" in contract
 
 
 def test_personal_poc_doc_has_the_single_approver_deployment_note():
@@ -364,7 +375,3 @@ def test_personal_poc_doc_has_the_single_approver_deployment_note():
     assert "Single-approver mode: skip" in text and "If you have a deputy" in text
     # the two-person path stays documented
     assert "@<you> @<deputy>" in text and "prevent_self_review\": true" in text
-
-
-def test_single_approver_flag_is_a_configure_option_only_when_documented():
-    assert '"--single-approver"' in (ROOT / "scripts/configure.py").read_text()

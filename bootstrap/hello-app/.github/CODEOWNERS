@@ -1,4 +1,4 @@
-/.github/ @<you> @<deputy>
-/.semgrepignore @mwdavisii @mwdavisii
-/.trivyignore @<mwdavisii> @<mwdavisii>
-/trivy.yaml @<mwdavisii> @<mwdavisii>
+/.github/ @mwdavisii
+/.semgrepignore @mwdavisii
+/.trivyignore @mwdavisii
+/trivy.yaml @mwdavisii

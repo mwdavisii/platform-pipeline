@@ -66,7 +66,7 @@ def logins(record):
 def test_promotion_by_other_reviewer():
     record = promo([approval("deputy")])
     assert validate("promotion-record.v1", record) == []
-    assert record["self_approved"] is False
+    assert record["self_approved"] is False and record["gate2_single_approver"] is False
     assert logins(record) == ["deputy"]
 
 
@@ -220,14 +220,14 @@ def test_single_approver_counts_self_approval_and_marks_it():
     record = promo([approval("Mike")], single_approver=True)
     assert validate("promotion-record.v1", record) == []
     assert logins(record) == ["Mike"]
-    assert record["self_approved"] is True
+    assert record["self_approved"] is True and record["gate2_single_approver"] is True
     assert promo([approval("mike")], triggered_by="other", actor="mike", single_approver=True)["self_approved"] is True
 
 
 def test_single_approver_with_another_approver_is_not_self_approved():
     record = promo([approval("mike"), approval("deputy")], single_approver=True)
     assert logins(record) == ["deputy", "mike"]
-    assert record["self_approved"] is False
+    assert record["self_approved"] is False and record["gate2_single_approver"] is True
     assert promo([approval("deputy")], single_approver=True)["self_approved"] is False
 
 
@@ -260,3 +260,10 @@ def test_schema_requires_self_approved_boolean():
     assert validate("promotion-record.v1", {k: v for k, v in record.items() if k != "self_approved"})
     assert validate("promotion-record.v1", {**record, "self_approved": "false"})
     assert validate("promotion-record.v1", {**record, "self_approved": 0})
+
+
+def test_schema_requires_gate2_single_approver_boolean():
+    record = promo([approval("deputy")])
+    assert validate("promotion-record.v1", {k: v for k, v in record.items() if k != "gate2_single_approver"})
+    assert validate("promotion-record.v1", {**record, "gate2_single_approver": "false"})
+    assert validate("promotion-record.v1", {**record, "gate2_single_approver": 0})

@@ -132,10 +132,16 @@ jobs:
           [ "$got" = "$digest" ] || { echo "::error::tag $tag points at $got, not the signed $digest"; exit 1; }
           approvers=$(jq -r '[.approvals[].login] | join(", ")' out/promotion-record.json)
           self_approved=$(jq -r .self_approved out/promotion-record.json)
+          single_mode=$(jq -r .gate2_single_approver out/promotion-record.json)
+          for v in "$self_approved" "$single_mode"; do
+            case "$v" in true|false) ;; *) echo "::error::the promotion record's self_approved and gate2_single_approver must each be exactly true or false"; exit 1;; esac
+          done
+          poc_warning=false
+          if [ "$self_approved" = "true" ] || [ "$single_mode" = "true" ]; then poc_warning=true; fi
           self_note='Single-approver PoC mode: approved by the person who triggered it. Not valid for production use.'
           notes=$(printf 'Prod release promoted from %s.\n\n- Image: %s\n- Commit: %s\n- Commit date: %s\n- Approved by: %s\n- Deploy-ready manifests attached (identical to the test release).' "$RELEASE" "$REF" "$COMMIT" "$commit_date" "$approvers")
-          if [ "$self_approved" = "true" ]; then notes+=$'\n\n'"$self_note"; fi
+          if [ "$poc_warning" = "true" ]; then notes+=$'\n\n'"$self_note"; fi
           gh release create "$tag" out/manifests.yaml out/gate-record.json out/promotion-record.json \
             --repo "$GITHUB_REPOSITORY" --target "$COMMIT" --title "$tag" --notes "$notes"
           { echo "### Prod release \`$tag\`"; echo "- Image: \`$REF\`"; echo "- Approved by: $approvers"; } >> "$GITHUB_STEP_SUMMARY"
-          if [ "$self_approved" = "true" ]; then echo "- **$self_note**" >> "$GITHUB_STEP_SUMMARY"; fi
+          if [ "$poc_warning" = "true" ]; then echo "- **$self_note**" >> "$GITHUB_STEP_SUMMARY"; fi

@@ -36,7 +36,7 @@ The platform stops at a signed prod release. Whoever deploys it (admission contr
 
 1. **Image signature and attestation (every release).** The certificate identity is `https://github.com/<org>/platform-pipeline/.github/workflows/golden-road.yml@refs/heads/main`, the OIDC issuer is `https://token.actions.githubusercontent.com`, the certificate's GitHub workflow repository equals the app repo, the ref is `refs/heads/main`, and the trigger is `push`.
 2. **Gate predicate.** `status` is `pass`, `repo` equals the app repo, `image` equals the reference being deployed, and `manifests_sha256` equals the SHA-256 of the `manifests.yaml` being applied.
-3. **Promotion attestation (prod only).** Signed by `https://github.com/<org>/platform-pipeline/.github/workflows/golden-road-promote.yml@refs/heads/main` with the same issuer, workflow repository equal to the app repo, ref `refs/heads/main`, and trigger `workflow_dispatch`. Its `image` equals the reference being deployed and its `manifests_sha256` equals the SHA-256 of the `manifests.yaml` being applied. **Verifiers must reject a promotion predicate with `self_approved: true`** (or without a `self_approved` field): that value means the only approver was the person who triggered the run, which only the personal PoC's single-approver mode (`platform.json` `gate2_single_approver`) can produce. It is never acceptable for a real deployment.
+3. **Promotion attestation (prod only).** Signed by `https://github.com/<org>/platform-pipeline/.github/workflows/golden-road-promote.yml@refs/heads/main` with the same issuer, workflow repository equal to the app repo, ref `refs/heads/main`, and trigger `workflow_dispatch`. Its `image` equals the reference being deployed and its `manifests_sha256` equals the SHA-256 of the `manifests.yaml` being applied. **Verifiers must reject a promotion predicate with `self_approved: true` or `gate2_single_approver: true`, and must fail closed (reject) if either field is missing or not a boolean.** Those values mean the only approver was the person who triggered the run, which only the personal PoC's single-approver mode (`platform.json` `gate2_single_approver`) can produce. They are never acceptable for a real deployment. Both fields were added to `promotion-record/v1` before the first proof run, so earlier v1 records are invalid (they lack the fields and are rejected).
 
 ```bash
 ORG=<org>; APP=<app repo>; REF=ghcr.io/<org>/<app>@sha256:<digest>
@@ -59,7 +59,7 @@ pid=(--certificate-identity "https://github.com/$ORG/platform-pipeline/.github/w
      --certificate-github-workflow-trigger workflow_dispatch)
 cosign verify-attestation "${pid[@]}" --type https://golden-road.internal/promotion/v1 "$REF" > promo.jsonl
 jq -s -e --arg ref "$REF" --arg have "$have" '[.[] | .payload | @base64d | fromjson | .predicate
-    | select(.image == $ref and .manifests_sha256 == $have and .self_approved == false)] | length >= 1' promo.jsonl
+    | select(.image == $ref and .manifests_sha256 == $have and .self_approved == false and .gate2_single_approver == false)] | length >= 1' promo.jsonl
 ```
 
 `REF` is taken from the image reference in the `manifests.yaml` being applied (the same file whose hash is checked), never from a separate input.

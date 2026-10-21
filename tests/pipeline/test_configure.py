@@ -134,6 +134,29 @@ def pr_params(root):
     return next(r for r in rules if r["type"] == "pull_request")["parameters"]
 
 
+def live_tree_is_pristine():
+    return "org" not in json.loads((ROOT / "platform/platform.json").read_text())
+
+
+def test_unconfigured_workspace_matches_the_committed_placeholder_state(workspace):
+    """The fixture must rebuild the committed state, whatever mode the live tree was configured in."""
+    state = placeholder_state(ROOT)
+    assert json.loads((workspace / "platform/platform.json").read_text())["gate2_single_approver"] is False
+    assert pr_params(workspace) == {"required_approving_review_count": 1, "dismiss_stale_reviews_on_push": True,
+                                    "require_code_owner_review": True, "require_last_push_approval": True,
+                                    "required_review_thread_resolution": False}
+    assert json.loads((workspace / PROD_ENV).read_text())["prevent_self_review"] is True
+    for rel, marker in state.items():
+        assert marker in (workspace / rel).read_text(), rel
+    verify = subprocess.run([*builder_cmd(), "verify", str(workspace / "bootstrap/hello-app")], capture_output=True, text=True,
+                            env=builder_env(BUILDER_PLATFORM_CONFIG=str(workspace / "platform/platform.json"), PATH=""))
+    assert verify.returncode == 0, verify.stdout
+    if not live_tree_is_pristine():
+        return  # a configured tree has no committed placeholder content to compare byte for byte
+    for rel in (*state, RULESET, PROD_ENV, "bootstrap/hello-app/.builder.lock"):
+        assert (workspace / rel).read_bytes() == (ROOT / rel).read_bytes(), rel
+
+
 def test_without_the_flag_approval_settings_are_untouched(workspace):
     before = {rel: (workspace / rel).read_text() for rel in (RULESET, PROD_ENV)}
     assert configure(workspace, *GOOD).returncode == 0
@@ -187,16 +210,35 @@ def test_switching_modes_after_configure_is_refused(workspace, first, second):
     assert {p: p.read_bytes() for d in ("platform", "bootstrap") for p in (workspace / d).rglob("*") if p.is_file()} == snapshot
 
 
-def test_single_approver_with_bad_input_changes_nothing(workspace):
+@pytest.mark.parametrize("break_file", ["two_pr_rules", "no_prevent_self_review"])
+def test_single_approver_with_unexpected_files_changes_nothing(workspace, break_file):
+    """The files are only inspected by --single-approver, so this fails after the org and spec checks, in phase 1."""
+    if break_file == "two_pr_rules":
+        doc = json.loads((workspace / RULESET).read_text())
+        doc["rules"].append(next(r for r in doc["rules"] if r["type"] == "pull_request"))
+        (workspace / RULESET).write_text(json.dumps(doc))
+    else:
+        doc = json.loads((workspace / PROD_ENV).read_text())
+        del doc["prevent_self_review"]
+        (workspace / PROD_ENV).write_text(json.dumps(doc))
     before = {p: p.read_bytes() for d in ("platform", "bootstrap") for p in (workspace / d).rglob("*") if p.is_file()}
-    assert configure(workspace, "--org", "bad org", *GOOD[2:], "--single-approver").returncode != 0
+    out = configure(workspace, *GOOD, "--single-approver")
+    assert out.returncode != 0 and "--single-approver" in out.stderr
     assert {p: p.read_bytes() for d in ("platform", "bootstrap") for p in (workspace / d).rglob("*") if p.is_file()} == before
 
 
 def test_default_approval_files_are_not_placeholder_state():
-    """They hold no placeholder: the export check must not mistake default content for a configured tree."""
+    """They hold no placeholder: the export check must not mistake default content for a configured tree.
+    The live tree's approval settings follow its recorded mode: strict by default, relaxed exactly when single-approver."""
     state = placeholder_state(ROOT)
     assert RULESET not in state and PROD_ENV not in state
-    assert json.loads((ROOT / "platform/platform.json").read_text())["gate2_single_approver"] is False
-    assert pr_params(ROOT)["required_approving_review_count"] == 1
-    assert json.loads((ROOT / PROD_ENV).read_text())["prevent_self_review"] is True
+    single = json.loads((ROOT / "platform/platform.json").read_text())["gate2_single_approver"]
+    assert type(single) is bool
+    params, env = pr_params(ROOT), json.loads((ROOT / PROD_ENV).read_text())
+    keys = ("required_approving_review_count", "require_code_owner_review", "require_last_push_approval")
+    if single:
+        assert tuple(params[k] for k in keys) == (0, False, False)
+        assert env["prevent_self_review"] is False
+    else:
+        assert tuple(params[k] for k in keys) == (1, True, True)
+        assert env["prevent_self_review"] is True

@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -67,12 +68,12 @@ def test_in_cluster_egress_defaults_to_empty():
     assert load_platform()["in_cluster_egress"] == {}
 
 
-def test_gate2_single_approver_defaults_false_and_is_in_both_configs():
+def test_gate2_single_approver_is_false_by_default_and_in_the_platform_file():
     assert gate2_single_approver({}) is False
     assert gate2_single_approver({"gate2_single_approver": True}) is True
     assert "gate2_single_approver" not in load_platform()
-    root = json.loads((__import__("pathlib").Path(__file__).resolve().parents[2] / "platform/platform.json").read_text())
-    assert root["gate2_single_approver"] is False
+    root = json.loads((Path(__file__).resolve().parents[2] / "platform/platform.json").read_text())
+    assert type(root["gate2_single_approver"]) is bool  # False when committed; configure.py --single-approver sets True
 
 
 @pytest.mark.parametrize("value", [1, 0, "true", None, [], {}])

@@ -204,7 +204,7 @@ def test_promotion_record_command(tmp_path):
             "--approvals", approvals, "--actor", "mike", "--run-attempt", "1", "--run-url", "https://github.com/org/app/actions/runs/1", "--output", str(out)]
     assert main([*args, "--triggered-by", "mike"]) == 0
     assert json.loads(out.read_text())["approvals"] == [{"login": "deputy", "comment": ""}]
-    assert json.loads(out.read_text())["self_approved"] is False
+    assert json.loads(out.read_text())["self_approved"] is False and json.loads(out.read_text())["gate2_single_approver"] is False
     import hashlib
     assert json.loads(out.read_text())["manifests_sha256"] == hashlib.sha256(b"kind: Deployment\n").hexdigest()
     assert main([*args, "--triggered-by", "Deputy"]) == 2
@@ -231,7 +231,7 @@ def test_promotion_record_single_approver_comes_from_the_pinned_platform_config(
         monkeypatch.setenv("BUILDER_PLATFORM_CONFIG", str(cfg))
         assert main(args) == code
         if code == 0:
-            assert json.loads(out.read_text())["self_approved"] is True
+            assert json.loads(out.read_text())["self_approved"] is True and json.loads(out.read_text())["gate2_single_approver"] is True
         else:
             assert not out.exists()
 

@@ -85,7 +85,7 @@ gh run watch --repo <you>/platform-pipeline
 ```
 Copy the digest from the run summary (`ghcr.io/<you>/golden-road-builder@sha256:...`). Put it in `BUILDER_IMAGE` in **both** `.github/workflows/golden-road.yml` and `.github/workflows/golden-road-promote.yml`, then commit and push (`main` of `platform-pipeline` has no ruleset, so a direct push works).
 
-**Check 1:** `grep -c '0000000000000000' .github/workflows/golden-road*.yml` prints `0` for both files.
+**Check 1:** `grep -c '^  BUILDER_IMAGE: .*@sha256:0000000000000000' .github/workflows/golden-road*.yml` prints `0` for both files, and `grep -h '^  BUILDER_IMAGE:' .github/workflows/golden-road*.yml` prints your real digest twice. (The guard lines in those workflows contain the all-zero placeholder on purpose, so don't count every match.)
 
 **Make the builder image public.** New container packages start private. Fork PR runs and `hello-app` must pull it, and a fork PR's token cannot read a private package. Open `https://github.com/users/<you>/packages/container/golden-road-builder/settings` -> Danger Zone -> Change visibility -> Public. (There is no API for changing visibility.) The image holds only the builder and the platform config you passed to `configure.py`.
 
@@ -292,7 +292,7 @@ Until this step the committed `platform/required-checks.json` is `{"required": [
 5. **Gate 2.** Run `gh workflow run promote.yml --repo <you>/hello-app -f release=<test tag>` as yourself. GitHub shows "Waiting for review".
    - If you have a deputy: try approving it yourself: it must be refused (prevent self-review). Then `<deputy>` approves with a comment.
    - Single-approver mode: approve it yourself with a comment; it is accepted.
-   **Check:** if you have a deputy, the self-approval is refused; after the deputy approves, a `prod-...` release appears whose `promotion-record.json` names `<deputy>` and says `"self_approved": false`. Single-approver mode: the release appears, `promotion-record.json` names `<you>` and says `"self_approved": true`, and the job summary and the release notes say "Single-approver PoC mode: approved by the person who triggered it. Not valid for production use."; the deploy-owner verification in the next step must then reject this record (see below). Re-running a promote run is refused: dispatch a new run. Check the commit date in the prod release notes is not an old commit (a rollback) unless you intend it.
+   **Check:** if you have a deputy, the self-approval is refused; after the deputy approves, a `prod-...` release appears whose `promotion-record.json` names `<deputy>` and says `"self_approved": false`. Single-approver mode: the release appears, `promotion-record.json` names `<you>` and says `"self_approved": true` and `"gate2_single_approver": true`, and the job summary and the release notes say "Single-approver PoC mode: approved by the person who triggered it. Not valid for production use."; the deploy-owner verification in the next step must then reject this record (see below). Re-running a promote run is refused: dispatch a new run. Check the commit date in the prod release notes is not an old commit (a rollback) unless you intend it.
 6. **Deploy-owner verification (the full contract).** Download `manifests.yaml` from the prod release and run every check in "Deploy-owner verification contract" in `docs/enforcement.md`. Take the image reference from `manifests.yaml`, never from the release notes or another input:
    ```bash
    gh release download <prod tag> --repo <you>/hello-app -p manifests.yaml
@@ -321,7 +321,7 @@ Until this step the committed `platform/required-checks.json` is `{"required": [
         --certificate-github-workflow-trigger workflow_dispatch)
    cosign verify-attestation "${pid[@]}" --type https://golden-road.internal/promotion/v1 "$PREF" > promo.jsonl
    jq -s -e --arg ref "$PREF" --arg have "$have" '[.[] | .payload | @base64d | fromjson | .predicate
-       | select(.image == $ref and .manifests_sha256 == $have and .self_approved == false)] | length >= 1' promo.jsonl
+       | select(.image == $ref and .manifests_sha256 == $have and .self_approved == false and .gate2_single_approver == false)] | length >= 1' promo.jsonl
    ```
    **Check:** exactly one image reference prints, both `cosign verify` commands and both `cosign verify-attestation` commands exit 0, and both `jq` commands print `true`. Single-approver mode: the last `jq` prints `false`, which is the contract working (a self-approved record is rejected); the other checks still pass, and the dry run below is optional. Then a read-only server-side dry run against the `hydra` cluster:
    ```bash

@@ -1,10 +1,20 @@
-  {"required": [
-    {"name": "security-scans / semgrep", "app_id": 15368},
-    {"name": "security-scans / trivy", "app_id": 15368},
-    {"name": "Analyze (python)", "app_id": 15368},
-    {"name": "Analyze (actions)", "app_id": 15368}
-  ]}
-  EOF
-~/code/ai-pipeline/.venv/bin/python -c "import sys; sys.path.insert(0, 'src'); from golden_road.checks import load_required;
-print(len(load_required('platform/required-checks.json')), 'entries')"
-
+{
+  "required": [
+    {
+      "name": "security-scans / semgrep",
+      "app_id": 15368
+    },
+    {
+      "name": "security-scans / trivy",
+      "app_id": 15368
+    },
+    {
+      "name": "Analyze (python)",
+      "app_id": 15368
+    },
+    {
+      "name": "Analyze (actions)",
+      "app_id": 15368
+    }
+  ]
+}

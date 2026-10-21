@@ -16,6 +16,6 @@ jobs:
       pull-requests: write
       checks: read
       statuses: read
-    uses: ORG_PLACEHOLDER/platform-pipeline/.github/workflows/golden-road.yml@main
+    uses: mwdavisii/platform-pipeline/.github/workflows/golden-road.yml@main
     with:
       app_name: hello-app

@@ -23,7 +23,7 @@ spec:
         dns:
         - matchPattern: '*'
   - toFQDNs:
-    - matchName: llm.replace-me.invalid
+    - matchName: llm.mwdavisii.com
     toPorts:
     - ports:
       - port: '443'

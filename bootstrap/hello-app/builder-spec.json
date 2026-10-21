@@ -41,7 +41,7 @@
   "data_classification": "internal",
   "egress": [
     {
-      "host": "llm.replace-me.invalid",
+      "host": "llm.mwdavisii.com",
       "port": 443,
       "reason": "model calls through the platform gateway"
     }

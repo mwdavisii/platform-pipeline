@@ -16,6 +16,6 @@ permissions:
 
 jobs:
   golden-road:
-    uses: ORG_PLACEHOLDER/platform-pipeline/.github/workflows/golden-road-promote.yml@main
+    uses: mwdavisii/platform-pipeline/.github/workflows/golden-road-promote.yml@main
     with:
       release: ${{ inputs.release }}

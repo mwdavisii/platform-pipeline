@@ -15,4 +15,4 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-    uses: ORG_PLACEHOLDER/security-scans/.github/workflows/scan.yml@main
+    uses: mwdavisii/security-scans/.github/workflows/scan.yml@main

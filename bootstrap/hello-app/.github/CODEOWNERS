@@ -1,6 +1,4 @@
-# Changes under .github/ (workflows, rulesets, environment, dependabot) need a code owner's review.
-/.github/ @ORG_PLACEHOLDER/platform-reviewers
-# Files that scanners read to ignore findings. The security-scans workflow does not read them, but a code owner reviews them anyway.
-/.semgrepignore @ORG_PLACEHOLDER/platform-reviewers
-/.trivyignore @ORG_PLACEHOLDER/platform-reviewers
-/trivy.yaml @ORG_PLACEHOLDER/platform-reviewers
+/.github/ @<you> @<deputy>
+/.semgrepignore @mwdavisii @mwdavisii
+/.trivyignore @<mwdavisii> @<mwdavisii>
+/trivy.yaml @<mwdavisii> @<mwdavisii>

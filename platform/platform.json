@@ -1,7 +1,7 @@
 {
-  "gate2_single_approver": false,
+  "gate2_single_approver": true,
   "model_gateway_hosts": [
-    "llm.replace-me.invalid"
+    "llm.mwdavisii.com"
   ],
   "model_provider_hosts": [
     "api.openai.com",
@@ -34,9 +34,9 @@
     "metadata.*.internal"
   ],
   "edge_ingress": {
-    "namespace": "replace-me",
+    "namespace": "cloudflared",
     "pod_labels": {
-      "app": "replace-me"
+      "app": "cloudflared"
     }
   },
   "dns": {
@@ -46,7 +46,7 @@
     }
   },
   "in_cluster_egress": {},
-  "identity_header": "X-replace-me",
+  "identity_header": "X-Platform-Roles",
   "resources_tiers": {
     "default": {
       "requests": {
@@ -68,5 +68,6 @@
         "memory": "512Mi"
       }
     }
-  }
+  },
+  "org": "mwdavisii"
 }

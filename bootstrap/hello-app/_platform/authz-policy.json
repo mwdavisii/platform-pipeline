@@ -3,7 +3,7 @@
   "exempt_paths": [
     "/healthz"
   ],
-  "identity_header": "X-replace-me",
+  "identity_header": "X-Platform-Roles",
   "roles": [
     {
       "access": "read",

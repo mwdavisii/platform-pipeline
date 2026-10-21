@@ -17,10 +17,10 @@ spec:
   - from:
     - namespaceSelector:
         matchLabels:
-          kubernetes.io/metadata.name: replace-me
+          kubernetes.io/metadata.name: cloudflared
       podSelector:
         matchLabels:
-          app: replace-me
+          app: cloudflared
     ports:
     - protocol: TCP
       port: http

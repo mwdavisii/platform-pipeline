@@ -1,0 +1,41 @@
+{
+  "default": "deny",
+  "exempt_paths": [
+    "/healthz"
+  ],
+  "identity_header": "X-Platform-Roles",
+  "roles": [
+    {
+      "access": "read",
+      "name": "reader"
+    },
+    {
+      "access": "write",
+      "name": "writer"
+    }
+  ],
+  "rules": [
+    {
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/**",
+      "roles": [
+        "reader",
+        "writer"
+      ]
+    },
+    {
+      "methods": [
+        "DELETE",
+        "PATCH",
+        "POST",
+        "PUT"
+      ],
+      "path": "/api/**",
+      "roles": [
+        "writer"
+      ]
+    }
+  ]
+}

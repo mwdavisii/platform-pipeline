@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://platform.internal/schemas/gate-result.v1.json",
+  "title": "gate-result/v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "counts", "blocking", "overrides_applied"],
+  "properties": {
+    "status": {"enum": ["pass", "fail"]},
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["by_severity", "by_layer"],
+      "properties": {
+        "by_severity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["critical", "high", "medium", "low", "info"],
+          "properties": {
+            "critical": {"$ref": "#/$defs/count"},
+            "high": {"$ref": "#/$defs/count"},
+            "medium": {"$ref": "#/$defs/count"},
+            "low": {"$ref": "#/$defs/count"},
+            "info": {"$ref": "#/$defs/count"}
+          }
+        },
+        "by_layer": {
+          "type": "object",
+          "propertyNames": {"enum": ["deterministic", "agentic", "drift", "dynamic"]},
+          "additionalProperties": {"$ref": "#/$defs/count"}
+        }
+      }
+    },
+    "blocking": {"type": "array", "items": {"$ref": "#/$defs/id"}},
+    "overrides_applied": {"type": "array", "items": {"$ref": "#/$defs/id"}}
+  },
+  "if": {"properties": {"status": {"const": "pass"}}, "required": ["status"]},
+  "then": {"properties": {"blocking": {"maxItems": 0}}},
+  "$defs": {
+    "count": {"type": "integer", "minimum": 0},
+    "id": {"type": "string", "pattern": "^[0-9a-f]{64}$", "minLength": 64, "maxLength": 64}
+  }
+}

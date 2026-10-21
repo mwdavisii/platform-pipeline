@@ -1,0 +1,54 @@
+name: release-builder
+
+on:
+  push:
+    tags: ["builder-v*"]
+
+permissions: {}
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Require a commit on main
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
+            || { echo "::error::builder tags must point at a commit that is on main"; exit 1; }
+      - name: Refuse unconfigured platform values
+        run: |
+          set -euo pipefail
+          rc=0
+          grep -rqE 'replace-me|ORG_PLACEHOLDER' platform/ || rc=$?
+          if [ "$rc" -eq 0 ]; then
+            echo "::error::platform/ still has placeholder values (replace-me or ORG_PLACEHOLDER). Run scripts/configure.py first."
+            exit 1
+          fi
+          [ "$rc" -eq 1 ] || { echo "::error::could not scan platform/ for placeholders (grep exit $rc)"; exit 1; }
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
+      - name: Build, push, and sign the builder image
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/golden-road-builder"
+          docker buildx build -f images/builder/Dockerfile --sbom=true --provenance=mode=max \
+            --tag "$image:${GITHUB_REF_NAME}" --push --metadata-file build.json .
+          digest=$(jq -r '."containerimage.digest"' build.json)
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::build produced no digest"; exit 1; }
+          cosign sign --yes "$image@$digest"
+          echo "Builder image: \`$image@$digest\`" >> "$GITHUB_STEP_SUMMARY"

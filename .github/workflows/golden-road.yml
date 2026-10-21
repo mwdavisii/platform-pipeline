@@ -1,0 +1,420 @@
+# Reusable golden-road release pipeline. The only workflow whose release signatures the platform trusts:
+# https://github.com/<org>/platform-pipeline/.github/workflows/golden-road.yml@refs/heads/main
+name: golden-road
+
+on:
+  workflow_call:
+    inputs:
+      app_name:
+        description: App name; must equal app_name in builder-spec.json.
+        required: true
+        type: string
+
+permissions: {}
+
+env:
+  BUILDER_IMAGE: ghcr.io/replace-me/golden-road-builder@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  GATE_PREDICATE: https://golden-road.internal/gate-record/v1
+
+jobs:
+  drift:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+      pull-requests: write
+    steps:
+      - name: Refuse the placeholder builder image
+        run: |
+          set -euo pipefail
+          if [[ "$BUILDER_IMAGE" == *replace-me* || "$BUILDER_IMAGE" == *@sha256:0000000000000000000000000000000000000000000000000000000000000000 ]]; then
+            echo "::error::BUILDER_IMAGE in golden-road.yml is still the placeholder digest. Release the builder image and pin its real digest first (the setup doc in docs/setup/)."
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: src
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Check app name
+        env:
+          APP: ${{ inputs.app_name }}
+        run: |
+          set -euo pipefail
+          [[ "$APP" =~ ^[a-z]([a-z0-9-]{0,40}[a-z0-9])?$ ]] || { echo "::error::invalid app_name"; exit 1; }
+          [ "$(jq -r .app_name src/builder-spec.json)" = "$APP" ] || { echo "::error::app_name does not match builder-spec.json"; exit 1; }
+
+      - name: Drift check
+        id: drift
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          gr() { docker run --rm --network none --read-only --tmpfs /tmp --user "$(id -u):$(id -g)" -v "$PWD/src:/src:ro" -v "$PWD/out:/out" "$BUILDER_IMAGE" "$@"; }
+          gr golden-road preflight /src --output /out/preflight.json
+          set +e
+          gr builder verify /src > out/verify.json
+          code=$?
+          set -e
+          if [ "$code" -ne 0 ] && [ "$code" -ne 4 ]; then echo "::error::builder verify exited $code"; exit 1; fi
+          gr golden-road from-builder /out/verify.json --output /out/drift-findings.json
+          set +e
+          gr golden-road gate /out/preflight.json /out/drift-findings.json --repo "$GITHUB_REPOSITORY" --output /out/drift-gate.json
+          gate=$?
+          set -e
+          if [ "$gate" -gt 1 ]; then echo "::error::the drift gate could not evaluate"; exit 1; fi
+          gr golden-road summary /out/drift-gate.json /out/preflight.json /out/drift-findings.json --output /out/drift-summary.md
+          gr golden-road annotate /out/preflight.json /out/drift-findings.json
+          cat out/drift-summary.md >> "$GITHUB_STEP_SUMMARY"
+          echo "gate=$gate" >> "$GITHUB_OUTPUT"
+
+      - name: Comment on the PR
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        # Convenience only: the job summary, annotations, and the gate below carry the result. A fork PR's token
+        # is read-only, so the comment is skipped there (the head repo differs from this repo). The comment is found by
+        # its marker and its author, so it never overwrites the preview's or a scan's comment.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          marker="<!-- golden-road:drift -->"
+          { echo "$marker"; echo "Checked commit: \`$SHA\` (this pull request merged into its base branch)."; echo; cat out/drift-summary.md; } > out/drift-comment.md
+          existing="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR/comments?per_page=100" \
+            | jq -r --arg m "$marker" '.[] | select(.user.login == "github-actions[bot]" and ((.body // "") | startswith($m))) | .id' | sed -n '1p')"
+          if [ -n "$existing" ]; then
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$existing" --field "body=@out/drift-comment.md" > /dev/null
+          else
+            gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --field "body=@out/drift-comment.md" > /dev/null
+          fi
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: golden-road-drift
+          path: |
+            out/*.json
+            out/*.md
+          if-no-files-found: error
+
+      - name: Enforce the drift gate
+        if: steps.drift.outputs.gate != '0'
+        run: |
+          set -euo pipefail
+          echo "::error::The drift check found blocking findings. See the job summary."
+          exit 1
+
+  # PR preview: the image build and the container authz probe, on the pull request, so a vibe coder with no container
+  # runtime sees them before merge. It runs the PR's Dockerfile, so it holds a read-only token and nothing else: it builds
+  # the way the release job does but loads the image locally, and it never pushes, signs, or attests anything. The release
+  # job stays the authoritative build and probe. It does not wait for drift: if drift fails, the build result is still
+  # useful, and nothing here is privileged.
+  preview:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read # only to pull the digest-pinned builder image; the job logs out before PR code runs
+    steps:
+      - name: Refuse the placeholder builder image
+        run: |
+          set -euo pipefail
+          if [[ "$BUILDER_IMAGE" == *replace-me* || "$BUILDER_IMAGE" == *@sha256:0000000000000000000000000000000000000000000000000000000000000000 ]]; then
+            echo "::error::BUILDER_IMAGE in golden-road.yml is still the placeholder digest. Release the builder image and pin its real digest first (the setup doc in docs/setup/)."
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: src
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      # Pull the builder image, then drop the registry credential, so nothing PR code can reach holds a token.
+      - name: Pull the builder image and log out
+        run: |
+          set -euo pipefail
+          docker pull -q "$BUILDER_IMAGE" > /dev/null
+          docker logout ghcr.io
+
+      - name: Build the image (not pushed)
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          { [ -f src/Dockerfile ] && [ ! -L src/Dockerfile ]; } || { echo "::error::src/Dockerfile must be a regular file, not a symlink"; exit 1; }
+          # The build runs the PR's Dockerfile, which prints text from the repository. Workflow commands are off until the end token.
+          guard="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+          echo "::stop-commands::$guard"
+          trap 'rc=$?; echo "::$guard::"; if [ "$rc" -ne 0 ]; then echo "::error title=golden-road preview::The image build failed. See the build log."; fi' EXIT
+          docker buildx build -f src/Dockerfile --sbom=false --provenance=false --load --tag golden-road-preview:pr src
+
+      - name: Container authz probe
+        run: |
+          set -euo pipefail
+          port=$(jq -r .port src/builder-spec.json)
+          [[ "$port" =~ ^[0-9]+$ ]] || { echo "::error::builder-spec.json has no numeric port"; exit 1; }
+          cid=$(docker run -d --network none --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges golden-road-preview:pr)
+          guard="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+          # The app's log is hostile text: it is written to a file, and its tail is shown between stop-commands and a random end token.
+          trap 'docker logs "$cid" > out/app.log 2>&1 || true; docker rm -f "$cid" > /dev/null || true; echo "::stop-commands::$guard"; tail -n 50 out/app.log; echo "::$guard::"' EXIT
+          # An app that crashes at start-up can exit before the probe joins its network namespace. Then there is no probe
+          # result, so write one: the preview always leaves authz.json, and the comment says why.
+          app_exited() {
+            code="$(docker inspect -f '{{.State.ExitCode}}' "$cid")"
+            [[ "$code" =~ ^[0-9]{1,3}$ ]] || code=1
+            jq -n --argjson code "$code" '{status: "fail", reason: "app exited before the probe could run", exit_code: $code}' > out/authz.json
+            echo "::error title=golden-road preview::The app exited before the probe could run (exit code $code). The end of its log is in this step's log."
+            exit 1
+          }
+          [ "$(docker inspect -f '{{.State.Running}}' "$cid")" = true ] || app_exited
+          rc=0
+          docker run --rm --network "container:$cid" --read-only --tmpfs /tmp --user "$(id -u):$(id -g)" \
+            -v "$PWD/src:/src:ro" -v "$PWD/out:/out" "$BUILDER_IMAGE" \
+            golden-road authz-probe --repo-root /src --base-url "http://127.0.0.1:$port" --output /out/authz.json || rc=$?
+          if [ "$rc" -ne 0 ] && [ ! -s out/authz.json ]; then
+            # The probe could not start: either the app exited while it was joining, or the probe itself failed to run.
+            [ "$(docker inspect -f '{{.State.Running}}' "$cid")" = true ] || app_exited
+            jq -n '{status: "fail", reason: "the probe could not run"}' > out/authz.json
+          fi
+          exit "$rc"
+
+      - name: Report (annotations and summary)
+        if: always()
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          args=()
+          if [ -f out/authz.json ]; then args+=(--authz /out/authz.json); fi
+          docker run --rm --network none --read-only --tmpfs /tmp --user "$(id -u):$(id -g)" -v "$PWD/out:/out" "$BUILDER_IMAGE" \
+            golden-road preview-report "${args[@]}" --run-url "$RUN_URL" --annotate --output /out/preview.md
+          cat out/preview.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: golden-road-preview
+          path: |
+            out/authz.json
+          if-no-files-found: error
+
+  # Not a required check. The only job here that can write to the pull request, and it never checks out or runs app code:
+  # it reads the preview job's authz.json and has the pinned builder image (read-only, no network) render the comment from
+  # it. It uses needs.preview.result, so a preview that did not succeed is never reported as passed. Fork PRs skip it.
+  preview-comment:
+    needs: preview
+    concurrency:
+      group: preview-comment-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
+      pull-requests: write
+    steps:
+      - name: Refuse the placeholder builder image
+        run: |
+          set -euo pipefail
+          if [[ "$BUILDER_IMAGE" == *replace-me* || "$BUILDER_IMAGE" == *@sha256:0000000000000000000000000000000000000000000000000000000000000000 ]]; then
+            echo "::error::BUILDER_IMAGE in golden-road.yml is still the placeholder digest. Release the builder image and pin its real digest first (the setup doc in docs/setup/)."
+            exit 1
+          fi
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        continue-on-error: true
+        with:
+          name: golden-road-preview
+          path: preview
+
+      - name: Comment on the PR
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          RESULT: ${{ needs.preview.result }}
+          SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          args=()
+          if [ -f preview/authz.json ] && [ ! -L preview/authz.json ]; then args+=(--authz /in/authz.json); fi
+          docker run --rm --network none --read-only --tmpfs /tmp --user "$(id -u):$(id -g)" -v "$PWD/preview:/in:ro" -v "$PWD/out:/out" "$BUILDER_IMAGE" \
+            golden-road preview-report "${args[@]}" --job-result "$RESULT" --commit "$SHA" --run-url "$RUN_URL" --output /out/preview.md
+          marker="<!-- golden-road:preview -->"
+          [ "$(head -n 1 out/preview.md)" = "$marker" ] || { echo "::error::the comment does not start with its marker"; exit 1; }
+          existing="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR/comments?per_page=100" \
+            | jq -r --arg m "$marker" '.[] | select(.user.login == "github-actions[bot]" and ((.body // "") | startswith($m))) | .id' | sed -n '1p')"
+          if [ -n "$existing" ]; then
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$existing" --field "body=@out/preview.md" > /dev/null
+          else
+            gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --field "body=@out/preview.md" > /dev/null
+          fi
+
+  release:
+    needs: drift
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    concurrency:
+      group: release-${{ github.repository }}
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      checks: read
+      statuses: read
+    steps:
+      - name: Refuse the placeholder builder image
+        run: |
+          set -euo pipefail
+          if [[ "$BUILDER_IMAGE" == *replace-me* || "$BUILDER_IMAGE" == *@sha256:0000000000000000000000000000000000000000000000000000000000000000 ]]; then
+            echo "::error::BUILDER_IMAGE in golden-road.yml is still the placeholder digest. Release the builder image and pin its real digest first (the setup doc in docs/setup/)."
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: src
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
+
+      - name: Check app name
+        env:
+          APP: ${{ inputs.app_name }}
+        run: |
+          set -euo pipefail
+          [[ "$APP" =~ ^[a-z]([a-z0-9-]{0,40}[a-z0-9])?$ ]] || { echo "::error::invalid app_name"; exit 1; }
+          [ "$(jq -r .app_name src/builder-spec.json)" = "$APP" ] || { echo "::error::app_name does not match builder-spec.json"; exit 1; }
+
+      # Re-run the drift check here instead of trusting an artifact that another job could have overwritten.
+      - name: Drift check (re-run for the release)
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          gr() { docker run --rm --network none --read-only --tmpfs /tmp --user "$(id -u):$(id -g)" -v "$PWD/src:/src:ro" -v "$PWD/out:/out" "$BUILDER_IMAGE" "$@"; }
+          gr golden-road preflight /src --output /out/preflight.json
+          set +e
+          gr builder verify /src > out/verify.json
+          code=$?
+          set -e
+          if [ "$code" -ne 0 ] && [ "$code" -ne 4 ]; then echo "::error::builder verify exited $code"; exit 1; fi
+          gr golden-road from-builder /out/verify.json --output /out/drift-findings.json
+          set +e
+          gr golden-road gate /out/preflight.json /out/drift-findings.json --repo "$GITHUB_REPOSITORY" --output /out/drift-gate.json
+          gate=$?
+          set -e
+          if [ "$gate" -ne 0 ]; then echo "::error::the drift gate did not pass (exit $gate)"; exit 1; fi
+
+      - name: Gate 1 - required checks
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          docker run --rm --read-only --tmpfs /tmp --user "$(id -u):$(id -g)" -e GITHUB_TOKEN -e GITHUB_API_URL \
+            -v "$PWD/out:/out" "$BUILDER_IMAGE" \
+            golden-road checks wait --repo "$GITHUB_REPOSITORY" --sha "$GITHUB_SHA" --timeout 1800 --interval 20 --output /out/checks.json
+          if [ "$(jq '.required_checks | length' out/checks.json)" -eq 0 ]; then
+            echo "::warning::No external required checks are configured; Gate 1 rests on the drift check and the authz probe."
+          fi
+
+      - name: Build and push by digest
+        id: build
+        env:
+          APP: ${{ inputs.app_name }}
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          image="ghcr.io/${owner}/${APP}"
+          { [ -f src/Dockerfile ] && [ ! -L src/Dockerfile ]; } || { echo "::error::src/Dockerfile must be a regular file, not a symlink"; exit 1; }
+          docker buildx build -f src/Dockerfile --sbom=true --provenance=mode=max \
+            --output "type=image,name=${image},push-by-digest=true,push=true" --metadata-file out/build.json src
+          digest=$(jq -r '."containerimage.digest"' out/build.json)
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::build produced no digest"; exit 1; }
+          { echo "image=$image"; echo "ref=$image@$digest"; } >> "$GITHUB_OUTPUT"
+
+      - name: Container authz probe
+        env:
+          REF: ${{ steps.build.outputs.ref }}
+        run: |
+          set -euo pipefail
+          port=$(jq -r .port src/builder-spec.json)
+          [[ "$port" =~ ^[0-9]+$ ]] || { echo "::error::builder-spec.json has no numeric port"; exit 1; }
+          docker pull -q "$REF"
+          cid=$(docker run -d --network none --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges "$REF")
+          trap 'docker logs "$cid" > out/app.log 2>&1 || true; docker rm -f "$cid" > /dev/null || true' EXIT
+          docker run --rm --network "container:$cid" --read-only --tmpfs /tmp --user "$(id -u):$(id -g)" \
+            -v "$PWD/src:/src:ro" -v "$PWD/out:/out" "$BUILDER_IMAGE" \
+            golden-road authz-probe --repo-root /src --base-url "http://127.0.0.1:$port" --output /out/authz.json
+
+      - name: Render manifests and the gate record
+        id: render
+        env:
+          REF: ${{ steps.build.outputs.ref }}
+        run: |
+          set -euo pipefail
+          tag="test-$(date -u +%Y%m%d%H%M%S)-${GITHUB_SHA::7}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          gr() { docker run --rm --network none --read-only --tmpfs /tmp --user "$(id -u):$(id -g)" -v "$PWD/src:/src:ro" -v "$PWD/out:/out" "$BUILDER_IMAGE" "$@"; }
+          gr golden-road render --repo-root /src --image "$REF" --output /out/manifests.yaml
+          gr golden-road record --release "$tag" --manifests /out/manifests.yaml --repo "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" --image "$REF" --builder-image "$BUILDER_IMAGE" \
+            --drift /out/drift-gate.json --checks /out/checks.json --authz /out/authz.json --output /out/gate-record.json
+
+      - name: Sign, attest, tag, and publish the test release
+        env:
+          IMAGE: ${{ steps.build.outputs.image }}
+          REF: ${{ steps.build.outputs.ref }}
+          TAG: ${{ steps.render.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="$TAG"
+          [[ "$tag" =~ ^test-[0-9]{14}-[0-9a-f]{7}$ ]] || { echo "::error::bad release tag"; exit 1; }
+          # Fetch the commit date first so a failure here happens before anything is signed or tagged.
+          commit_date=$(git -C src show -s --format=%cI "$GITHUB_SHA")
+          [[ "$commit_date" =~ ^[0-9T:+-]+Z?$ ]] || { echo "::error::no commit date for $GITHUB_SHA"; exit 1; }
+          cosign sign --yes "$REF"
+          cosign attest --yes --type "$GATE_PREDICATE" --predicate out/gate-record.json "$REF"
+          docker buildx imagetools create --tag "$IMAGE:$tag" "$REF"
+          got=$(docker buildx imagetools inspect "$IMAGE:$tag" --format '{{json .Manifest}}' | jq -r .digest)
+          [ "$got" = "${REF##*@}" ] || { echo "::error::tag $tag points at $got, not the signed ${REF##*@}"; exit 1; }
+          notes=$(printf 'Test release.\n\n- Image: %s\n- Commit: %s\n- Commit date: %s\n- Gate record and deploy-ready manifests attached.\n\nPromote with the promote workflow (Gate 2).' "$REF" "$GITHUB_SHA" "$commit_date")
+          gh release create "$tag" out/manifests.yaml out/gate-record.json --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" --title "$tag" --notes "$notes" --prerelease
+          { echo "### Test release \`$tag\`"; echo "- Image: \`$REF\`"; } >> "$GITHUB_STEP_SUMMARY"

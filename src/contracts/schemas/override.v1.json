@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://platform.internal/schemas/override.v1.json",
+  "title": "override/v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["finding_id", "repo", "approver", "justification", "created", "expires"],
+  "$defs": {"single_line": {"not": {"pattern": "[\\r\\n]"}}},
+  "properties": {
+    "finding_id": {"type": "string", "pattern": "^[0-9a-f]{64}$", "minLength": 64, "maxLength": 64, "allOf": [{"$ref": "#/$defs/single_line"}]},
+    "repo": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", "allOf": [{"$ref": "#/$defs/single_line"}, {"not": {"pattern": "(^|/)\\.\\.(/|$)"}}]},
+    "approver": {"type": "string", "minLength": 1, "allOf": [{"$ref": "#/$defs/single_line"}]},
+    "justification": {"type": "string", "minLength": 10, "allOf": [{"$ref": "#/$defs/single_line"}]},
+    "created": {"type": "string", "format": "date", "pattern": "^\\d{4}-\\d{2}-\\d{2}$", "allOf": [{"$ref": "#/$defs/single_line"}]},
+    "expires": {"type": "string", "format": "date", "pattern": "^\\d{4}-\\d{2}-\\d{2}$", "allOf": [{"$ref": "#/$defs/single_line"}]}
+  }
+}

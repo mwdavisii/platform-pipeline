@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://platform.internal/schemas/builder-result.v1.json",
+  "title": "builder-result/v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["command", "status", "builder_version", "warnings", "questions", "errors"],
+  "properties": {
+    "command": {"enum": ["detect", "generate", "verify"]},
+    "status": {"enum": ["ok", "invalid", "needs_input", "drift"]},
+    "builder_version": {"type": "string"},
+    "draft_spec": {"type": "object"},
+    "needs": {"type": "object"},
+    "files": {"$ref": "#/$defs/strings"},
+    "removed": {"$ref": "#/$defs/strings"},
+    "lock": {"type": "object"},
+    "findings": {"type": "array", "items": {"type": "object"}},
+    "warnings": {"$ref": "#/$defs/strings"},
+    "questions": {"$ref": "#/$defs/strings"},
+    "errors": {"$ref": "#/$defs/strings"}
+  },
+  "$defs": {"strings": {"type": "array", "items": {"type": "string"}}}
+}

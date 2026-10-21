@@ -1,0 +1,10 @@
+{
+  "app_name": "static-site",
+  "app_type": "static",
+  "entrypoint": ".",
+  "port": 8080,
+  "data_classification": "public",
+  "egress": [],
+  "env": [],
+  "resources_tier": "default"
+}

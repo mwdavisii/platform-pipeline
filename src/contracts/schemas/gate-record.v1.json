@@ -1,0 +1,212 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://platform.internal/schemas/gate-record.v1.json",
+  "title": "gate-record/v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "status",
+    "repo",
+    "commit",
+    "image",
+    "builder_image",
+    "drift",
+    "required_checks",
+    "authz_probe",
+    "release",
+    "manifests_sha256",
+    "created"
+  ],
+  "properties": {
+    "schema": {
+      "const": "gate-record/v1"
+    },
+    "status": {
+      "enum": [
+        "pass",
+        "fail"
+      ]
+    },
+    "repo": {
+      "type": "string",
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+      "allOf": [
+        {
+          "not": {
+            "pattern": "[\\r\\n]"
+          }
+        }
+      ]
+    },
+    "commit": {
+      "type": "string",
+      "minLength": 40,
+      "maxLength": 40,
+      "pattern": "^[0-9a-f]{40}$",
+      "allOf": [
+        {
+          "not": {
+            "pattern": "[\\r\\n]"
+          }
+        }
+      ]
+    },
+    "image": {
+      "$ref": "#/$defs/digest_ref"
+    },
+    "builder_image": {
+      "$ref": "#/$defs/digest_ref"
+    },
+    "drift": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "blocking"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "pass",
+            "fail"
+          ]
+        },
+        "blocking": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "maxLength": 64,
+            "allOf": [
+              {
+                "not": {
+                  "pattern": "[\\r\\n]"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "required_checks": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "state"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "state": {
+            "enum": [
+              "success",
+              "failure",
+              "pending",
+              "missing"
+            ]
+          }
+        }
+      }
+    },
+    "authz_probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "pass",
+            "fail",
+            "not-declared"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "cases": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "denied": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failures_total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failures": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "release": {
+      "type": "string",
+      "maxLength": 30,
+      "pattern": "^test-[0-9]{14}-[0-9a-f]{7}$",
+      "allOf": [
+        {
+          "not": {
+            "pattern": "[\\r\\n]"
+          }
+        }
+      ]
+    },
+    "manifests_sha256": {
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "allOf": [
+        {
+          "not": {
+            "pattern": "[\\r\\n]"
+          }
+        }
+      ],
+      "minLength": 64
+    },
+    "created": {
+      "type": "string",
+      "minLength": 20,
+      "maxLength": 20,
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
+      "allOf": [
+        {
+          "not": {
+            "pattern": "[\\r\\n]"
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "digest_ref": {
+      "type": "string",
+      "maxLength": 300,
+      "pattern": "^[a-z0-9.-]+(:[0-9]+)?/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$",
+      "allOf": [
+        {
+          "not": {
+            "pattern": "[\\r\\n]"
+          }
+        }
+      ]
+    }
+  }
+}

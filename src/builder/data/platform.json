@@ -1,0 +1,35 @@
+{
+  "model_gateway_hosts": ["litellm.internal"],
+  "model_provider_hosts": [
+    "api.openai.com",
+    "*.openai.azure.com",
+    "*.cognitiveservices.azure.com",
+    "*.services.ai.azure.com",
+    "api.anthropic.com",
+    "generativelanguage.googleapis.com",
+    "*aiplatform.googleapis.com",
+    "bedrock*.*.amazonaws.com",
+    "api.mistral.ai",
+    "api.cohere.com",
+    "api.cohere.ai",
+    "api.groq.com",
+    "api.together.xyz",
+    "api.x.ai",
+    "api.deepseek.com",
+    "openrouter.ai",
+    "api.perplexity.ai",
+    "api.fireworks.ai",
+    "api-inference.huggingface.co",
+    "router.huggingface.co",
+    "*.endpoints.huggingface.cloud"
+  ],
+  "denied_egress_hosts": ["metadata.google.internal", "metadata.goog", "instance-data.ec2.internal", "instance-data.*.compute.internal", "metadata.*.internal"],
+  "edge_ingress": {"namespace": "cloudflared", "pod_labels": {"app": "cloudflared"}},
+  "dns": {"namespace": "kube-system", "pod_labels": {"k8s-app": "kube-dns"}},
+  "in_cluster_egress": {},
+  "identity_header": "X-Platform-Roles",
+  "resources_tiers": {
+    "default": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"cpu": "250m", "memory": "256Mi"}},
+    "medium": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "500m", "memory": "512Mi"}}
+  }
+}

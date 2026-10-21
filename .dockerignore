@@ -1,0 +1,7 @@
+*
+!pyproject.toml
+!src
+!images/builder/requirements.txt
+!platform
+**/__pycache__
+**/*.egg-info

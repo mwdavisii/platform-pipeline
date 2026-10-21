@@ -1,0 +1,19 @@
+{
+  "app_name": "notes-node",
+  "app_type": "node",
+  "entrypoint": "server.js",
+  "port": 8080,
+  "health_path": "/healthz",
+  "data_classification": "internal",
+  "egress": [],
+  "env": [],
+  "resources_tier": "default",
+  "authz": {
+    "roles": [{"name": "reader", "access": "read"}, {"name": "writer", "access": "write"}],
+    "default": "deny",
+    "rules": [
+      {"methods": ["GET"], "path": "/api/**", "roles": ["reader", "writer"]},
+      {"methods": ["DELETE", "PATCH", "POST", "PUT"], "path": "/api/**", "roles": ["writer"]}
+    ]
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "app_name": "notes-api",
+  "app_type": "python",
+  "authz": {
+    "default": "deny",
+    "roles": [
+      {
+        "access": "read",
+        "name": "reader"
+      },
+      {
+        "access": "write",
+        "name": "writer"
+      }
+    ],
+    "rules": [
+      {
+        "methods": [
+          "GET"
+        ],
+        "path": "/api/**",
+        "roles": [
+          "reader",
+          "writer"
+        ]
+      },
+      {
+        "methods": [
+          "DELETE",
+          "PATCH",
+          "POST",
+          "PUT"
+        ],
+        "path": "/api/**",
+        "roles": [
+          "writer"
+        ]
+      }
+    ]
+  },
+  "data_classification": "internal",
+  "egress": [
+    {
+      "host": "litellm.internal",
+      "port": 443,
+      "reason": "model calls through the platform gateway"
+    }
+  ],
+  "entrypoint": "app:app",
+  "env": [
+    {
+      "name": "NOTES_DB_URL",
+      "secret": true
+    }
+  ],
+  "health_path": "/healthz",
+  "port": 8080,
+  "resources_tier": "default",
+  "server": "uvicorn"
+}

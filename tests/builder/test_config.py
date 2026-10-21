@@ -1,0 +1,81 @@
+import json
+
+import pytest
+
+from builder.config import gate2_single_approver, is_model_provider, load_base_images, load_platform, platform_sha256
+
+
+def test_platform_config_has_required_keys():
+    platform = load_platform()
+    for key in ("model_gateway_hosts", "model_provider_hosts", "denied_egress_hosts", "edge_ingress", "dns", "identity_header", "resources_tiers"):
+        assert key in platform
+
+
+def test_base_images_are_digest_pinned():
+    for app_type, image in load_base_images().items():
+        assert "@sha256:" in image["build"], app_type
+        assert "@sha256:" in image["runtime"], app_type
+        assert image["uid"] != 0
+
+
+def test_model_provider_detection():
+    platform = load_platform()
+    assert is_model_provider("api.openai.com", platform)
+    assert is_model_provider("myorg.openai.azure.com", platform)
+    assert is_model_provider("bedrock-runtime.us-east-1.amazonaws.com", platform)
+    assert not is_model_provider("litellm.internal", platform)
+    assert not is_model_provider("api.github.com", platform)
+
+
+def test_platform_override_changes_hash(tmp_path, monkeypatch):
+    default_hash = platform_sha256()
+    override = load_platform()
+    override["identity_header"] = "X-Other"
+    path = tmp_path / "platform.json"
+    path.write_text(json.dumps(override), encoding="utf-8")
+    monkeypatch.setenv("BUILDER_PLATFORM_CONFIG", str(path))
+    assert load_platform()["identity_header"] == "X-Other"
+    assert platform_sha256() != default_hash
+
+
+def test_denied_egress_hosts_are_globbed():
+    from builder.config import is_denied_egress
+
+    platform = load_platform()
+    assert is_denied_egress("metadata.google.internal", platform)
+    assert is_denied_egress("instance-data.us-west-2.compute.internal", platform)
+    assert is_denied_egress("metadata.eu-west-1.internal", platform)
+    assert not is_denied_egress("litellm.internal", platform)
+
+
+def test_more_model_providers_detected():
+    platform = load_platform()
+    for host in (
+        "bedrock.us-east-1.amazonaws.com",
+        "bedrock-agent-runtime.us-east-1.amazonaws.com",
+        "openrouter.ai",
+        "api.perplexity.ai",
+        "api.fireworks.ai",
+        "api-inference.huggingface.co",
+        "router.huggingface.co",
+        "abc.endpoints.huggingface.cloud",
+    ):
+        assert is_model_provider(host, platform), host
+
+
+def test_in_cluster_egress_defaults_to_empty():
+    assert load_platform()["in_cluster_egress"] == {}
+
+
+def test_gate2_single_approver_defaults_false_and_is_in_both_configs():
+    assert gate2_single_approver({}) is False
+    assert gate2_single_approver({"gate2_single_approver": True}) is True
+    assert "gate2_single_approver" not in load_platform()
+    root = json.loads((__import__("pathlib").Path(__file__).resolve().parents[2] / "platform/platform.json").read_text())
+    assert root["gate2_single_approver"] is False
+
+
+@pytest.mark.parametrize("value", [1, 0, "true", None, [], {}])
+def test_gate2_single_approver_must_be_a_strict_boolean(value):
+    with pytest.raises(ValueError):
+        gate2_single_approver({"gate2_single_approver": value})

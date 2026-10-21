@@ -1,0 +1,17 @@
+{
+  "builder_version": "0.2.0",
+  "files": {
+    ".dockerignore": "16db3544cb06ccea08c36be035d48d045628f77baf1fc24f23f8472896d68ede",
+    "Dockerfile": "d30071e9479427e50b78bbc506a27112c6249d7dd01d99ce409fbca024035ae0",
+    "_platform/authz-policy.json": "283420ce0f9e94f6c2384fb0be60151bdfa1b8c384472f8448f0014a709764ba",
+    "_platform/authz.js": "fd87721884be196862aa0232244d2771df3a675ad3e8712377fb86fe5bf48770",
+    "deploy/base/cilium-egress.yaml": "91d88744115520e3892c3e48c0c19880efc3758e10f913d4c2c59ac112168873",
+    "deploy/base/deployment.yaml": "17dc68b7c8d6703c37d21223164372bcaa4f7341a2e8c24ea8f438c9c0a2aa2a",
+    "deploy/base/kustomization.yaml": "02631caa8e959121188c9e01c8b927f4f126a5e4503ef34ed3a2fe790325938f",
+    "deploy/base/networkpolicy.yaml": "0e1992c5d833db98db82e70338218e8648d2a5ebdbb70132d45bd92e197b5ecd",
+    "deploy/base/service.yaml": "10a40d474d5d086f0faa28af4b93f81d3996ad8ae3a47eccee7fcf0f014f2d0b",
+    "deploy/base/serviceaccount.yaml": "83166d4add9c00a2d112781d5b1d2266f5a40c2784feb453963b8da3cadc16ad"
+  },
+  "platform_config_sha256": "5a9356820d553923b4d92a7f804ef2aac4eaec7a3dfa9c6a9d4efcb9e37eeb02",
+  "spec_sha256": "23033923ba3100c7fb345ca9c26d574830690f945db3bf64c19f123dd7c78c41"
+}

@@ -1,0 +1,41 @@
+{
+  "authz": {
+    "roles": [{"name": "reader", "access": "read"}, {"name": "writer", "access": "write"}],
+    "default": "deny",
+    "rules": [
+      {"methods": ["GET"], "path": "/api/**", "roles": ["reader", "writer"]},
+      {"methods": ["DELETE", "PATCH", "POST", "PUT"], "path": "/api/**", "roles": ["writer"]},
+      {"methods": ["GET"], "path": "/items/{id}", "roles": ["reader"]},
+      {"methods": ["GET"], "path": "/odd/**{a/b}", "roles": ["reader"]}
+    ]
+  },
+  "cases": [
+    ["GET", "/healthz", null, 200],
+    ["HEAD", "/healthz", null, 200],
+    ["POST", "/healthz", null, 403],
+    ["GET", "/api/notes", null, 403],
+    ["GET", "/api/notes", "reader", 200],
+    ["HEAD", "/api/notes", "reader", 200],
+    ["POST", "/api/notes", "reader", 403],
+    ["POST", "/api/notes", "writer", 200],
+    ["POST", "/api/notes", "reader, writer", 200],
+    ["POST", "/api/notes?x=1", "reader, writer", 200],
+    ["DELETE", "/api/notes/7", "writer", 200],
+    ["GET", "/api/notes/", "reader", 200],
+    ["GET", "/other", "writer", 403],
+    ["OPTIONS", "/api/notes", "writer", 403],
+    ["GET", "/api/../x", "reader", 403],
+    ["GET", "/api/./notes", "reader", 403],
+    ["GET", "//api/notes", "reader", 403],
+    ["GET", "/api/%2e%2e/x", "reader", 403, ["python"]],
+    ["GET", "/api/%2E%2f/x", "reader", 403, ["python"]],
+    ["GET", "/api/a%5Cb", "reader", 403, ["python"]],
+    ["GET", "/api\\notes", "reader", 403],
+    ["GET", "/api/notes\u0001", "reader", 403, ["node"]],
+    ["GET", "/items/7", "reader", 200],
+    ["GET", "/items/7/x", "reader", 403],
+    ["GET", "/items/", "reader", 403],
+    ["GET", "/odd/x{a/b}", "reader", 200],
+    ["GET", "/odd/xyz", "reader", 403]
+  ]
+}

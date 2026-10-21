@@ -334,7 +334,7 @@ def test_personal_poc_doc_covers_the_scans_codeql_dependabot_and_the_known_gap()
     text = (ROOT / "docs/setup/personal-poc.md").read_text()
     for needle in ("--tree security-scans", "## 4. Publish `security-scans` (public)", "code-scanning/default-setup", "default setup",
                    "vulnerability-alerts", "dependabot.yml", "rulesets/code-scanning.json", "platform/required-checks.json",
-                   '"name": "security-scans / semgrep", "app_id": 15368', '"name": "security-scans / trivy", "app_id": 15368',
+                   'name: "security-scans / semgrep", app_id: 15368', 'name: "security-scans / trivy", app_id: 15368',
                    "CodeQL check name", "builder-v0.2.1", 'VERSION = "0.2.1"', "jinja2==2.10", "shell=True", "golden-road checks wait",
                    "Scan results can be forged", "signed scan results", "can_approve_pull_request_reviews", "Checks: Read-only", "Dry run first",
                    "GOLDEN_ROAD_SCANS_TRIVY", "rulesets --input .github/rulesets/main.json", "Base-image findings", "Gate 1 on a push"):

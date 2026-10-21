@@ -221,15 +221,14 @@ Until this step the committed `platform/required-checks.json` is `{"required": [
 2. **Fill the list** in the exported platform tree, with the CodeQL entries you found (one per language you want Gate 1 to wait for):
    ```bash
    cd ~/poc/platform-pipeline
-   cat > platform/required-checks.json <<'EOF'
-   {"required": [
-     {"name": "security-scans / semgrep", "app_id": 15368},
-     {"name": "security-scans / trivy", "app_id": 15368},
-     {"name": "<CodeQL check name from step 1>", "app_id": <its app id>}
-   ]}
-   EOF
-   <src>/.venv/bin/python -c "import sys; sys.path.insert(0, '<src>/src'); from golden_road.checks import load_required; print(len(load_required('platform/required-checks.json')), 'entries')"
+   jq -n '{required: [
+     {name: "security-scans / semgrep", app_id: 15368},
+     {name: "security-scans / trivy", app_id: 15368},
+     {name: "<CodeQL check name from step 1>", app_id: <its app id>}]}' > platform/required-checks.json
+   cat platform/required-checks.json
+   (cd src && <src>/.venv/bin/python -c "from golden_road.checks import load_required as l; print(len(l('../platform/required-checks.json')), 'entries')")
    ```
+   `jq -n` is used instead of a heredoc because pasting into some terminals indents every line, and an indented closing `EOF` is not recognized: the shell then writes the following commands into the file. The builder release refuses a malformed list (it fails at "Build, push, and sign"), so a bad file never ships, but check `cat` before you commit. Observed in the 2026-10-21 PoC run: CodeQL default setup posts `Analyze (python)` and `Analyze (actions)` under app id 15368.
    Gate 1 can only see a check run's conclusion. For CodeQL that means "the analysis ran"; the alert threshold is enforced at merge time by the `code-scanning` ruleset (step 10), not at release.
 3. **Bump the builder version and regenerate `hello-app`.** The lock in `hello-app` records the builder version, so the app must be regenerated, and the tag of an existing release cannot move. Re-run the step 1 `configure.py` command unchanged after the bump (including `--single-approver` if you used it; a different setting is refused):
    ```bash
@@ -375,6 +374,7 @@ Until this step the committed `platform/required-checks.json` is `{"required": [
        cur.execute("SELECT * FROM notes WHERE text = '" + q + "'")
        return cur.fetchall()
    EOF
+   python3 -c "import ast; ast.parse(open('app.py').read()); print('app.py parses')"   # a paste that indented the lines breaks the heredoc or the Python
    git add -A && git commit -m "Proof: vulnerable dependency and injectable routes" && git push -u origin proof/vulnerable
    gh pr create --repo <you>/hello-app --title "Proof: vulnerable" --body "must be refused"
    gh pr checks --repo <you>/hello-app proof/vulnerable --watch

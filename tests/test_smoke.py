@@ -1,7 +1,9 @@
+import re
+
 import builder
 import contracts
 
 
 def test_packages_import():
-    assert builder.VERSION == "0.2.0"
+    assert re.fullmatch(r"\d+\.\d+\.\d+", builder.VERSION)  # the setup docs bump it before a builder re-release
     assert contracts.__doc__

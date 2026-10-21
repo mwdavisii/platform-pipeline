@@ -411,7 +411,7 @@ def test_check_names_match_the_ruleset_and_the_documented_required_checks():
     assert all(c["integration_id"] == 15368 for c in required) and "security-scans / comment" not in {c["context"] for c in required}
     doc = (ROOT / "docs/setup/personal-poc.md").read_text()
     for name in names:
-        assert f'"name": "{name}", "app_id": 15368' in doc, name
+        assert f'name: "{name}", app_id: 15368' in doc, name
 
 
 # ---- PR preview: build the image and run the container authz probe on the pull request ----

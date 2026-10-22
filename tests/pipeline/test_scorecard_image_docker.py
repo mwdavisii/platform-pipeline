@@ -107,8 +107,10 @@ def test_the_agent_step_and_scorecard_run_in_the_image(builder_image, tmp_path):
     temp = tmp_path / "runner-temp"
     temp.mkdir()
     (temp / "scorecard-gateway.env").write_text("SCORECARD_GATEWAY_TOKEN=sk-scorecard-0123456789abcdef\n")
+    # The image bakes platform/required-checks.json into its Gate 1 list, so a configured tree (one that lists the scans) needs them green too.
+    baked = [{"name": c["name"], "state": "success"} for c in json.loads((ROOT / "platform/required-checks.json").read_text())["required"]]
     checks = json.dumps({**json.loads(CHECKS_DOC), "required_checks": [{"name": "golden-road / drift", "state": "success"},
-                                                                         {"name": "golden-road / preview", "state": "success"}], "sha": head})
+                                                                         {"name": "golden-road / preview", "state": "success"}, *baked], "sha": head})
     script = step("assess", "Run the review agent")["run"]
     # No network: the gateway is unreachable on purpose, and the test never leaves the machine.
     assert script.count("docker run --rm ") == 1

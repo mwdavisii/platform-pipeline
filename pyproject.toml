@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "golden-road"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Platform contracts and the builder CLI for secure container delivery"
 requires-python = ">=3.12"
 dependencies = ["jsonschema>=4.22", "PyYAML>=6.0"]
@@ -15,13 +15,18 @@ dev = ["pytest>=8", "uv>=0.4"]
 [project.scripts]
 builder = "builder.cli:main"
 golden-road = "golden_road.cli:main"
+scorecard = "scorecard.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.dynamic]
+version = {attr = "builder.VERSION"}
+
 [tool.setuptools.package-data]
 contracts = ["schemas/*.json"]
 builder = ["data/*.json", "data/authz/*.tmpl"]
+scorecard = ["standards/*.csv", "prompts/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "reference/security-scans/tests"]

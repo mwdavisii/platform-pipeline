@@ -1,0 +1,7 @@
+# The only trusted source of this app's tier and purpose. A PURPOSE.md in the app repo is data, never this.
+schema: intake/v1
+repo: mwdavisii/hello-app
+tier: moderate
+purpose: "A notes API: readers list notes and writers add them. It does not store files, send email, or call external services; its only declared egress is the platform model gateway, which it does not call yet."
+owner: "platform-team"
+data_classification: internal

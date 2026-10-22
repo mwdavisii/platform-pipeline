@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://platform.internal/schemas/doctor-result.v1.json",
+  "title": "doctor-result/v1",
+  "description": "golden-road doctor's checks of an app repo. status is fail when any check fails; a warning never fails the run.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["builder_version", "status", "checks"],
+  "properties": {
+    "builder_version": {"type": "string"},
+    "status": {"enum": ["pass", "fail"]},
+    "checks": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "status", "message", "fix"],
+        "properties": {
+          "id": {"enum": ["access", "visibility", "builder-pin", "verify", "callers", "ruleset", "pr-checks", "intake"]},
+          "status": {"enum": ["pass", "warn", "fail"]},
+          "message": {"type": "string", "minLength": 1},
+          "fix": {"type": "string"}
+        }
+      }
+    }
+  }
+}

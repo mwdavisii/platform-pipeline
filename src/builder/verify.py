@@ -20,6 +20,7 @@ from .config import load_base_images, load_platform, platform_sha256
 from .errors import BuilderError
 from .generate import render_all
 from .lock import GENERATED_DIRS, LOCK_PATH, SPEC_PATH, build_lock, canonical_json, is_safe_rel, sha256_text
+from .render.agents import MANAGED_FILES, block_text, find_block, marker_at, render_blocks
 from .source import MAX_SOURCE_BYTES, MAX_TREE_BYTES
 from .spec import check_spec
 
@@ -29,6 +30,8 @@ REGENERATE = [
     "Run: builder generate .",
     "If the spec can't express the change, ask the platform team to add it to the builder.",
 ]
+BLOCK_FIX = {"summary": "Regenerate the golden-road block instead of editing it.",
+             "steps": ["Run: builder generate .", "Keep your own notes outside the golden-road markers: the builder replaces only the text between them."]}
 MAX_SNIPPET = 200
 MAX_LOCK_ENTRIES = 500
 MAX_UNLISTED = 50
@@ -42,6 +45,7 @@ UNREADABLE = {
     "symlink": "<symbolic link>",
     "oversize": "<file larger than 1 MB>",
     "binary": "<binary file>",
+    "not utf-8": "<not UTF-8 text>",
     "not a regular file": "<not a regular file>",
     "unreadable": "<unreadable file>",
 }
@@ -58,7 +62,7 @@ def _digest(content) -> str:
     return "sha256:" + hashlib.sha256(data).hexdigest()
 
 
-def _drift(rule_id, severity, file, line, snippet, title, rationale, kind="line", digest=None):
+def _drift(rule_id, severity, file, line, snippet, title, rationale, kind="line", digest=None, fix=None):
     evidence = [{"file": file, "start_line": line, "snippet": _snip(snippet)}]
     if digest is not None:
         evidence.append({"file": file, "start_line": 1, "snippet": digest, "note": "content digest"})
@@ -77,7 +81,7 @@ def _drift(rule_id, severity, file, line, snippet, title, rationale, kind="line"
         evidence_verified=True,
         title=title,
         rationale=rationale,
-        fix={"summary": "Regenerate with the builder instead of editing generated files.", "steps": REGENERATE},
+        fix=fix or {"summary": "Regenerate with the builder instead of editing generated files.", "steps": REGENERATE},
         standards=DRIFT_STANDARDS,
     )
 
@@ -199,6 +203,68 @@ def _check_lock(lock):
     if not all(is_safe_rel(rel) and isinstance(digest, str) for rel, digest in files.items()):
         return None
     return dict(files)
+
+
+def _check_blocks(lock):
+    """The lock's block table: {} for a lock written before builder 0.3.0, None when it is malformed."""
+    if not isinstance(lock, dict):
+        return None
+    blocks = lock.get("blocks", {})
+    if not isinstance(blocks, dict) or not set(blocks) <= set(MANAGED_FILES) or not all(isinstance(v, str) for v in blocks.values()):
+        return None
+    return dict(blocks)
+
+
+def _block_findings(reader: Reader, expected: dict | None, locked: dict) -> list[dict]:
+    """Each managed file holds one golden-road block equal to a fresh render, or to the lock's hash when the spec can't be
+    rendered. Text outside the markers is never checked, and never part of a finding's digest."""
+    found = []
+    for rel in MANAGED_FILES:
+        data, reason = reader.read_bytes(rel)
+        if data is None and reason == "missing":
+            found.append(_drift("builder.managed-block-missing", "high", rel, 1, "<missing file>", f"{rel} is missing",
+                                f"{rel} holds the golden-road block that tells coding agents the platform rules.",
+                                kind="absence", digest=_digest("missing"), fix=BLOCK_FIX))
+            continue
+        text = None
+        if data is not None and b"\0" in data:
+            reason = "binary"
+        elif data is not None:
+            try:
+                text = data.decode("utf-8")
+            except UnicodeDecodeError:
+                reason = "not utf-8"
+        if text is None:
+            found.append(_drift("builder.managed-block-modified", "high", rel, 1, UNREADABLE.get(reason, "<unreadable file>"), f"{rel} can't be checked",
+                                f"{rel} must be a regular UTF-8 file in the app directory, not a link.",
+                                digest=_digest(f"unreadable:{reason}"), fix=BLOCK_FIX))
+            continue
+        block = find_block(text)
+        if block.state == "missing":
+            found.append(_drift("builder.managed-block-missing", "high", rel, 1, "<no golden-road markers>", f"{rel} has no golden-road block",
+                                f"{rel} must hold the golden-road block between its markers.", kind="file", digest=_digest("no markers"), fix=BLOCK_FIX))
+            continue
+        if block.state != "ok":
+            rule, title = (("builder.managed-block-duplicated", f"{rel} has the golden-road markers more than once") if block.state == "duplicated"
+                           else ("builder.managed-block-modified", f"{rel} has an unmatched golden-road marker"))
+            found.append(_drift(rule, "high", rel, block.first + 1, marker_at(text, block.first), title,
+                                "The builder manages exactly one block, between one begin and one end marker.",
+                                digest=_digest(block.state), fix=BLOCK_FIX))
+            continue
+        actual = block_text(text, block)
+        want = expected.get(rel) if expected else None
+        if want is not None:
+            same = actual == want
+        elif rel in locked:
+            same = sha256_text(actual) == locked[rel]
+        else:
+            same = True  # an old lock and a spec that can't be rendered: nothing to compare with, and drift already fails on the spec
+        if not same:
+            line, snippet = _first_diff(want, actual) if want is not None else _first_line(actual)
+            found.append(_drift("builder.managed-block-modified", "high", rel, block.first + line, snippet, f"The golden-road block in {rel} was edited",
+                                f"The block in {rel} differs from what the builder writes. Coding agents read it for the platform rules.",
+                                digest=_digest(actual), fix=BLOCK_FIX))
+    return found
 
 
 def _tree_digest(reader: Reader, root: Path, rel: str) -> str:
@@ -324,7 +390,8 @@ def _verify(root: Path, reader: Reader, findings: list[dict]) -> None:
         findings.append(invalid)
         return
     locked = _check_lock(lock)
-    if locked is None:
+    locked_blocks = _check_blocks(lock)
+    if locked is None or locked_blocks is None:
         findings.append(invalid)
         return
 
@@ -386,6 +453,7 @@ def _verify(root: Path, reader: Reader, findings: list[dict]) -> None:
     for directory in GENERATED_DIRS:
         if directory not in unsafe and not _unsafe_dir(root, directory):
             findings.extend(_unlisted(root, reader, directory, listed))
+    findings.extend(_block_findings(reader, render_blocks(spec, platform) if rendered else None, locked_blocks))
     findings.extend(_override_findings(root, reader))
     findings.extend(_gitattributes_findings(reader))
 
@@ -398,7 +466,7 @@ def _verify(root: Path, reader: Reader, findings: list[dict]) -> None:
                                "builder-spec.json needs a decision before it can generate",
                                "Nobody can answer questions in the pipeline. " + "; ".join(questions),
                                digest=_digest("\n".join(sorted(questions)))))
-    if rendered and lock != build_lock(spec, rendered, lock["builder_version"], lock["platform_config_sha256"]):
+    if rendered and lock != build_lock(spec, rendered, lock["builder_version"], lock["platform_config_sha256"], render_blocks(spec, platform)):
         findings.append(_drift("builder.lock-tampered", "high", LOCK_PATH, 1, _first_line(lock_text)[1], "Builder lock doesn't match the spec and generated files",
                                "The lock records different hashes than a fresh render of builder-spec.json produces.",
                                digest=_digest(lock_text)))

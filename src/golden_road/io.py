@@ -2,6 +2,7 @@
 
 import json
 import os
+import stat
 import tempfile
 from pathlib import Path
 
@@ -25,9 +26,13 @@ def error_detail(finding, error: str) -> str:
 def load_json(path):
     path = Path(path)
     try:
-        if path.stat().st_size > MAX_INPUT_BYTES:
+        if not stat.S_ISREG(path.stat().st_mode):  # a FIFO or device would block or never end
+            raise InputError(f"{path} is not a regular file")
+        with path.open("rb") as handle:
+            data = handle.read(MAX_INPUT_BYTES + 1)
+        if len(data) > MAX_INPUT_BYTES:
             raise InputError(f"{path} is larger than {MAX_INPUT_BYTES} bytes")
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(data.decode("utf-8"))
     except InputError:
         raise
     except (OSError, UnicodeDecodeError, ValueError, RecursionError) as exc:

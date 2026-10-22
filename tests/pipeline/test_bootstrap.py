@@ -100,7 +100,8 @@ def test_push_bootstrap_refuses_public_and_bad_input(tmp_path):
 
 def test_push_bootstrap_refuses_unconfigured_placeholder(tmp_path):
     """Uses synthesized trees, so it holds whether or not the live tree has been configured."""
-    for i, marker in enumerate(("uses: ORG_PLACEHOLDER/platform-pipeline", "host: llm.replace-me.invalid", "ns: replace-me")):
+    for i, marker in enumerate(("uses: ORG_PLACEHOLDER/platform-pipeline", "host: llm.replace-me.invalid", "ns: replace-me",
+                                "BUILDER_IMAGE: ghcr.io/o/golden-road-builder@sha256:" + "0" * 64)):
         out, calls = push_tree(tmp_path / str(i), "PRIVATE", readme=marker + "\n")
         assert out.returncode == 2 and "configure.py" in out.stderr, marker
         assert calls == ""
@@ -238,9 +239,13 @@ def test_enforcement_doc_is_complete_and_matches_the_ruleset():
     assert json.loads((ROOT / "bootstrap/hello-app/.github/rulesets/main.json").read_text())["rules"][3]["parameters"]["required_status_checks"][0]["integration_id"] == 15368
 
 
-def test_personal_poc_doc_builder_tag_matches_builder_version():
-    version = re.search(r'VERSION = "([^"]+)"', (ROOT / "src/builder/__init__.py").read_text()).group(1)
-    assert f"builder-v{version}" in (ROOT / "docs/setup/personal-poc.md").read_text()
+def test_personal_poc_doc_reads_the_builder_tag_from_the_source():
+    """The doc never names a builder version: it reads it from src/builder/__init__.py, so a version bump needs no doc edit."""
+    text = (ROOT / "docs/setup/personal-poc.md").read_text()
+    three = text[text.index("## 3. Release the builder image"):text.index("## 4. ")]
+    assert "builder-v<version>" in three and "src/builder/__init__.py" in three
+    thirteen = text[text.index("## 13. Risk scorecard"):text.index("## 14. ")]
+    assert "git tag builder-v$version && git push origin builder-v$version" in thirteen
 
 
 def test_enforcement_doc_has_verification_contract():
@@ -298,7 +303,8 @@ def test_root_readme_is_neutral_and_links_the_docs():
 def test_ruleset_requires_both_security_scans_checks_from_the_actions_app():
     doc = json.loads((APP / ".github/rulesets/main.json").read_text())
     checks = [r for r in doc["rules"] if r["type"] == "required_status_checks"][0]["parameters"]["required_status_checks"]
-    assert checks == [{"context": name, "integration_id": 15368} for name in ("golden-road / drift", "golden-road / preview", "security-scans / semgrep", "security-scans / trivy")]
+    assert checks == [{"context": name, "integration_id": 15368} for name in ("golden-road / drift", "golden-road / preview", "security-scans / semgrep", "security-scans / trivy",
+                                                                          "scorecard / assessed")]
 
 
 def test_code_scanning_ruleset_is_a_separate_file_so_a_wrong_field_cannot_break_the_main_ruleset():
@@ -318,6 +324,7 @@ def test_dependabot_covers_the_language_and_the_actions():
     assert set(ecosystems) == {"pip", "github-actions"}, "no docker entry: the Dockerfile and its base image belong to the builder"
     for update in ecosystems.values():
         assert update["directory"] == "/" and update["schedule"]["interval"] == "weekly"
+        assert update["cooldown"]["default-days"] >= 7, "a cooldown keeps freshly published (possibly malicious) versions out"
     assert (APP / "requirements.txt").is_file() and not (APP / "package.json").exists(), "hello-app is a Python app, so pip rather than npm"
 
 
@@ -335,14 +342,15 @@ def test_personal_poc_doc_covers_the_scans_codeql_dependabot_and_the_known_gap()
     for needle in ("--tree security-scans", "## 4. Publish `security-scans` (public)", "code-scanning/default-setup", "default setup",
                    "vulnerability-alerts", "dependabot.yml", "rulesets/code-scanning.json", "platform/required-checks.json",
                    'name: "security-scans / semgrep", app_id: 15368', 'name: "security-scans / trivy", app_id: 15368',
-                   "CodeQL check name", "builder-v0.2.1", 'VERSION = "0.2.1"', "jinja2==2.10", "shell=True", "golden-road checks wait",
+                   "CodeQL check name", "builder-v$version", "bump-builder-version.py", "jinja2==2.10", "shell=True", "golden-road checks wait",
                    "Scan results can be forged", "signed scan results", "can_approve_pull_request_reviews", "Checks: Read-only", "Dry run first",
                    "GOLDEN_ROAD_SCANS_TRIVY", "rulesets --input .github/rulesets/main.json", "Base-image findings", "Gate 1 on a push"):
         assert needle in text, needle
     steps = [int(m) for m in re.findall(r"^## (\d+)\.", text, re.M)]
-    assert steps == list(range(0, 13))
+    assert steps == list(range(0, 15))
     # the scans repo is published before hello-app is pushed, and the builder is released again only after both exist
     assert text.index("## 4. Publish `security-scans`") < text.index("## 5. Create `hello-app`") < text.index("## 11.") < text.index("## 12.")
+    assert text.index("## 13. Risk scorecard") < text.index("## 14. ")
 
 
 def test_enforcement_doc_has_neutral_rows_for_the_scans_and_the_forgery_gap():
@@ -375,3 +383,10 @@ def test_personal_poc_doc_has_the_single_approver_deployment_note():
     assert "Single-approver mode: skip" in text and "If you have a deputy" in text
     # the two-person path stays documented
     assert "@<you> @<deputy>" in text and "prevent_self_review\": true" in text
+
+
+def test_push_bootstrap_accepts_a_pinned_digest_and_a_guard_that_names_the_zero_digest_by_pattern(tmp_path):
+    """The factory workflow refuses the zero digest with the regex `0{64}`, so its guard never trips the placeholder scan."""
+    pinned = "BUILDER_IMAGE: ghcr.io/o/golden-road-builder@sha256:" + "ab" * 32 + "\nguard: '@sha256:0{64}$'\n"
+    out, calls = push_tree(tmp_path, "PRIVATE", readme=pinned)
+    assert "placeholder" not in out.stderr and "gh repo create org/demo --private" in calls

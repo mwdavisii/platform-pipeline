@@ -47,6 +47,10 @@
           {
             "context": "security-scans / trivy",
             "integration_id": 15368
+          },
+          {
+            "context": "scorecard / assessed",
+            "integration_id": 15368
           }
         ]
       }

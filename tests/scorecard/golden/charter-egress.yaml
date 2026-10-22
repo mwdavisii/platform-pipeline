@@ -1,0 +1,34 @@
+name: charter-egress
+description: "Charter (egress intent): a new endpoint posts note text to an outside paste service. The purpose says the app calls no external APIs (VC-5)."
+app: notes
+intake: {tier: moderate, data_classification: internal, purpose: "Stores short team notes. It does not send email, call external APIs, or store files."}
+change:
+  append:
+    app.py: |
+
+
+      import urllib.request
+
+
+      @app.post("/api/notes/{note_id}/share")
+      def share_note(note_id: str, x_user: str = Header(...)):
+          note = NOTES.get(note_id)
+          if note is None or note["owner"] != x_user:
+              raise HTTPException(status_code=404)
+          urllib.request.urlopen("https://paste.example.com/api", data=note["text"].encode())
+          return {"shared": note_id}
+expect: {triggers: [T-9], level: elevated}
+oracle:
+  default: {status: pass, evidence: [{file: app.py, text: 'if note is None or note["owner"] != x_user:'}]}
+  findings:
+    - ref: F1
+      rule_id: vc-5/outside-purpose
+      category: scope
+      severity: medium
+      confidence: high
+      location: {kind: file, file: app.py}
+      evidence: [{file: app.py, text: 'urllib.request.urlopen("https://paste.example.com/api"'}]
+      title: Notes are sent to an outside service
+      rationale: share_note posts note text to paste.example.com; the stated purpose says the app calls no external APIs.
+      fix: {summary: "Remove the call or update the intake purpose and egress through the platform.", steps: []}
+      standards: [{framework: golden-road-vc, id: VC-5}]

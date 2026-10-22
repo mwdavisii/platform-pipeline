@@ -1,0 +1,9 @@
+name: clean-python
+description: A harmless code change. Nothing fires.
+app: notes
+intake: {tier: moderate, data_classification: internal, purpose: "Stores short team notes. It does not send email, call external APIs, or store files."}
+change:
+  append: {app.py: "\n\n# Notes are kept in memory for now.\n"}
+expect: {triggers: [], level: standard}
+oracle:
+  default: {status: pass, evidence: [{file: app.py, text: 'if note is None or note["owner"] != x_user:'}]}

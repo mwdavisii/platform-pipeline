@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://platform.internal/schemas/override.v2.json",
+  "title": "override/v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "id", "repo", "finding_id", "rule_id", "approver", "justification", "created", "expires"],
+  "$defs": {"single_line": {"not": {"pattern": "[\\r\\n]"}}},
+  "properties": {
+    "schema": {"const": "override/v2"},
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"},
+    "repo": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", "allOf": [{"$ref": "#/$defs/single_line"}, {"not": {"pattern": "(^|/)\\.\\.?(/|$)"}}]},
+    "finding_id": {"type": "string", "pattern": "^[0-9a-f]{64}$", "minLength": 64, "maxLength": 64, "allOf": [{"$ref": "#/$defs/single_line"}]},
+    "rule_id": {"type": "string", "minLength": 1, "allOf": [{"$ref": "#/$defs/single_line"}]},
+    "approver": {"type": "string", "minLength": 1, "allOf": [{"$ref": "#/$defs/single_line"}]},
+    "justification": {"type": "string", "minLength": 10, "allOf": [{"$ref": "#/$defs/single_line"}]},
+    "created": {"type": "string", "format": "date", "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
+    "expires": {"type": "string", "format": "date", "pattern": "^\\d{4}-\\d{2}-\\d{2}$"}
+  }
+}

@@ -5,6 +5,7 @@ import pytest
 from builder.config import load_platform
 from builder.generate import generate
 from builder.lock import sha256_text
+from builder.render.agents import BEGIN, END, MANAGED_FILES
 from builder.verify import verify
 from contracts.schema import validate
 
@@ -505,3 +506,125 @@ def test_override_findings_are_capped_with_a_summary(generated):
     assert len(found) == 51 and found[-1]["location"]["kind"] == "file"
     for f in found:
         assert validate("finding.v1", f) == []
+
+
+# ---- the golden-road blocks ----
+
+def test_team_text_outside_the_blocks_is_ignored(generated):
+    for name in MANAGED_FILES:
+        path = generated / name
+        path.write_text("# Ours\n" + path.read_text() + "\nMore of ours.\n")
+    assert verify(generated) == []
+
+
+@pytest.mark.parametrize("name", MANAGED_FILES)
+def test_missing_managed_file_is_high(generated, name):
+    (generated / name).unlink()
+    f = rules(verify(generated))["builder.managed-block-missing"]
+    assert f["severity"] == "high" and f["location"] == {"kind": "absence", "file": name}
+    assert f["fix"]["steps"][0] == "Run: builder generate ."
+
+
+def test_file_without_the_block_is_missing(generated):
+    (generated / "AGENTS.md").write_text("# only ours\n")
+    f = rules(verify(generated))["builder.managed-block-missing"]
+    assert f["location"] == {"kind": "file", "file": "AGENTS.md"}
+
+
+def test_edited_block_is_modified_at_the_edited_line(generated):
+    path = generated / "AGENTS.md"
+    lines = ("intro\n" + path.read_text()).splitlines()
+    index = next(i for i, line in enumerate(lines) if "Never make this repository public" in line)
+    lines[index] = "- Making this repository public is fine."
+    path.write_text("\n".join(lines) + "\n")
+    f = rules(verify(generated))["builder.managed-block-modified"]
+    assert f["severity"] == "high"
+    assert f["location"] == {"kind": "line", "file": "AGENTS.md", "start_line": index + 1, "end_line": index + 1}
+    assert f["evidence"][0]["snippet"] == "- Making this repository public is fine."
+
+
+def test_duplicated_markers_are_high(generated):
+    path = generated / "CLAUDE.md"
+    path.write_text(path.read_text() * 2)
+    f = rules(verify(generated))["builder.managed-block-duplicated"]
+    assert f["severity"] == "high" and f["location"]["start_line"] == 4
+
+
+def test_unmatched_marker_is_modified(generated):
+    (generated / "CLAUDE.md").write_text(f"{BEGIN}\n@AGENTS.md\n")
+    assert rules(verify(generated))["builder.managed-block-modified"]["location"]["start_line"] == 1
+
+
+@pytest.mark.parametrize("name", MANAGED_FILES)
+def test_symlinked_managed_file_is_flagged(generated, name):
+    real = generated.parent / f"real-{name}"
+    real.write_text((generated / name).read_text())
+    (generated / name).unlink()
+    (generated / name).symlink_to(real)
+    assert rules(verify(generated))["builder.managed-block-modified"]["evidence"][0]["snippet"] == "<symbolic link>"
+
+
+@pytest.mark.parametrize("data, snippet", [(b"\xff\xfe\x00x", "<binary file>"), (b"\xff\xfe x\n", "<not UTF-8 text>")])
+def test_binary_or_non_utf8_managed_file_is_flagged(generated, data, snippet):
+    (generated / "AGENTS.md").write_bytes(data)
+    assert rules(verify(generated))["builder.managed-block-modified"]["evidence"][0]["snippet"] == snippet
+
+
+def test_forged_block_hashes_are_tampered(generated):
+    forge(generated, blocks={"AGENTS.md": "0" * 64, "CLAUDE.md": "0" * 64})
+    assert [f["rule_id"] for f in verify(generated)] == ["builder.lock-tampered"]
+
+
+@pytest.mark.parametrize("blocks", ["x", {"README.md": "0" * 64}, {"AGENTS.md": 5}])
+def test_malformed_lock_blocks_is_lock_invalid(generated, blocks):
+    forge(generated, blocks=blocks)
+    assert [f["rule_id"] for f in verify(generated)] == ["builder.lock-invalid"]
+
+
+def test_repo_generated_by_an_older_builder(generated):
+    """A lock from before the blocks has no blocks table and the repo has no AGENTS.md: regenerate, not lock-invalid.
+    (0.1.0, not 0.2.0: this task runs before the bump to 0.3.0, and version-stale needs a version other than VERSION.)"""
+    lock_edit(generated, lambda lock: (lock.pop("blocks"), lock.__setitem__("builder_version", "0.1.0")))
+    for name in MANAGED_FILES:
+        (generated / name).unlink()
+    found = rules(verify(generated))
+    assert {"builder.lock-tampered", "builder.version-stale", "builder.managed-block-missing"} <= set(found)
+    assert "builder.lock-invalid" not in found
+
+
+def test_invalid_spec_falls_back_to_the_lock_hash(generated):
+    spec = json.loads((generated / "builder-spec.json").read_text())
+    spec["egress"] = [{"host": "api.openai.com", "port": 443, "reason": "direct model calls"}]
+    (generated / "builder-spec.json").write_text(json.dumps(spec))
+    path = generated / "AGENTS.md"
+    path.write_text(path.read_text().replace("Never make", "Do make"))
+    found = rules(verify(generated))
+    assert "builder.spec-invalid" in found and "builder.managed-block-modified" in found
+
+
+@pytest.mark.parametrize("bad, rule", [(f"{BEGIN}\n{END}\n{BEGIN}\n{END}\n", "builder.managed-block-duplicated"),
+                                       (f"{BEGIN}\nno end\n", "builder.managed-block-modified")])
+def test_marker_finding_id_ignores_team_text_above(generated, bad, rule):
+    def finding_id(text):
+        (generated / "AGENTS.md").write_text(text)
+        return rules(verify(generated))[rule]["id"]
+
+    ids = {finding_id(prefix + bad) for prefix in ("", "a\n", "a\nb\n", "a\x0cb\n", "x\x1cy\x85z\n", "\ufeff", "\ufeffa\n")}
+    assert len(ids) == 1
+
+
+def test_lock_with_only_its_blocks_key_deleted_is_tampered(generated):
+    lock_edit(generated, lambda lock: lock.pop("blocks"))
+    assert [f["rule_id"] for f in verify(generated)] == ["builder.lock-tampered"]
+
+
+def test_block_finding_id_tracks_the_block_not_the_team_text(generated):
+    path = generated / "AGENTS.md"
+    edited = path.read_text().replace("Never make", "Do make")
+
+    def finding_id(text):
+        path.write_text(text)
+        return rules(verify(generated))["builder.managed-block-modified"]["id"]
+
+    assert finding_id("a\n" + edited) == finding_id("b\n" + edited)
+    assert finding_id("a\n" + edited) != finding_id("a\n" + edited.replace("Do make", "Please make"))

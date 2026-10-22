@@ -53,3 +53,11 @@ def make_finding(
         "fix": fix,
         "standards": standards,
     }
+
+
+def make_finding_v2(*, first_seen: str, image_digest: str | None = None, **fields) -> dict:
+    """finding/v2: finding/v1 plus the schema discriminator, when it was first seen, and the image it was seen in."""
+    finding = {"schema": "finding/v2", **make_finding(**fields), "first_seen": first_seen}
+    if image_digest:
+        finding["image_digest"] = image_digest
+    return finding

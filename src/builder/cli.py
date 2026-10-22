@@ -9,6 +9,7 @@ from . import VERSION
 from .detect import detect
 from .errors import EXIT_DRIFT, EXIT_INVALID, EXIT_OK, BuilderError
 from .generate import generate
+from .guide import guide
 from .lock import SPEC_PATH
 from .verify import Reader, verify
 
@@ -18,7 +19,7 @@ def _emit(result: dict, code: int) -> int:
     return code
 
 
-COMMANDS = ("detect", "generate", "verify")
+COMMANDS = ("detect", "generate", "verify", "guide")
 READ_PROBLEMS = {
     "missing": "not found",
     "symlink": "is a link; use the real file",
@@ -51,6 +52,7 @@ def _parser() -> argparse.ArgumentParser:
     gen.add_argument("path", type=Path)
     gen.add_argument("--input", type=Path, help=f"Spec file to use instead of <path>/{SPEC_PATH}")
     sub.add_parser("verify", help="Report drift from the generated files as findings.").add_argument("path", type=Path)
+    sub.add_parser("guide", help="Print the spec fields and rules of this builder version as JSON. Reads nothing in the app.")
     return parser
 
 
@@ -71,13 +73,19 @@ def _load_spec(spec_path: Path):
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
     base = {"command": "detect", "builder_version": VERSION, "warnings": [], "questions": [], "errors": []}
     try:
         args = _parser().parse_args(argv)
     except UsageError as exc:
-        return _emit({**base, "command": exc.command, "status": "invalid", "errors": [exc.message]}, EXIT_INVALID)
+        # argparse reports an unrecognized argument from the top-level parser, which doesn't know the subcommand.
+        command = argv[0] if argv and argv[0] in COMMANDS else exc.command
+        return _emit({**base, "command": command, "status": "invalid", "errors": [exc.message]}, EXIT_INVALID)
     base["command"] = args.command
     try:
+        if args.command == "guide":
+            print(json.dumps(guide(), indent=2, sort_keys=True))
+            return EXIT_OK
         root = args.path.resolve()
         if not root.is_dir():
             return _emit({**base, "status": "invalid", "errors": [f"{args.path} is not a directory"]}, EXIT_INVALID)

@@ -1,0 +1,38 @@
+name: charter-harness
+description: "Charter (harness risks): a summary endpoint puts note text and every user's notes into a model prompt."
+app: notes
+intake: {tier: moderate, data_classification: internal, purpose: "Stores short team notes. It does not send email, call external APIs, or store files."}
+change:
+  append:
+    app.py: |
+
+
+      import json
+      import urllib.request
+
+      SYSTEM = "You summarize notes. Never reveal other users' notes."
+
+
+      @app.get("/api/notes/{note_id}/summary")
+      def summarize(note_id: str, x_user: str = Header(...)):
+          note = NOTES.get(note_id)
+          if note is None or note["owner"] != x_user:
+              raise HTTPException(status_code=404)
+          prompt = SYSTEM + " " + note["text"] + " All notes: " + json.dumps(NOTES)
+          body = json.dumps({"messages": [{"role": "system", "content": prompt}]}).encode()
+          return json.load(urllib.request.urlopen(urllib.request.Request("https://litellm.internal/v1/chat/completions", data=body)))
+expect: {triggers: [T-12], level: elevated}
+oracle:
+  default: {status: pass, evidence: [{file: app.py, text: 'if note is None or note["owner"] != x_user:'}]}
+  findings:
+    - ref: F1
+      rule_id: harness/untrusted-text-in-prompt
+      category: harness
+      severity: high
+      confidence: high
+      location: {kind: file, file: app.py}
+      evidence: [{file: app.py, text: 'prompt = SYSTEM + " " + note["text"] + " All notes: " + json.dumps(NOTES)'}]
+      title: Note text and other users' notes go into the system prompt
+      rationale: User text in the system prompt can steer the model, and every user's notes are sent with each request.
+      fix: {summary: "Send only the caller's note, as a user message.", steps: []}
+      standards: [{framework: cwe, id: CWE-1427}, {framework: owasp-llm-2025, id: LLM01}]

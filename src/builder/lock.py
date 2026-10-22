@@ -8,6 +8,8 @@ LOCK_PATH = ".builder.lock"
 SPEC_PATH = "builder-spec.json"
 # Directories only the builder writes. Stale-file removal and drift checks are limited to these.
 GENERATED_DIRS = ("deploy/base", "_platform")
+# What only the builder writes, as agents and people are told: change builder-spec.json and regenerate instead.
+NEVER_EDIT = ("Dockerfile", ".dockerignore", *(f"{d}/" for d in GENERATED_DIRS), LOCK_PATH)
 
 # Mirrors the repo_path rules in finding.v1: no control characters, backslashes,
 # absolute paths, or "." / ".." / empty segments.
@@ -26,8 +28,9 @@ def canonical_json(document) -> str:
     return json.dumps(document, indent=2, sort_keys=True) + "\n"
 
 
-def build_lock(spec: dict, files: dict[str, str], version: str, platform_sha: str) -> dict:
+def build_lock(spec: dict, files: dict[str, str], version: str, platform_sha: str, blocks: dict[str, str]) -> dict:
     return {
+        "blocks": {path: sha256_text(text) for path, text in sorted(blocks.items())},
         "builder_version": version,
         "spec_sha256": sha256_text(canonical_json(spec)),
         "platform_config_sha256": platform_sha,

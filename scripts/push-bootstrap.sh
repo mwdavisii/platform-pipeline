@@ -22,8 +22,8 @@ src="$(cd "$(dirname "$0")/.." && pwd)/bootstrap/$name"
 [ -d "$src" ] || { echo "no bootstrap/$name" >&2; exit 2; }
 
 rc=0
-grep -rqE 'replace-me|ORG_PLACEHOLDER' "$src" || rc=$?
-if [ "$rc" -eq 0 ]; then echo "bootstrap/$name still has placeholder values (replace-me or ORG_PLACEHOLDER). Run scripts/configure.py first." >&2; exit 2; fi
+grep -rqE 'replace-me|ORG_PLACEHOLDER|@sha256:0{64}' "$src" || rc=$?
+if [ "$rc" -eq 0 ]; then echo "bootstrap/$name still has placeholder values (replace-me, ORG_PLACEHOLDER, or an all-zero image digest). Run scripts/configure.py and pin the builder image digest first." >&2; exit 2; fi
 [ "$rc" -eq 1 ] || { echo "could not scan bootstrap/$name for placeholders (grep exit $rc)" >&2; exit 2; }
 
 work="$(mktemp -d)"

@@ -1,0 +1,186 @@
+# The risk scorecard's configuration. Platform-owned: changing it changes how every app's pull requests are classified,
+# so every change is a reviewed pull request on this repo's protected main.
+schema: scorecard-config/v1
+
+# Intake tier and data classification -> ASVS level. The level used is the highest that applies.
+tier_asvs_level: {low: 1, moderate: 2, high: 3}
+classification_asvs_level: {public: 1, internal: 1, restricted: 2, phi: 2}
+missing_intake_asvs_level: 3
+
+# Intake tier -> the lowest scrutiny level a change can get.
+tier_floor: {low: standard, moderate: standard, high: security_review}
+
+# V6 Authentication, V7 Session Management, V8 Authorization, V9 Self-contained Tokens, V13.3 Secret Management.
+blocking: [v5.0.0-6, v5.0.0-7, v5.0.0-8, v5.0.0-9, v5.0.0-13.3]
+
+coverage_threshold: 70
+
+triggers:
+  T-1: security_review
+  T-2: security_review
+  T-3: security_review
+  T-4: security_review
+  T-5: security_review
+  T-6: security_review
+  T-7: security_review
+  T-8: security_review
+  T-9: elevated
+  T-10: elevated
+  T-11: elevated
+  T-12: elevated
+  T-14: elevated
+  T-15: security_review
+  T-16: security_review
+
+# T-10 rises to security_review for these classifications.
+sensitive_classifications: [restricted, phi]
+
+# Gate 1 must be green on the PR head before anything is assessed. App 15368 is GitHub Actions. Keep this list to
+# drift and preview plus every entry of the platform's required-checks.json (the scans), pinned to the same sources.
+gate1_checks:
+  - {name: "golden-road / drift", app_id: 15368}
+  - {name: "golden-road / preview", app_id: 15368}
+  - {"name":"security-scans / semgrep","app_id":15368}
+  - {"name":"security-scans / trivy","app_id":15368}
+  - {"name":"Analyze (python)","app_id":15368}
+  - {"name":"Analyze (actions)","app_id":15368}
+drift_check: "golden-road / drift"
+
+# Met by the golden road, not the app. They pass only when drift is green for the commit.
+platform_provided:
+  - {id: v5.0.0-8.2.1, control: "generated authz enforcement from builder-spec.json", requires_authz: true}
+  - {id: v5.0.0-8.3.1, control: "generated authz enforcement runs in front of the app", requires_authz: true}
+  - {id: v5.0.0-12.1.1, control: "TLS terminates at the platform edge", requires_authz: false}
+  - {id: v5.0.0-12.2.1, control: "TLS terminates at the platform edge", requires_authz: false}
+  - {id: v5.0.0-12.2.2, control: "the platform edge serves publicly trusted certificates", requires_authz: false}
+  - {id: v5.0.0-13.2.4, control: "default-deny egress allows only the hosts in builder-spec.json", requires_authz: false}
+
+# Tested by the tools other teams own. The agent never evaluates them.
+tool_covered:
+  - {id: v5.0.0-1.2.4, tool: sast}
+  - {id: v5.0.0-1.2.5, tool: sast}
+  - {id: v5.0.0-15.2.1, tool: sca}
+
+# A chapter or section is not applicable when none of these packages is in the lockfiles.
+na_rules:
+  - selector: v5.0.0-10
+    justification: "No OAuth or OIDC library in the lockfiles"
+    unless_packages: [authlib, oauthlib, requests-oauthlib, python-jose, msal, social-auth-core, django-allauth, openid-client, passport-oauth2, oidc-provider, next-auth, "@auth/core", "@azure/msal-node"]
+  - selector: v5.0.0-17
+    justification: "No WebRTC library in the lockfiles"
+    unless_packages: [aiortc, simple-peer, peerjs, mediasoup, wrtc, "@roamhq/wrtc", livekit-server-sdk]
+
+# Teams (org/team-slug) asked to review at each level. Empty on a personal account, which has no teams.
+reviewers:
+  elevated: []
+  security_review: []
+
+# Globs. One with a "/" matches the whole path, one without matches the file name. Matching ignores case.
+paths:
+  test_files: ["test_*.py", "*_test.py", "tests.py", "conftest.py", "*.test.js", "*.test.jsx", "*.test.ts", "*.test.tsx",
+               "*.test.mjs", "*.test.cjs", "*.spec.js", "*.spec.jsx", "*.spec.ts", "*.spec.tsx", "*.spec.mjs", "*.spec.cjs",
+               "tests/*", "*/tests/*", "test/*", "*/test/*", "spec/*", "*/spec/*", "__tests__/*", "*/__tests__/*"]
+  # A change to these fires only when it touches test settings (see patterns.test_config_sections
+  # for pyproject.toml; package.json is compared by scripts.test* and its jest, mocha, vitest values); any change to the others fires.
+  test_config_files: ["pytest.ini", "pyproject.toml", "setup.cfg", "tox.ini", "conftest.py", "jest.config.*", "vitest.config.*",
+                      "package.json"]
+  # Ignore lists: only added lines fire, because removing an entry tightens the scan.
+  suppression_files: [".trivyignore", ".trivyignore.yaml", ".semgrepignore", ".gitleaksignore"]
+  # Scanner configuration: any change fires, including deletion.
+  scanner_config_files: ["trivy*.yaml", "trivy*.yml", ".semgrep.yml", ".semgrep/*", ".gitleaks.toml"]
+  workflow_files: [".github/*", "CODEOWNERS", ".gitattributes"]
+  shadow_files: ["uvicorn.py", "gunicorn.conf.py", "sitecustomize.py", "usercustomize.py", "*.pth",
+                 "uvicorn/*", "gunicorn/*", "sitecustomize/*", "usercustomize/*"]
+  purpose_files: ["PURPOSE.md"]
+  generated_dirs: ["_platform/*"]
+
+# Python regexes, matched case-insensitively against single lines.
+patterns:
+  skip_markers:
+    - '\bpytest\.mark\.(skip|skipif|xfail)\b'
+    - '\bmark\.(skip|skipif|xfail)\b'
+    - '^\s*@\w+\.(skip|skipif|xfail)\b'
+    - '\bpytestmark\s*='
+    - '@(pytest\.)?mark\.(skip|skipif)\b'
+    - '(?<![\w.])pytest\.(skip|xfail)\s*\('
+    - '\bunittest\.(skip|skipif|skipunless|expectedfailure)\b'
+    - '@skip(if|unless)?\s*\('
+    - '\bSkipTest\b'
+    - '\.skipTest\s*\('
+    - '\bimportorskip\s*\('
+    - '\bcollect_ignore\b'
+    - '\bpytest_ignore_collect\b'
+    - '\b(it|describe|test)\.(skip|todo|only)\b'
+    - '\.skip\.each\b'
+    - '\bx(it|describe|test)\s*\('
+    - '(?<![\w.])f(it|describe)\s*\('
+  suppression_markers:
+    - 'nosemgrep'
+    - 'trivy:ignore'
+    - '#\s*noqa\s*:\s*S\d+'
+    - '#\s*nosec\b'
+    - 'gitleaks:allow'
+  # File contents, commit messages and PR text. File names are checked against a fixed set of override phrases in the code, not these.
+  injection:
+    - 'ignore (all |any )?(the )?(previous|prior|above|earlier) (instructions|rules|prompts?)'
+    - '\bpre-?approved\b'
+    - '\bas (the|an?) (ai |security |code )?reviewer\b'
+    - '\b(dear|attention|hey|note to( the)?) (ai|llm|model|reviewer|assistant)\b'
+    - '\byou are (now )?an? (ai|llm|language model|assistant)\b'
+    - '\b(do not|don.t) (flag|report|mention) (this|these|any)\b'
+    - '\bmark (this|all|every) (requirements? )?as (pass|passed|compliant|n/?a)\b'
+  platform_import:
+    - '^\s*(from|import)\s+_platform\b'
+    - '^\s*import\s+(?:[\w.]+\s*,\s*)+_platform\b'
+    - '\b(?:import_module|__import__)\s*\(\s*["\x27](?:[\w.]*\.)?_platform\b'
+    - '\b(?:require|import)\s*\(\s*["\x27`](?:[^"\x27`]*/)?_platform\b'
+    - '\bfrom\s+["\x27`](?:[^"\x27`]*/)?_platform\b'
+  test_function:
+    - '^\s*(async\s+)?def\s+(test_\w+)'
+    - '\b(?:it|test)\s*\(\s*["\x27`]([^"\x27`]{1,200})["\x27`]'
+  # Containers that qualify test names (Class.method, describe path) and are themselves tests.
+  test_container:
+    - '^\s*class\s+(Test\w*)'
+    - '\bdescribe\s*\(\s*["\x27`]([^"\x27`]{1,200})["\x27`]'
+  # pyproject.toml: a change fires only inside a section whose header matches. package.json is compared by
+  # scripts.test* and the top-level jest, mocha, and vitest values (an unparsable file fires).
+  test_config_sections:
+    - '^\s*\[tool\.pytest\b'
+
+max_comment_block_lines: 40
+
+registry:
+  new_package_days: 90
+  timeout_seconds: 10
+  internal_npm_scopes: []
+  max_total_seconds: 120
+  # Per ecosystem. npm names match exactly; PyPI names are compared after PEP 503 normalization.
+  internal_packages: {pypi: [], npm: []}
+  # A package is skipped as internal only when its lockfile "resolved" URL starts with one of these (https, ends in "/").
+  # PyPI pins carry no URL, so the pypi list is reserved for when index URLs are read.
+  internal_registries: {npm: [], pypi: []}
+
+# A suppression never applies to a finding whose category is secrets or whose rule ID starts with one of these.
+suppressions:
+  secret_rule_prefixes: ["secret", "gitleaks"]
+
+# An agent `pass` can't rest on evidence in these files (generated, documentation, or deployment text that
+# says what a control should do, not what the code does). Globs, same matching as `paths`.
+evidence:
+  excluded_paths: ["_platform/*", ".builder.lock", "Dockerfile", "deploy/*", "*.md", "docs/*"]
+
+# The review agent. `scorecard run` refuses an assessment made with any other model or prompt version.
+# The gateway credential (an OIDC-derived token or a scoped key) comes only from the named environment variable.
+agent:
+  prompt_version: review-1
+  model: {name: scorecard-reviewer, version: "opus-5-pinned-1"}
+  gateway:
+    url: "https://llm.mwdavisii.com/v1/chat/completions"
+    auth: {scheme: bearer}
+    credential_env: SCORECARD_GATEWAY_TOKEN
+    timeout_seconds: 120
+    retry_seconds: 5
+    max_response_bytes: 2000000
+  budget: {max_total_tokens: 1500000, max_tokens_per_call: 4096, max_run_seconds: 1800}
+  batching: {max_requirements: 12, max_turns: 16}
+  tools: {max_read_lines: 400, max_output_chars: 24000, max_grep_matches: 100, max_list_files: 500, max_diff_chars: 60000}

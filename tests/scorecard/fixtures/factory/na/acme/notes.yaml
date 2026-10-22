@@ -1,0 +1,7 @@
+schema: na/v1
+repo: acme/notes
+entries:
+  - asvs_id: v5.0.0-6.6.1
+    justification: "The app has no out-of-band authentication; the edge handles sign-in."
+    confirmed_by: "security-lead"
+    confirmed: 2026-10-01

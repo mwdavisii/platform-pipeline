@@ -1,6 +1,7 @@
 """Markdown for the job summary and PR comment. Every scanner-supplied string is escaped and flattened."""
 
 import re
+import unicodedata
 
 ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"]
@@ -18,6 +19,9 @@ _UNIT = re.compile(r"\\.|&amp;|&lt;|@\u200d|.", re.DOTALL)
 def _md(text, limit: int = MAX_FIELD) -> str:
     """Escape one field, then cut it to `limit` characters on an escape boundary."""
     clean = str(text).encode("utf-8", "replace").decode("utf-8")
+    # Format and control characters (bidi overrides, zero-width, ...) could spoof what a reader sees; the only joiner
+    # in the output is the one inserted below to neutralize `@`.
+    clean = "".join(c for c in clean if c.isspace() or unicodedata.category(c) not in ("Cf", "Cc"))
     flat = " ".join(clean.split())
     escaped = flat.replace("&", "&amp;").replace("<", "&lt;").replace("@", "@\u200d")
     escaped = _MD_SPECIAL.sub(r"\\\1", escaped)

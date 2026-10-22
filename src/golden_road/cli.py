@@ -5,13 +5,14 @@ import datetime as dt
 import hashlib
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
 from builder.config import gate2_single_approver, load_platform
 from contracts.schema import validate
 
-from . import authz_probe, checks, preview, record
+from . import authz_probe, checks, doctor, preview, record
 from .gate import evaluate, load_overrides
 from .io import InputError, load_findings, load_json, write_json, write_text_atomic
 from .normalize import from_builder_result, normalize_sarif
@@ -22,6 +23,7 @@ from .summary import render as render_summary
 
 EXIT_PASS, EXIT_FAIL, EXIT_ERROR = 0, 1, 2
 MAX_ERROR = 500
+HOST = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?(?::[0-9]{1,5})?")
 
 
 class _Parser(argparse.ArgumentParser):
@@ -109,6 +111,14 @@ def _parser() -> argparse.ArgumentParser:
     an = sub.add_parser("annotate")
     an.set_defaults(handler=_cmd_annotate)
     an.add_argument("findings", nargs="+", type=Path)
+    dr = sub.add_parser("doctor", help="Check that this app repo is ready for the golden road. Reads only; changes nothing.",
+                        description="Check that this app repo is ready for the golden road. Reads only; changes nothing. "
+                                    "Exit 0: no check failed; exit 1: a check failed. Stdout is a doctor-result JSON document only for exit 0 and 1, "
+                                    "and the summary goes to stderr. Exit 2 (bad arguments): a JSON error on stderr and nothing on stdout.")
+    dr.set_defaults(handler=_cmd_doctor)
+    dr.add_argument("path", nargs="?", type=Path, default=Path("."))
+    dr.add_argument("--pin", type=Path, default=None, help="the platform pin (default: ~/.cache/golden-road/platform-pin.json, where the golden-road skill keeps it)")
+    dr.add_argument("--host", default=None, help="the platform's GitHub host (default: the platform config's, else $GH_HOST, else github.com)")
     return p
 
 
@@ -175,7 +185,7 @@ def _cmd_checks_wait(args) -> int:
         print(json.dumps({"warning": "no external required checks configured; Gate 1 rests on drift and the authz probe"}), file=sys.stderr)
     api = checks.GitHubAPI(os.environ.get("GITHUB_API_URL", "https://api.github.com"), os.environ.get("GITHUB_TOKEN", ""))
     passed, results = checks.wait(api, args.repo, args.sha, entries, timeout=args.timeout, interval=args.interval)
-    write_json(args.output, {"passed": passed, "required_checks": results})
+    write_json(args.output, {"passed": passed, "required_checks": results, "sha": args.sha})
     return EXIT_PASS if passed else EXIT_FAIL
 
 
@@ -231,6 +241,21 @@ def _cmd_annotate(args) -> int:
     for line in annotations([f for path in args.findings for f in load_findings(path)]):
         print(line)
     return EXIT_PASS
+
+
+def _cmd_doctor(args) -> int:
+    """JSON on stdout for the agent, the summary on stderr for the person. Exit 1 when any check fails; warnings don't."""
+    if not args.path.is_dir():
+        raise InputError(f"{args.path} is not a directory")
+    from_platform = None if args.host else doctor.platform_host()
+    host = args.host or from_platform or os.environ.get("GH_HOST") or "github.com"
+    if not HOST.fullmatch(host):
+        source = "--host" if args.host else "the platform config's github_host" if from_platform else "$GH_HOST"
+        raise InputError(f"{source} must be a host name, such as github.com")
+    doc = doctor.report(doctor.run_checks(args.path.resolve(), args.pin or doctor.default_pin(), host))
+    print(json.dumps(doc, indent=2, sort_keys=True))
+    print(doctor.summary(doc), file=sys.stderr)
+    return EXIT_FAIL if doc["status"] == "fail" else EXIT_PASS
 
 
 def _run(args) -> int:

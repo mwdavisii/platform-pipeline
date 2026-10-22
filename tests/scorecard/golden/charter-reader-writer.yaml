@@ -1,0 +1,24 @@
+name: charter-reader-writer
+description: "Charter (authorization logic): delete_note now lets any role delete, not only writers. The app-level control is weakened (VC-2)."
+app: notes
+intake: {tier: moderate, data_classification: internal, purpose: "Stores short team notes. It does not send email, call external APIs, or store files."}
+change:
+  replace:
+    app.py:
+      - old: '    if "writer" not in x_roles.split(","):'
+        new: '    if not x_roles:'
+expect: {triggers: [T-4], level: security_review}
+oracle:
+  default: {status: pass, evidence: [{file: app.py, text: 'if note is None or note["owner"] != x_user:'}]}
+  findings:
+    - ref: F1
+      rule_id: vc-2/role-check-weakened
+      category: authz
+      severity: high
+      confidence: high
+      location: {kind: file, file: app.py}
+      evidence: [{file: app.py, text: "if not x_roles:"}]
+      title: delete_note accepts any role
+      rationale: The writer check became a check that any role header is present, so readers can delete notes.
+      fix: {summary: "Require the writer role again.", steps: []}
+      standards: [{framework: golden-road-vc, id: VC-2}, {framework: asvs-5.0, id: v5.0.0-8.2.1}]

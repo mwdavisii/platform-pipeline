@@ -1,0 +1,45 @@
+name: scorecard-factory intake
+description: >-
+  Copies this repository's trusted scorecard inputs (the config, and its intake, confirmed N/A and suppression files)
+  out of the factory commit the runner downloaded for this action, into a new directory in the workspace.
+inputs:
+  path:
+    description: The directory to create in the workspace. It must not exist yet.
+    required: false
+    default: factory
+outputs:
+  path:
+    description: The directory holding config/, intake/, na/ and suppressions/ for this repository only.
+    value: ${{ steps.copy.outputs.path }}
+runs:
+  using: composite
+  steps:
+    - id: copy
+      shell: bash
+      env:
+        DEST: ${{ inputs.path }}
+      run: |
+        set -euo pipefail
+        [[ "$DEST" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "::error::intake: path must be a plain directory name"; exit 1; }
+        { [ ! -e "$DEST" ] && [ ! -L "$DEST" ]; } || { echo "::error::intake: $DEST already exists"; exit 1; }
+        [[ "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "::error::intake: unexpected repository name"; exit 1; }
+        owner="${GITHUB_REPOSITORY%%/*}"
+        name="${GITHUB_REPOSITORY#*/}"
+        case "$owner" in .|..) echo "::error::intake: unexpected repository name"; exit 1;; esac
+        case "$name" in .|..) echo "::error::intake: unexpected repository name"; exit 1;; esac
+        # This file is .github/actions/intake/action.yml in the factory, so the factory's root is three levels up.
+        root="$(cd "$GITHUB_ACTION_PATH/../../.." && pwd -P)"
+        { [ -f "$root/config/scorecard.yaml" ] && [ ! -L "$root/config/scorecard.yaml" ]; } || { echo "::error::intake: the factory has no config/scorecard.yaml"; exit 1; }
+        for dir in config intake na suppressions; do
+          if [ -e "$root/$dir" ]; then
+            links="$(find "$root/$dir" -type l -print -quit)" || { echo "::error::intake: can't scan the factory's $dir/ for symlinks"; exit 1; }
+            [ -z "$links" ] || { echo "::error::intake: the factory's $dir/ holds a symlink"; exit 1; }
+          fi
+        done
+        mkdir -p "$DEST/config" "$DEST/intake/$owner" "$DEST/na/$owner" "$DEST/suppressions/$owner"
+        cp "$root/config/scorecard.yaml" "$DEST/config/scorecard.yaml"
+        for kind in intake na; do
+          if [ -f "$root/$kind/$owner/$name.yaml" ]; then cp "$root/$kind/$owner/$name.yaml" "$DEST/$kind/$owner/$name.yaml"; fi
+        done
+        if [ -d "$root/suppressions/$owner/$name" ]; then cp -R "$root/suppressions/$owner/$name" "$DEST/suppressions/$owner/$name"; fi
+        echo "path=$DEST" >> "$GITHUB_OUTPUT"

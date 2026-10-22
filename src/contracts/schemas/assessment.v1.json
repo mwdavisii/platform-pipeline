@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://platform.internal/schemas/assessment.v1.json",
+  "title": "assessment/v1",
+  "description": "The review agent's output for one tree: its requirement results (without the fields the scorer computes) and its findings.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "tree_sha", "prompt_version", "model", "complete", "results", "findings"],
+  "properties": {
+    "schema": {"const": "assessment/v1"},
+    "tree_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "prompt_version": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"},
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "temperature"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "not": {"pattern": "[\\r\\n]"}},
+        "version": {"type": "string", "minLength": 1, "not": {"pattern": "[\\r\\n]"}},
+        "temperature": {"type": "number", "minimum": 0, "maximum": 2}
+      }
+    },
+    "complete": {"type": "boolean"},
+    "results": {"type": "array", "maxItems": 1000, "items": {"$ref": "#/$defs/agent_result"}},
+    "findings": {"type": "array", "maxItems": 1000, "items": {"$ref": "finding.v2.json"}}
+  },
+  "$defs": {
+    "agent_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["asvs_id", "status", "confidence", "justification", "evidence"],
+      "properties": {
+        "asvs_id": {"type": "string", "pattern": "^v5\\.0\\.0-[1-9][0-9]*\\.[1-9][0-9]*\\.[1-9][0-9]*$"},
+        "status": {"enum": ["pass", "fail", "na", "needs_human"]},
+        "confidence": {"enum": ["high", "medium", "low"]},
+        "justification": {"type": "string", "maxLength": 4000},
+        "evidence": {"type": "array", "maxItems": 20, "items": {"$ref": "finding.v2.json#/$defs/anchor"}},
+        "finding_ids": {"type": "array", "maxItems": 50, "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}
+      }
+    }
+  }
+}

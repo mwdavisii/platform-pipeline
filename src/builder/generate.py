@@ -10,9 +10,11 @@ from . import VERSION
 from .config import load_base_images, load_platform, platform_sha256
 from .errors import EXIT_INVALID, EXIT_NEEDS_INPUT, BuilderError
 from .lock import LOCK_PATH, SPEC_PATH, build_lock, canonical_json, sha256_text
+from .render.agents import MANAGED_FILES, merge, render_blocks
 from .render.authz import render_authz
 from .render.dockerfile import dockerignore, render_dockerfile
 from .render.k8s import RESOURCES, render_k8s
+from .source import MAX_SOURCE_BYTES
 from .spec import check_spec
 
 MAX_LOCK_BYTES = 1_000_000
@@ -77,6 +79,33 @@ def _write(root: Path, rel: str, text: str) -> None:
         raise
 
 
+def _managed_text(root: Path, rel: str, block: str) -> str:
+    """rel's new text with the builder's block in it. Refuses a link, a non-regular or oversize file, non-UTF-8 text,
+    and duplicated or unmatched markers. Called for both files before anything is written."""
+    path = root / rel
+    st = _lstat(path)
+    existing = None
+    if st is not None:
+        if stat.S_ISLNK(st.st_mode):
+            raise _fail(f"{rel} is a link. Replace it with a real file: the builder writes its golden-road block there.")
+        if not stat.S_ISREG(st.st_mode):
+            raise _fail(f"{rel} is not a regular file. The builder writes its golden-road block there.")
+        if st.st_size > MAX_SOURCE_BYTES:
+            raise _fail(f"{rel} is larger than 1 MB. Shorten it so the builder can write its golden-road block there.")
+        try:
+            existing = path.read_bytes().decode("utf-8")
+        except UnicodeDecodeError:
+            raise _fail(f"{rel} is not UTF-8 text. Fix its encoding so the builder can write its golden-road block there.") from None
+    try:
+        merged = merge(existing, block)
+    except ValueError:
+        raise _fail(f"{rel} has the golden-road markers more than once or out of order. Remove the extra markers by hand, "
+                    "then run builder generate . again. A marker alone on a line counts even inside a code fence: to document the markers, put other text on their line.") from None
+    if len(merged.encode("utf-8")) > MAX_SOURCE_BYTES:  # verify reads at most this much
+        raise _fail(f"{rel} would be larger than 1 MB with the golden-road block. Shorten it so the builder can write its block there.")
+    return merged
+
+
 def _previous_files(root: Path) -> dict:
     lock = root / LOCK_PATH
     try:
@@ -118,13 +147,17 @@ def generate(root: Path, spec: dict) -> dict:
         raise BuilderError(EXIT_NEEDS_INPUT, questions=questions, warnings=warnings)
 
     files = render_all(spec, root, platform, load_base_images())
-    lock = build_lock(spec, files, VERSION, platform_sha256())
+    blocks = render_blocks(spec, platform)
+    lock = build_lock(spec, files, VERSION, platform_sha256(), blocks)
 
-    outputs = [*files, SPEC_PATH, LOCK_PATH]
+    outputs = [*files, *MANAGED_FILES, SPEC_PATH, LOCK_PATH]
     try:
         _check_layout(root, outputs)
+        managed = {rel: _managed_text(root, rel, block) for rel, block in blocks.items()}
         stale = _stale(root, _previous_files(root), files)
         for rel, text in files.items():
+            _write(root, rel, text)
+        for rel, text in managed.items():
             _write(root, rel, text)
         _write(root, SPEC_PATH, canonical_json(spec))
         for rel in stale:
@@ -132,4 +165,4 @@ def generate(root: Path, spec: dict) -> dict:
         _write(root, LOCK_PATH, canonical_json(lock))
     except OSError as exc:
         raise _fail(f"Generate failed and may be incomplete: {exc.strerror or type(exc).__name__}. Fix the problem and run it again.", warnings=warnings) from exc
-    return {"files": [*files, SPEC_PATH, LOCK_PATH], "removed": stale, "lock": lock, "warnings": warnings}
+    return {"files": [*files, *MANAGED_FILES, SPEC_PATH, LOCK_PATH], "removed": stale, "lock": lock, "warnings": warnings}

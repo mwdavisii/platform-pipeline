@@ -1,0 +1,71 @@
+# scorecard-factory
+
+The platform-owned home of the risk scorecard: the workflow that classifies how much human review each pull request on a vibe-coded app needs, and the trusted inputs it reads. **It classifies; it does not gate.** Drift, Gate 1, the preview probe and Gate 2 stay exactly as they are. The scorecard can only add human attention.
+
+App authors have no write access here. Everything an app could otherwise influence (its tier, its purpose, its accepted findings, its confirmed N/A requirements, the thresholds) lives in this repo, and every change is a reviewed pull request on a protected `main`.
+
+## What is here
+
+| Path | What it is |
+|---|---|
+| `.github/workflows/scorecard.yml` | The workflow app repos run on every pull request |
+| `.github/actions/intake/` | A composite action that copies the inputs for the calling repo out of this repo. The runner downloads it at `@main`, so the job reads trusted data without a token |
+| `config/scorecard.yaml` | Tier and classification to ASVS level, the level floor, the triggers, the Gate 1 checks, the reviewer teams, the review agent's model, gateway and budget |
+| `intake/<owner>/<repo>.yaml` | The app's `tier`, `purpose`, `owner` and `data_classification`. The only source of the purpose. No intake record means `security_review` (T-8) |
+| `.github/ISSUE_TEMPLATE/intake-request.yml` | The intake request form: an app's repository, purpose (what it does and does not do), owner and data classification. Its title is `Intake request: <owner>/<repo>`. Read access is enough to open one |
+| `na/<owner>/<repo>.yaml` | ASVS requirements a person confirmed do not apply (see `na/README.md`) |
+| `suppressions/<owner>/<repo>/*.json` | Accepted scorecard findings, at most 90 days each (see `suppressions/README.md`) |
+| `.github/workflows/factory-check.yml` | This repo's own check: on every pull request here it loads the config and every record with the scorecard's own loaders, so a typo can't send an app to "not assessed". The ruleset requires it |
+| `.github/CODEOWNERS`, `.github/rulesets/main.json` | Platform review for everything; security review for `intake/`, `suppressions/` and `na/`; a protected `main` |
+
+The scorecard code itself is not here. It ships inside the platform's builder image, pinned by digest in `BUILDER_IMAGE` at the top of `scorecard.yml`, together with the ASVS 5.0.0 requirements and the review prompts (each checked by SHA-256 when loaded). Nothing the workflow runs comes from the pull request.
+
+## What a run does
+
+Six jobs. Their checks are named by the job, so on an app repo that calls this workflow from a job named `scorecard` they are `scorecard / precondition` and so on.
+
+1. **`precondition`**: refuses anything but a `pull_request` event, a draft, or a fork PR, then checks that the run's merge commit was made against the pull request's current base (`edited` can arrive before GitHub recomputes the merge ref, so the run could hold a merge commit made against the old base: the commit's first parent must be the base branch's tip or in its history, by the compare API, and an exact match is not used because the base branch moves; a **re-run does not clear this**, since it reuses the same commit: push again, close and reopen the PR, or edit it), then waits (up to 45 minutes, costing runner minutes, not tokens) for the Gate 1 checks listed in `config/scorecard.yaml` to finish on the PR's head commit, and checks them with `scorecard precondition`. Any reason here means "not assessed": a failure, never a skip, and no model call.
+2. **`assess`**: checks out the merge commit the run started with (`ref: github.sha`, two parents, no stored credentials), then runs `scorecard assess`, the review agent. Its container gets the checkout, the factory inputs, the event's draft, head and base fields, and one environment variable: the gateway credential. It has no GitHub token and no shell; `scorecard assess` refuses to start if any runner variable reaches it.
+3. **`score`**: first checks that the factory inputs it downloaded are the ones `assess` read (a digest of the factory inputs, published by `assess` as a job output, so a merge here between the two jobs can't mix two versions), then recomputes every deterministic signal from the same checkout, reads fresh Gate 1 conclusions, checks the assessment is the exact file `assess` wrote (by its SHA-256, also a job output), and runs `scorecard run`. The job summary is the full scorecard.
+4. **`report`**: sets the `scrutiny:<level>` label, updates the scorecard comment, and requests the reviewers named for the level. A failed label or comment fails the job; a failed review request is only noted.
+5. **`level: <level>`**: the level, in the PR's check list, from a run the author can't edit. **Read the level here**, not from the label or the comment, which anyone with write access can change. When `score` fails, the skipped `level` job may show as `level: ` with no value: no value means not assessed, and `assessed` is the check that matters.
+6. **`assessed`**: passes only when every job above succeeded. It is the one check a branch ruleset can require by name. It also writes the level into its own job summary. **The authoritative level is the one in the latest `assessed` run's summary (or the newest `level: <level>` check)**: the level is in a check's name, so after a re-run that gives a different level, the older `level: standard` check stays on the same commit next to the new one.
+
+Every pull request event that can change the diff runs the whole workflow again: opened, pushed to, reopened, marked ready, and edited (which includes a base branch that was retargeted, so a level worked out against `staging` is not kept after the base moves to `main`). A PR is never skipped because its head commit is unchanged; each run is assessed again in full, and a newer run cancels an older one.
+
+A PR that was not assessed stays failed until the author pushes again or someone uses **Re-run all jobs** once Gate 1 is green: a workflow can't be started by another check finishing.
+
+## The gateway credential
+
+`GATEWAY_AUTH` at the top of `scorecard.yml` picks how the agent reaches the model gateway named in `config/scorecard.yaml`:
+
+- **`oidc` (preferred).** The job asks GitHub for an OIDC token with the audience `GATEWAY_OIDC_AUDIENCE`. The gateway validates it, must accept only tokens whose `job_workflow_ref` is exactly `<org>/scorecard-factory/.github/workflows/scorecard.yml@refs/heads/main` (so `.../workflows/scorecard.yml@refs/heads/main` of this repository and no other workflow, branch or repository) with `event_name == pull_request`, and enforces a per-repo daily budget. No secret exists anywhere. Whether Dependabot-triggered runs get an OIDC token at all is a proof item.
+- **`key` (accepted fallback).** A scoped, budget-capped gateway key in the app repo's `SCORECARD_GATEWAY_KEY` secret. **Anyone with write access to the app repo can read it** (a workflow they write can print it), so the key must be limited to the reviewer model and capped in spend, and rotated when people leave.
+
+Either way the credential is written to a file only the next step reads, which passes it to the container with `--env-file` and deletes it. The `assess` job keeps `id-token: write` in key mode too (an expression can't set permissions), where it is unused in key mode.
+
+**Dependabot pull requests.** A run started by Dependabot reads only Dependabot secrets, not Actions secrets. In key mode, store the same key a second time as a Dependabot secret named `SCORECARD_GATEWAY_KEY` (repo or org level), or those PRs end up not assessed. Dependabot-triggered runs can read the key too (see the limits below). Their `GITHUB_TOKEN` is also read-only by default, so whether `report` can label and comment on them is a proof item.
+
+## Changing things
+
+- **Onboard an app:** the app's author (or their agent) opens an intake request from the form; security sets the tier and adds `intake/<owner>/<repo>.yaml` (security review), then requires the workflow on the repo. A request opened from the command line (`gh issue create`) by someone without triage access has no label, so look for the title `Intake request: <owner>/<repo>` as well as the `intake-request` label.
+- **Accept a finding:** add a suppression file; **confirm an N/A:** add an `na/` entry. Both need security review.
+- **Change thresholds, triggers, the model or the budget:** edit `config/scorecard.yaml`. `scorecard run` refuses an assessment whose model or prompt version isn't the one configured here.
+- **Update the scorecard code:** release a new builder image and pin its digest in `BUILDER_IMAGE`.
+- Every edit takes effect for every app repo at its next pull request, because the workflow and the intake action are read from `main`.
+
+## Known limits
+
+- **A title or body edit costs a full assessment.** `edited` is a trigger (it is the event for a retargeted base), and it also fires for every title or body edit, bot edits included. Each one runs the whole workflow again and spends tokens. Anyone with write access to an app repo can therefore use up that repo's daily gateway budget, and its other PRs then fail safe to `elevated` (T-14, the gateway refused the call). The concurrency group cancels older runs, which bounds the cost of a burst but not the total. The control is the gateway's per-repo budget and an alert on it; a later change could skip edits that changed neither the base nor anything the scorecard reads.
+
+- **On a personal account the checks can be imitated.** Rulesets that require workflows need an organization on an Enterprise plan. Where the app repo calls this workflow itself, a pull request can edit that caller, and a job in the app repo can post a check with the same name (every Actions check comes from the same app). The level check, the summary and the `scorecard` artifact of this workflow's run are the record; code-owner review of `.github/` in the app repo is the control.
+- **Network egress is not enforced on GitHub-hosted runners.** The agent's tools are read-only and it has no shell, but nothing stops the container reaching other hosts. A runner group restricted to this workflow, with egress only to the gateway and the package registries, closes that.
+- **No cache.** Each push is assessed once; a re-run spends tokens again. An app repo's workflows can write to its Actions cache, so a cached assessment could be planted.
+- **Commit messages are scanned only up to the API's cap.** The injection pre-scan reads the PR's commit messages with `pulls/<n>/commits`, which returns at most 250 commits; the scan never fetches more, so a message beyond the 250th is not scanned (the file contents and the diff are, in full).
+- **The concurrency group is shared by name.** A workflow in the app repo that picks the same group name (`scorecard-factory-<PR number>`) could cancel or hold a run: denial of service only, since the PR is then not assessed and stays failed.
+- **Dependabot-triggered runs can read the key too.** The Dependabot secret has the same exposure as the Actions secret: anyone who can make Dependabot run a workflow of their choosing (write access) can print it. Keep the key budget-capped and limited to the reviewer model.
+- **The agent can be wrong.** Code checks that every cited line exists, and uncertainty raises the level, but a confidently wrong agent can still produce `standard`. People still review at `standard`, and the report lists the agent's passes in blocking chapters to spot-check.
+- **Check names can be forged (app 15368).** Every Actions check, from any workflow in any repo, is posted by the same GitHub app (ID 15368), and Gate 1 identifies a check by its name and that app ID. A workflow in an app repo with `checks: write` can post a check run with the same name as a Gate 1 check (or this workflow's), and nothing in the checks API tells the two apart. Gate 1 and the scorecard are therefore not a defence against a malicious committer in the app repo; code-owner review of `.github/` is. Only a rule that requires a workflow by its path (an organization ruleset) closes the gap.
+- **Records are keyed by repository name.** `intake/`, `na/` and `suppressions/` files are found by `<owner>/<name>`, so a repository that is deleted and re-created under the same name inherits the old record: its tier, its confirmed N/A requirements and its suppressions. Delete a repository's records in the same change that retires it. Follow-up: an optional `repo_id` (GitHub's numeric repository ID) in `intake/v1`, compared with the event's, would bind a record to the repository itself.
+- **`factory-check` is a typo guard, not a security control.** A pull request runs its own copy of `factory-check.yml`, so a change to `.github/` can weaken the check in the same change. What protects the workflows is code-owner review of `.github/` and the protected `main`.
+- **The copied `git` is invisible to image scanners.** The builder image carries one `git` binary copied from a build stage (the scorecard's read-only git queries need nothing else), and `dpkg` does not list it, so a scanner that reads the package database will not report it. Rebuild the builder image and release a new version whenever Debian ships a git security fix, and pin the new digest in `BUILDER_IMAGE`; the image's `git.version` label says which upstream version it carries.

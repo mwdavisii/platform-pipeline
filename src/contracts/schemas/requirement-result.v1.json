@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://platform.internal/schemas/requirement-result.v1.json",
+  "title": "requirement-result/v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "asvs_id", "chapter", "section", "level", "status", "confidence", "justification", "evidence", "finding_ids", "evidence_verified", "status_source"],
+  "properties": {
+    "schema": {"const": "requirement-result/v1"},
+    "asvs_id": {"type": "string", "pattern": "^v5\\.0\\.0-[1-9][0-9]*\\.[1-9][0-9]*\\.[1-9][0-9]*$"},
+    "chapter": {"type": "string", "pattern": "^v5\\.0\\.0-[1-9][0-9]*$"},
+    "section": {"type": "string", "pattern": "^v5\\.0\\.0-[1-9][0-9]*\\.[1-9][0-9]*$"},
+    "level": {"enum": [1, 2, 3]},
+    "status": {"enum": ["pass", "fail", "na", "needs_human"]},
+    "confidence": {"enum": ["high", "medium", "low"]},
+    "justification": {"type": "string"},
+    "evidence": {"type": "array", "items": {"$ref": "finding.v2.json#/$defs/anchor"}},
+    "finding_ids": {"type": "array", "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}},
+    "evidence_verified": {"type": "boolean"},
+    "status_source": {"enum": ["agent", "platform", "scanner", "human_na", "downgraded"]},
+    "downgrade_reason": {"type": "string", "minLength": 1},
+    "agent_status": {"enum": ["pass", "fail", "na", "needs_human"]},
+    "covered_by": {"type": "string", "minLength": 1},
+    "control": {"type": "string", "minLength": 1}
+  },
+  "allOf": [
+    {"if": {"properties": {"status": {"const": "pass"}}, "required": ["status"]},
+     "then": {"properties": {"status_source": {"enum": ["agent", "platform"]}}}},
+    {"if": {"properties": {"status": {"const": "pass"}, "status_source": {"const": "agent"}}, "required": ["status", "status_source"]},
+     "then": {"properties": {"evidence_verified": {"const": true}}}},
+    {"if": {"properties": {"status": {"const": "fail"}, "status_source": {"const": "agent"}}, "required": ["status", "status_source"]},
+     "then": {"properties": {"evidence_verified": {"const": true}}}},
+    {"if": {"properties": {"status_source": {"const": "platform"}}, "required": ["status_source"]},
+     "then": {"required": ["control"]}},
+    {"if": {"properties": {"status": {"const": "na"}}, "required": ["status"]},
+     "then": {"properties": {"status_source": {"const": "human_na"}}}},
+    {"if": {"properties": {"status_source": {"const": "downgraded"}}, "required": ["status_source"]},
+     "then": {"properties": {"status": {"const": "needs_human"}}, "required": ["downgrade_reason"]}},
+    {"if": {"properties": {"status_source": {"const": "scanner"}}, "required": ["status_source"]},
+     "then": {"required": ["covered_by"]}}
+  ]
+}

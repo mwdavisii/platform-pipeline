@@ -125,3 +125,11 @@ def test_overridden_label(valid_finding):
     gate = evaluate([valid_finding], [ov], repo="r/x", today=dt.date(2026, 10, 20))
     md = render(gate, [valid_finding])
     assert "OVERRIDDEN" in md and "BLOCKING" not in md
+
+
+def test_md_strips_bidi_zero_width_and_control_characters():
+    from golden_road.summary import _md
+
+    assert _md("a\u202eb\u200bc\u2066d\x07e\x1bf") == "abcdef"
+    assert _md("@user") == "@\u200duser"  # the one joiner _md inserts itself stays
+    assert _md("@\u200duser") == "@\u200duser"

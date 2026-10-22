@@ -1,10 +1,13 @@
 import json
+import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
 from builder.cli import main
+from builder.guide import guide
 from contracts.schema import validate
 
 
@@ -199,3 +202,68 @@ def test_unexpected_exception_is_internal_error_json(capsys, python_app, monkeyp
     monkeypatch.setattr("builder.cli.detect", lambda root: (_ for _ in ()).throw(KeyError("boom")))
     code, out = run(capsys, "detect", str(python_app))
     assert (code, out["errors"]) == (2, ["internal error: KeyError"])
+
+
+def test_guide_prints_the_guide(capsys):
+    assert main(["guide"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert validate("builder-guide.v1", out) == [] and out == guide()
+
+
+def test_guide_takes_no_path(capsys):
+    code, out = run(capsys, "guide", ".")
+    assert code == 2 and out["status"] == "invalid" and out["command"] == "guide"
+
+
+@pytest.mark.parametrize("argv", [["verify", ".", "extra"], ["detect", ".", "extra"], ["generate", ".", "extra"], ["verify", "--nope"]])
+def test_usage_error_under_a_known_command_names_it(capsys, argv):
+    code, out = run(capsys, *argv)
+    assert code == 2 and out["command"] == argv[0]
+
+
+def test_every_real_exit_code_is_in_the_guide(capsys, python_app, notes_spec, tmp_path, monkeypatch):
+    """Each command's outcomes, run through main(), against guide.EXIT_CODES: no code is missing and none is invented."""
+    seen = {"detect": set(), "generate": set(), "verify": set(), "guide": set()}
+
+    def go(command, *argv):
+        code = main([command, *argv])
+        capsys.readouterr()
+        seen[command].add(str(code))
+
+    go("detect", str(python_app))
+    go("detect", str(tmp_path / "nowhere"))
+    go("generate", str(python_app))  # no spec
+    write_spec(python_app, notes_spec)
+    go("generate", str(python_app))
+    go("verify", str(python_app))
+    (python_app / "Dockerfile").write_text("FROM scratch\n")
+    go("verify", str(python_app))
+    go("verify", str(tmp_path / "nowhere"))
+    (python_app / "requirements.txt").unlink()
+    go("generate", str(python_app))  # needs input
+    go("guide")
+    go("guide", ".")
+    monkeypatch.setenv("BUILDER_PLATFORM_CONFIG", str(tmp_path / "missing.json"))
+    go("guide")
+    assert seen == {"detect": {"0", "2"}, "generate": {"0", "2", "3"}, "verify": {"0", "2", "4"}, "guide": {"0", "2"}}
+    monkeypatch.undo()
+    assert {command: set(codes) for command, codes in guide()["exit_codes"].items()} == seen
+
+
+def test_guide_failure_is_a_builder_result(capsys, monkeypatch, tmp_path):
+    monkeypatch.setenv("BUILDER_PLATFORM_CONFIG", str(tmp_path / "missing.json"))
+    code, out = run(capsys, "guide")
+    assert code == 2 and out["command"] == "guide" and out["status"] == "invalid"
+
+
+@pytest.mark.parametrize("argv, command", [(["guide", "extra"], "guide"), (["verify", ".", "extra"], "verify"), (["generate", ".", "x"], "generate")])
+def test_real_entry_point_usage_error_names_the_command(argv, command):
+    """main(None) reads sys.argv, as the console script does; the command label must not depend on a passed argv."""
+    src = str(Path(__file__).resolve().parents[2] / "src")
+    proc = subprocess.run([sys.executable, "-m", "builder.cli", *argv], capture_output=True, text=True, env={**os.environ, "PYTHONPATH": src})
+    assert proc.returncode == 2 and json.loads(proc.stdout)["command"] == command
+
+
+def test_module_entry_guide():
+    proc = subprocess.run([sys.executable, "-m", "builder.cli", "guide"], capture_output=True, text=True)
+    assert proc.returncode == 0 and json.loads(proc.stdout)["builder_version"]

@@ -1,4 +1,8 @@
 {
+  "blocks": {
+    "AGENTS.md": "2b140e9a8ed3074cc6daaf9b874e730b06381430e0870207882b0d9a7bcf1f18",
+    "CLAUDE.md": "80335c8c80902767fd3e773e3411f3e25b118b411de6e71de97616c818b5f1b7"
+  },
   "builder_version": "0.2.0",
   "files": {
     ".dockerignore": "16db3544cb06ccea08c36be035d48d045628f77baf1fc24f23f8472896d68ede",

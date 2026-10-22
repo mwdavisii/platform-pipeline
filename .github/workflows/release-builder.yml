@@ -9,6 +9,8 @@ permissions: {}
 jobs:
   release:
     runs-on: ubuntu-24.04
+    outputs:
+      image: ${{ steps.image.outputs.image }}
     permissions:
       contents: read
       packages: write
@@ -23,6 +25,12 @@ jobs:
           set -euo pipefail
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
             || { echo "::error::builder tags must point at a commit that is on main"; exit 1; }
+      - name: Require the tag to be builder-v<builder.VERSION>
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^VERSION = "\([0-9][0-9.]*\)"$/\1/p' src/builder/__init__.py)
+          [ -n "$version" ] && [ "$GITHUB_REF_NAME" = "builder-v$version" ] \
+            || { echo "::error::the tag is $GITHUB_REF_NAME but builder.VERSION is ${version:-missing}: tag builder-v$version, or bump the version in a reviewed change"; exit 1; }
       - name: Refuse unconfigured platform values
         run: |
           set -euo pipefail
@@ -43,6 +51,7 @@ jobs:
         with:
           cosign-release: v3.1.3
       - name: Build, push, and sign the builder image
+        id: image
         run: |
           set -euo pipefail
           image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/golden-road-builder"
@@ -52,3 +61,55 @@ jobs:
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::build produced no digest"; exit 1; }
           cosign sign --yes "$image@$digest"
           echo "Builder image: \`$image@$digest\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "image=$image@$digest" >> "$GITHUB_OUTPUT"
+
+  # The builder kit for the golden-road skill: the wheel (with this release's platform config), its hash-pinned requirements
+  # and platform-pin.json, attested by this workflow and published in golden-road-agents as a draft. The platform team
+  # publishes the draft when it pins this builder in the pipeline. Only this job sees the App token, and only its last step.
+  kit:
+    needs: release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the wheel, the requirements and the platform pin
+        env:
+          IMAGE: ${{ needs.release.outputs.image }}
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/kit"
+          "$RUNNER_TEMP/kit/bin/pip" install -q --disable-pip-version-check --require-hashes --only-binary=:all: -r images/builder/requirements.txt
+          "$RUNNER_TEMP/kit/bin/python" -I scripts/build_builder_kit.py --tag "$GITHUB_REF_NAME" --image "$IMAGE" \
+            --source-date-epoch "$(git log -1 --format=%ct)" --out dist --self-test
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        id: attest
+        with:
+          subject-path: |
+            dist/golden_road-*.whl
+            dist/golden_road-*-requirements.txt
+            dist/platform-pin.json
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        id: agents-token
+        with:
+          client-id: ${{ vars.GOLDEN_ROAD_AGENTS_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GOLDEN_ROAD_AGENTS_APP_KEY }}
+          repositories: golden-road-agents
+          permission-contents: write
+      - name: Publish the kit in golden-road-agents as a draft
+        env:
+          GH_TOKEN: ${{ steps.agents-token.outputs.token }}
+          ATTESTATION: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          existing=$(gh release list --repo "${GITHUB_REPOSITORY_OWNER}/golden-road-agents" --limit 100 --json tagName --jq '[.[] | select(.tagName == env.GITHUB_REF_NAME)] | length')
+          [ "$existing" = "0" ] \
+            || { echo "::error::golden-road-agents already has a release or draft named $GITHUB_REF_NAME: delete the stale draft, then re-run this job"; exit 1; }
+          cp "$ATTESTATION" "dist/${GITHUB_REF_NAME}.sigstore.json"
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "${GITHUB_REPOSITORY_OWNER}/golden-road-agents" --draft --latest=false \
+            --title "$GITHUB_REF_NAME" \
+            --notes "Builder ${GITHUB_REF_NAME#builder-v} for the golden-road skill. Every file is attested by platform-pipeline's release-builder.yml for this tag; the skill verifies them with the attached bundle. Publish this draft (--draft=false --latest=false) when the pipeline pins this builder."

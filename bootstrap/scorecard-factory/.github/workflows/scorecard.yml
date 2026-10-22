@@ -1,0 +1,488 @@
+# The risk scorecard: how much human review a pull request needs. It classifies; it never gates. Required on app repos
+# by an org ruleset ("Require workflows to pass before merging") that points at this file on the factory's protected
+# main, or, where rulesets can't require workflows, called by the app repo as a reusable workflow. It runs only for
+# pull_request events, never runs, installs or builds the PR's code, and reads the factory's trusted inputs through the
+# intake action, never from the app repo. The `level: <level>` check is the authoritative level; `assessed` fails only
+# when the PR was not assessed.
+name: scorecard
+
+on:
+  pull_request:
+    # `edited` fires when the base branch is retargeted (and for title and body edits): the diff against the new base can be
+    # different, so every trigger runs the whole workflow again. Never skip a run because the SHA is unchanged.
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+  workflow_call:
+    secrets:
+      SCORECARD_GATEWAY_KEY:
+        description: The scoped, budget-capped gateway key, used when GATEWAY_AUTH is key. Anyone with write access to the app repo can read it.
+        required: false
+
+permissions: {}
+
+# A newer push stops the older run before it spends more tokens. The group name is specific to this workflow; a workflow in an
+# app repo that picks the same name could still cancel or hold a run (denial of service only: the PR is then not assessed).
+concurrency:
+  group: scorecard-factory-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  # The platform's builder image, which carries the pinned scorecard code. Pin the digest from the builder release.
+  BUILDER_IMAGE: ghcr.io/mwdavisii/golden-road-builder@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  # How the review agent gets its gateway credential. key: the SCORECARD_GATEWAY_KEY secret. oidc: a GitHub OIDC token
+  # for GATEWAY_OIDC_AUDIENCE, which the gateway validates and binds to this workflow (job_workflow_ref, event_name).
+  GATEWAY_AUTH: key
+  GATEWAY_OIDC_AUDIENCE: ""
+  # How long to wait for Gate 1 to finish on the PR head before the PR is "not assessed".
+  GATE1_TIMEOUT_SECONDS: "2700"
+  # The only event fields the scorecard reads. The PR title and body go to the injection pre-scan separately, never to the agent.
+  EVENT_FIELDS: '{pull_request: (.pull_request | {draft, head: (.head | {sha, repo: {full_name: .repo.full_name}}), base: (.base | {repo: {full_name: .repo.full_name}})})}'
+
+jobs:
+  # Not assessed (a failure, never a skip) for anything but a ready, same-repo PR whose Gate 1 is green on its head commit.
+  precondition:
+    # The factory's own pull requests are not app changes. In every app repo this condition is true.
+    if: github.repository != 'mwdavisii/scorecard-factory'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      # The base-branch check reads the merge commit and the base branch through the API.
+      contents: read
+      checks: read
+      statuses: read
+      packages: read
+    outputs:
+      checks: ${{ steps.gate1.outputs.checks }}
+    steps:
+      - name: Refuse anything but a pull request
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" != "pull_request" ]; then
+            echo "::error::not assessed: the scorecard runs only for pull_request events, not $GITHUB_EVENT_NAME."
+            exit 1
+          fi
+
+      - name: Refuse the placeholder builder image
+        run: |
+          set -euo pipefail
+          if [[ ! "$BUILDER_IMAGE" =~ ^[a-z0-9./_-]+@sha256:[0-9a-f]{64}$ || "$BUILDER_IMAGE" =~ @sha256:0{64}$ ]]; then
+            echo "::error::BUILDER_IMAGE in scorecard.yml is not a pinned builder image. Release the builder image and pin its digest first."
+            exit 1
+          fi
+
+      - name: Refuse drafts and fork PRs
+        if: github.event.pull_request.draft || github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          set -euo pipefail
+          echo "::error::not assessed: the PR is a draft, or it comes from a fork (a maintainer must push the branch to this repo). Mark it ready for review to assess it."
+          { echo "### Scorecard: not assessed"; echo; echo "The PR is a draft or comes from a fork. Mark it ready for review, or push the branch to this repo."; } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+
+      # `edited` can arrive before GitHub recomputes refs/pull/N/merge, so this run's merge commit could still be the old one, made
+      # against the old base. Its first parent must be the base branch's current tip or in its history (`behind` or `identical`);
+      # an exact match would refuse whenever the base branch moves. GITHUB_SHA is fixed for the run, and the later jobs check out
+      # exactly that commit, so checking it here, before any wait or token spend, is the same check. Only the API is needed
+      # (contents: read), so no checkout and no image yet. A re-run reuses this commit and this event, so it can't clear it.
+      - name: Check the merge base is in the base branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::not assessed: $1"; exit 1; }
+          [ -n "$BASE_REF" ] || fail "the event names no base branch."
+          ref=$(jq -rn --arg ref "$BASE_REF" '$ref | split("/") | map(@uri) | join("/")')
+          first=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA" --jq '.parents[0].sha // ""') || fail "the run's merge commit could not be read."
+          [[ "$first" =~ ^[0-9a-f]{40}$ ]] || fail "the run's merge commit has no first parent."
+          tip=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$ref" --jq '.object.sha') || fail "the base branch could not be read."
+          [[ "$tip" =~ ^[0-9a-f]{40}$ ]] || fail "the base branch has no commit."
+          status=$(gh api "repos/$GITHUB_REPOSITORY/compare/$tip...$first" --jq .status) || fail "the base branch could not be compared with the merge commit's base."
+          case "$status" in
+            identical|behind) ;;
+            *) fail "this run's merge commit was made against an older base than the pull request's current base branch (compare status '$status'). GitHub may not have updated the merge commit yet. Re-running the jobs does not help: it reuses the same commit. Push again, close and reopen the pull request, or edit it, to send a new event." ;;
+          esac
+
+      - id: factory
+        uses: mwdavisii/scorecard-factory/.github/actions/intake@main
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Pull the builder image and log out
+        run: |
+          set -euo pipefail
+          docker pull -q "$BUILDER_IMAGE" > /dev/null
+          docker logout ghcr.io
+
+      - name: Wait for Gate 1 and check the precondition
+        id: gate1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p in out
+          jq "$EVENT_FIELDS" "$GITHUB_EVENT_PATH" > in/event.json
+          head=$(jq -r '.pull_request.head.sha' in/event.json)
+          [[ "$head" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::not assessed: the event names no PR head commit"; exit 1; }
+          sc() { docker run --rm --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --network none --read-only --tmpfs /tmp --user "$(id -u):$(id -g)" -v "$PWD/factory:/factory:ro" -v "$PWD/in:/in:ro" -v "$PWD/out:/out" "$BUILDER_IMAGE" "$@"; }
+          sc scorecard gate1-checks --factory /factory --out /out/gate1.json
+          set +e
+          docker run --rm --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --read-only --tmpfs /tmp --user "$(id -u):$(id -g)" -e GITHUB_TOKEN -e GITHUB_API_URL -v "$PWD/out:/out" "$BUILDER_IMAGE" \
+            golden-road checks wait --repo "$GITHUB_REPOSITORY" --sha "$head" --required-file /out/gate1.json \
+              --timeout "$GATE1_TIMEOUT_SECONDS" --interval 30 --output /out/checks.json
+          rc=$?
+          set -e
+          if [ "$rc" -gt 1 ] || [ ! -s out/checks.json ]; then echo "::error::not assessed: the Gate 1 wait could not run (exit $rc)"; exit 1; fi
+          set +e
+          sc scorecard precondition --factory /factory --checks /out/checks.json --event /in/event.json --head-sha "$head" > out/precondition.json
+          rc=$?
+          set -e
+          [ -s out/precondition.json ] || { echo "::error::not assessed: the precondition could not run (exit $rc)"; exit 1; }
+          if [ "$rc" -ne 0 ]; then
+            jq -r '"::error::not assessed: " + (.reasons | join("; ")) + ". " + (.hint // "")' out/precondition.json
+            { echo "### Scorecard: not assessed"; echo; jq -r '.reasons[] | "- " + .' out/precondition.json; echo; jq -r '.hint // ""' out/precondition.json; } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "checks=$(jq -c . out/checks.json)" >> "$GITHUB_OUTPUT"
+
+
+  # The review agent. Its process gets the minimal event, the factory inputs, the checkout, and the gateway credential:
+  # no GitHub token, no runner variables, no shell.
+  assess:
+    needs: precondition
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: read
+      # Needed only when GATEWAY_AUTH is oidc. An expression can't set permissions, so it stays in key mode too, where it is unused.
+      id-token: write
+    outputs:
+      assessment_sha256: ${{ steps.agent.outputs.sha256 }}
+      factory_sha256: ${{ steps.digest.outputs.sha256 }}
+    steps:
+      - name: Refuse the placeholder builder image
+        run: |
+          set -euo pipefail
+          if [[ ! "$BUILDER_IMAGE" =~ ^[a-z0-9./_-]+@sha256:[0-9a-f]{64}$ || "$BUILDER_IMAGE" =~ @sha256:0{64}$ ]]; then
+            echo "::error::BUILDER_IMAGE in scorecard.yml is not a pinned builder image. Release the builder image and pin its digest first."
+            exit 1
+          fi
+
+      # The merge commit this run started with (never re-resolved), and its two parents: the base and the PR head.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+          path: src
+
+      - id: factory
+        uses: mwdavisii/scorecard-factory/.github/actions/intake@main
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Pull the builder image and log out
+        run: |
+          set -euo pipefail
+          docker pull -q "$BUILDER_IMAGE" > /dev/null
+          docker logout ghcr.io
+
+      # One digest over the factory inputs this job read. The score job downloads the factory on its own and refuses to score
+      # if its copy differs, so a merge to the factory between the two jobs can't mix two versions of the config or the records.
+      - name: Digest the factory inputs
+        id: digest
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          sc() { docker run --rm --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --network none --read-only --tmpfs /tmp --user "$(id -u):$(id -g)" -v "$PWD/factory:/factory:ro" -v "$PWD/out:/out" "$BUILDER_IMAGE" "$@"; }
+          sc scorecard factory-digest --factory /factory > out/factory-digest.json
+          digest=$(jq -r '.sha256 // ""' out/factory-digest.json)
+          [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::not assessed: the factory inputs could not be digested"; exit 1; }
+          echo "sha256=$digest" >> "$GITHUB_OUTPUT"
+
+      # In its own step: the runner's OIDC request variables are in every step's environment, so the credential is made
+      # here and handed to the agent as a file that names only the gateway variable.
+      - name: Gateway credential
+        env:
+          KEY: ${{ secrets.SCORECARD_GATEWAY_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          case "$GATEWAY_AUTH" in
+            key)
+              token="$KEY"
+              [ -n "$token" ] || { echo "::error::not assessed: GATEWAY_AUTH is key and the SCORECARD_GATEWAY_KEY secret is not set"; exit 1; } ;;
+            oidc)
+              [[ "$GATEWAY_OIDC_AUDIENCE" =~ ^[A-Za-z0-9:/._-]{1,200}$ ]] || { echo "::error::not assessed: GATEWAY_OIDC_AUDIENCE is not set"; exit 1; }
+              [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] || { echo "::error::not assessed: no OIDC token for this job (id-token: write)"; exit 1; }
+              token=$(curl -sSf --max-time 30 -H @<(printf 'Authorization: bearer %s\n' "$ACTIONS_ID_TOKEN_REQUEST_TOKEN") \
+                "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$GATEWAY_OIDC_AUDIENCE" | jq -r '.value // ""') ;;
+            *)
+              echo "::error::not assessed: GATEWAY_AUTH must be key or oidc"; exit 1 ;;
+          esac
+          [[ "$token" =~ ^[A-Za-z0-9._~+/=-]{16,8192}$ ]] || { echo "::error::not assessed: the gateway credential is empty or has unexpected characters"; exit 1; }
+          echo "::add-mask::$token"
+          printf 'SCORECARD_GATEWAY_TOKEN=%s\n' "$token" > "$RUNNER_TEMP/scorecard-gateway.env"
+
+      - name: Run the review agent
+        id: agent
+        env:
+          CHECKS: ${{ needs.precondition.outputs.checks }}
+        run: |
+          set -euo pipefail
+          cred="$RUNNER_TEMP/scorecard-gateway.env"
+          trap 'rm -f "$cred"' EXIT
+          [ "$(git -C src rev-parse HEAD)" = "$GITHUB_SHA" ] || { echo "::error::not assessed: the checkout is not the commit this run started with"; exit 1; }
+          base=$(git -C src rev-parse --verify 'HEAD^1')
+          mkdir -p in out
+          jq "$EVENT_FIELDS" "$GITHUB_EVENT_PATH" > in/event.json
+          printf '%s\n' "$CHECKS" > in/checks.json
+          # env -i: the docker client gets no runner variables; the container gets only the image's own and the credential file's.
+          env -i PATH="$PATH" HOME="$HOME" docker run --rm --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --read-only --tmpfs /tmp --user "$(id -u):$(id -g)" --env-file "$cred" \
+            -v "$PWD/src:/src:ro" -v "$PWD/factory:/factory:ro" -v "$PWD/in:/in:ro" -v "$PWD/out:/out" "$BUILDER_IMAGE" \
+            scorecard assess --repo-root /src --repo "$GITHUB_REPOSITORY" --base "$base" --factory /factory \
+              --checks /in/checks.json --event /in/event.json --out /out/assessment.json
+          echo "sha256=$(sha256sum out/assessment.json | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: scorecard-assessment
+          path: out/assessment.json
+          if-no-files-found: error
+          overwrite: true
+
+
+  # Every deterministic signal, recomputed here from the checkout (never taken from an artifact), plus the agent's
+  # assessment, which must be the exact file the assess job wrote. Fresh Gate 1 conclusions come from the checks API.
+  score:
+    needs: assess
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read
+      checks: read
+      statuses: read
+      pull-requests: read
+    outputs:
+      level: ${{ steps.score.outputs.level }}
+      comment_sha256: ${{ steps.score.outputs.comment_sha256 }}
+      github_sha256: ${{ steps.score.outputs.github_sha256 }}
+    steps:
+      - name: Refuse the placeholder builder image
+        run: |
+          set -euo pipefail
+          if [[ ! "$BUILDER_IMAGE" =~ ^[a-z0-9./_-]+@sha256:[0-9a-f]{64}$ || "$BUILDER_IMAGE" =~ @sha256:0{64}$ ]]; then
+            echo "::error::BUILDER_IMAGE in scorecard.yml is not a pinned builder image. Release the builder image and pin its digest first."
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+          path: src
+
+      - id: factory
+        uses: mwdavisii/scorecard-factory/.github/actions/intake@main
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Pull the builder image and log out
+        run: |
+          set -euo pipefail
+          docker pull -q "$BUILDER_IMAGE" > /dev/null
+          docker logout ghcr.io
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: scorecard-assessment
+          path: assessment
+
+      # The assess job published a digest of the factory inputs it read. This job downloaded the factory on its own, so a merge
+      # to the factory in between must not give the two jobs different configs or records.
+      - name: Check the factory inputs are the ones assess read
+        env:
+          FACTORY_SHA256: ${{ needs.assess.outputs.factory_sha256 }}
+        run: |
+          set -euo pipefail
+          sc() { docker run --rm --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --network none --read-only --tmpfs /tmp --user "$(id -u):$(id -g)" -v "$PWD/factory:/factory:ro" "$BUILDER_IMAGE" "$@"; }
+          mkdir -p out
+          sc scorecard factory-digest --factory /factory > out/factory-digest.json
+          mine=$(jq -r '.sha256 // ""' out/factory-digest.json)
+          if [[ ! "$mine" =~ ^[0-9a-f]{64}$ || "$mine" != "$FACTORY_SHA256" ]]; then
+            echo "::error::not assessed: the factory inputs changed between the assess and score jobs (the factory was updated while this run was in progress). Push again, or use Re-run all jobs."
+            exit 1
+          fi
+
+      - name: Score
+        id: score
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          ASSESSMENT_SHA256: ${{ needs.assess.outputs.assessment_sha256 }}
+        run: |
+          set -euo pipefail
+          mkdir -p in out
+          { [ -f assessment/assessment.json ] && [ ! -L assessment/assessment.json ]; } || { echo "::error::not assessed: the assessment artifact is missing"; exit 1; }
+          [ "$(sha256sum assessment/assessment.json | cut -d' ' -f1)" = "$ASSESSMENT_SHA256" ] || { echo "::error::not assessed: the assessment artifact is not the file the assess job wrote"; exit 1; }
+          cp assessment/assessment.json in/assessment.json
+          [ "$(git -C src rev-parse HEAD)" = "$GITHUB_SHA" ] || { echo "::error::not assessed: the checkout is not the commit this run started with"; exit 1; }
+          base=$(git -C src rev-parse --verify 'HEAD^1')
+          jq "$EVENT_FIELDS" "$GITHUB_EVENT_PATH" > in/event.json
+          head=$(jq -r '.pull_request.head.sha' in/event.json)
+          [[ "$head" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::not assessed: the event names no PR head commit"; exit 1; }
+          # PR prose, for the injection pre-scan only; it never reaches the agent.
+          gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/commits?per_page=100" | jq -s '[.[][] | {sha, message: .commit.message}]' > in/commits.json
+          jq --slurpfile commits in/commits.json '{title: (.pull_request.title // ""), body: (.pull_request.body // ""), commits: $commits[0]}' "$GITHUB_EVENT_PATH" > in/pr-text.json
+          sc() { docker run --rm --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --read-only --tmpfs /tmp --user "$(id -u):$(id -g)" -v "$PWD/src:/src:ro" -v "$PWD/factory:/factory:ro" -v "$PWD/in:/in:ro" -v "$PWD/out:/out" "$BUILDER_IMAGE" "$@"; }
+          sc scorecard gate1-checks --factory /factory --out /out/gate1.json
+          set +e
+          docker run --rm --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --read-only --tmpfs /tmp --user "$(id -u):$(id -g)" -e GITHUB_TOKEN -e GITHUB_API_URL -v "$PWD/out:/out" "$BUILDER_IMAGE" \
+            golden-road checks wait --repo "$GITHUB_REPOSITORY" --sha "$head" --required-file /out/gate1.json --timeout 600 --interval 20 --output /out/checks.json
+          rc=$?
+          set -e
+          if [ "$rc" -gt 1 ] || [ ! -s out/checks.json ]; then echo "::error::not assessed: the Gate 1 read could not run (exit $rc)"; exit 1; fi
+          # Registry lookups for new dependencies need the network; nothing here runs the PR's code.
+          sc scorecard run --repo-root /src --repo "$GITHUB_REPOSITORY" --base "$base" --factory /factory --checks /out/checks.json \
+            --event /in/event.json --assessment /in/assessment.json --pr-text /in/pr-text.json --server-url "$GITHUB_SERVER_URL" --out /out
+          level=$(jq -r .level out/scorecard.json)
+          case "$level" in standard|elevated|security_review) ;; *) echo "::error::not assessed: the scorecard has no valid level"; exit 1;; esac
+          cat out/scorecard.md >> "$GITHUB_STEP_SUMMARY"
+          { echo "level=$level"; echo "comment_sha256=$(sha256sum out/comment.md | cut -d' ' -f1)"; echo "github_sha256=$(sha256sum out/github.json | cut -d' ' -f1)"; } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: scorecard
+          path: |
+            out/scorecard.json
+            out/scorecard.md
+            out/comment.md
+            out/github.json
+          if-no-files-found: error
+          overwrite: true
+
+
+  # Conveniences on the PR: the label, the review requests and the comment. They are rewritten on every run, and removing
+  # them changes nothing. It checks out nothing and runs no image; it only applies the score job's files.
+  report:
+    needs: score
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: scorecard
+          path: report
+
+      - name: Label, reviewers and comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          LEVEL: ${{ needs.score.outputs.level }}
+          COMMENT_SHA256: ${{ needs.score.outputs.comment_sha256 }}
+          GITHUB_SHA256: ${{ needs.score.outputs.github_sha256 }}
+        run: |
+          set -euo pipefail
+          for f in comment.md github.json; do
+            { [ -f "report/$f" ] && [ ! -L "report/$f" ]; } || { echo "::error::the scorecard artifact has no $f"; exit 1; }
+          done
+          [ "$(sha256sum report/comment.md | cut -d' ' -f1)" = "$COMMENT_SHA256" ] || { echo "::error::comment.md is not the file the score job wrote"; exit 1; }
+          [ "$(sha256sum report/github.json | cut -d' ' -f1)" = "$GITHUB_SHA256" ] || { echo "::error::github.json is not the file the score job wrote"; exit 1; }
+          case "$LEVEL" in standard|elevated|security_review) ;; *) echo "::error::the score job produced no level"; exit 1;; esac
+          label="scrutiny:$LEVEL"
+          [ "$(jq -r .label report/github.json)" = "$label" ] || { echo "::error::github.json names a different level"; exit 1; }
+          marker="<!-- golden-road:scorecard -->"
+          [ "$(head -n 1 report/comment.md)" = "$marker" ] || { echo "::error::the comment does not start with its marker"; exit 1; }
+          # The label: remove the stale scrutiny labels that are on the PR, then add this one. A failure fails the job.
+          current=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR/labels?per_page=100" --jq '.[].name')
+          while IFS= read -r stale; do
+            if [ -n "$stale" ] && grep -qxF -- "$stale" <<< "$current"; then
+              gh api --method DELETE "repos/$GITHUB_REPOSITORY/issues/$PR/labels/$(jq -rn --arg l "$stale" '$l | @uri')" > /dev/null
+            fi
+          done < <(jq -r '.stale_labels[]' report/github.json)
+          gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$PR/labels" -f "labels[]=$label" > /dev/null
+          # The comment, found by its marker and its author. A failure fails the job.
+          existing="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR/comments?per_page=100" \
+            | jq -r --arg m "$marker" '.[] | select(.user.login == "github-actions[bot]" and ((.body // "") | startswith($m))) | .id' | sed -n '1p')"
+          if [ -n "$existing" ]; then
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$existing" --field "body=@report/comment.md" > /dev/null
+          else
+            gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --field "body=@report/comment.md" > /dev/null
+          fi
+          { echo "### Scorecard report"; echo; echo "- Label \`$label\` set, and the comment updated."; } >> "$GITHUB_STEP_SUMMARY"
+          # Review requests: the workflow token may not be allowed to request team reviews, so a failure is only noted.
+          while IFS= read -r team; do
+            [ -n "$team" ] || continue
+            if gh api --method POST "repos/$GITHUB_REPOSITORY/pulls/$PR/requested_reviewers" -f "team_reviewers[]=${team#*/}" > /dev/null 2>&1; then
+              echo "- Review requested from \`$team\`." >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "::warning::could not request a review from $team"
+              echo "- Could not request a review from \`$team\` (the workflow token may not be allowed to request team reviews)." >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done < <(jq -r '.review_teams[]' report/github.json)
+
+
+  # The authoritative level, in the PR's check list, from a run the author can't edit.
+  level:
+    needs: score
+    name: "level: ${{ needs.score.outputs.level }}"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Scrutiny level
+        env:
+          LEVEL: ${{ needs.score.outputs.level }}
+        run: |
+          set -euo pipefail
+          case "$LEVEL" in standard|elevated|security_review) ;; *) echo "::error::not assessed: the score job produced no level"; exit 1;; esac
+          { echo "### Scrutiny level: \`$LEVEL\`"; echo; echo "This check is the level. The label and the comment are conveniences; the reasons are in the score job's summary and the scorecard artifact."; } >> "$GITHUB_STEP_SUMMARY"
+
+  # One check with a fixed name that passes only when every job above succeeded, so a branch ruleset can require it by
+  # name (the level check's name changes with the level). A skipped job means "not assessed", so this fails then too.
+  assessed:
+    needs: [precondition, assess, score, report, level]
+    # always(), not !cancelled(): a cancelled or skipped job must leave `assessed` failed, never absent.
+    if: "always() && github.repository != 'mwdavisii/scorecard-factory'"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Assessed, or not
+        env:
+          PRECONDITION: ${{ needs.precondition.result }}
+          ASSESS: ${{ needs.assess.result }}
+          SCORE: ${{ needs.score.result }}
+          REPORT: ${{ needs.report.result }}
+          LEVEL_JOB: ${{ needs.level.result }}
+          LEVEL: ${{ needs.score.outputs.level }}
+        run: |
+          set -euo pipefail
+          failed=()
+          for pair in "precondition=$PRECONDITION" "assess=$ASSESS" "score=$SCORE" "report=$REPORT" "level=$LEVEL_JOB"; do
+            [ "${pair#*=}" = "success" ] || failed+=("$pair")
+          done
+          if [ "${#failed[@]}" -gt 0 ]; then
+            echo "::error::not assessed (${failed[*]}). See the first failed job. It stays failed until the author pushes again or someone uses Re-run all jobs once Gate 1 is green."
+            exit 1
+          fi
+          # Re-runs add a new `level: <level>` check to the same commit and leave the old ones, so the level is also written here:
+          # the latest `assessed` run's summary is authoritative.
+          case "$LEVEL" in standard|elevated|security_review) ;; *) echo "::error::not assessed: the score job produced no valid level"; exit 1;; esac
+          echo "Assessed. Scrutiny level: \`$LEVEL\`. The level of this run is the one in the latest \`assessed\` run's summary (or the newest \`level: ...\` check): a re-run leaves the older \`level: ...\` checks on the commit." >> "$GITHUB_STEP_SUMMARY"

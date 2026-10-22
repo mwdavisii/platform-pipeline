@@ -1,0 +1,12 @@
+name: ac12-authz-loosened
+description: "AC-12: builder-spec.json lets readers delete. Drift and preview are green, and T-2 fires."
+app: notes
+intake: {tier: moderate, data_classification: internal, purpose: "Stores short team notes. It does not send email, call external APIs, or store files."}
+change:
+  replace:
+    builder-spec.json:
+      - old: '{"methods": ["DELETE", "PATCH", "POST", "PUT"], "path": "/api/**", "roles": ["writer"]}'
+        new: '{"methods": ["DELETE", "PATCH", "POST", "PUT"], "path": "/api/**", "roles": ["reader", "writer"]}'
+expect: {triggers: [T-2], level: security_review}
+oracle:
+  default: {status: pass, evidence: [{file: app.py, text: 'if note is None or note["owner"] != x_user:'}]}

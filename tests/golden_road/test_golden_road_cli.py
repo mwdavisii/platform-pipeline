@@ -251,7 +251,7 @@ def test_checks_command_warns_on_empty_list(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(checks, "wait", fake_wait)
     assert main(["checks", "wait", "--repo", "org/app", "--sha", "c" * 40, "--required-file", required, "--output", str(out)]) == 0
     assert "no external required checks" in capsys.readouterr().err
-    assert json.loads(out.read_text()) == {"passed": True, "required_checks": []}
+    assert json.loads(out.read_text()) == {"passed": True, "required_checks": [], "sha": "c" * 40}
     assert seen["entries"] == []
 
 

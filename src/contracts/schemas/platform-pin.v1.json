@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://platform.internal/schemas/platform-pin.v1.json",
+  "title": "platform-pin/v1",
+  "description": "The platform's current builder. Written and attested by the builder release; the golden-road skill verifies it before installing anything, and golden-road doctor checks the installed builder and the repo's lock against it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["builder_version", "wheel", "wheel_sha256", "requirements", "requirements_sha256", "image", "platform_config_sha256"],
+  "properties": {
+    "builder_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "wheel": {"type": "string", "pattern": "^golden_road-[0-9]+\\.[0-9]+\\.[0-9]+-py3-none-any\\.whl$"},
+    "wheel_sha256": {"$ref": "#/$defs/sha256"},
+    "requirements": {"type": "string", "pattern": "^[A-Za-z0-9._-]+\\.txt$"},
+    "requirements_sha256": {"$ref": "#/$defs/sha256"},
+    "image": {"type": "string", "pattern": "^[a-z0-9.-]+(:[0-9]+)?/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$"},
+    "platform_config_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {"sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}
+}

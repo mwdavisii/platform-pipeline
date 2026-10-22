@@ -1,0 +1,52 @@
+# The factory's own check: a bad intake record or a bad pattern in the config would send an app (or every app) to
+# "not assessed", so a pull request on this repo must show that the config and every record load with the scorecard's
+# own loaders. It runs in the same pinned builder image as the scorecard workflow.
+#
+# This is a guard against typos, not a security control: a pull request runs its own copy of this workflow, so the
+# author of a change to .github/ can weaken the check in the same change. What protects this file is code-owner
+# review of .github/ (CODEOWNERS and the ruleset), not the check.
+name: factory-check
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions: {}
+
+env:
+  BUILDER_IMAGE: ghcr.io/mwdavisii/golden-road-builder@sha256:0000000000000000000000000000000000000000000000000000000000000000
+
+jobs:
+  check:
+    name: factory-check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Refuse the placeholder builder image
+        run: |
+          set -euo pipefail
+          if [[ "$BUILDER_IMAGE" =~ @sha256:0{64}$ ]]; then
+            echo "::error::BUILDER_IMAGE in factory-check.yml is still the placeholder digest. Pin the released builder image's digest first."
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: factory
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Validate the config and every record
+        run: |
+          set -euo pipefail
+          sc() { docker run --rm --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --network none --read-only --tmpfs /tmp --user "$(id -u):$(id -g)" -v "$PWD/factory:/factory:ro" "$BUILDER_IMAGE" scorecard "$@"; }
+          sc gate1-checks --factory /factory --out /tmp/required.json
+          sc check-factory --factory /factory

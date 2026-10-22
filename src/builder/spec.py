@@ -14,6 +14,7 @@ from .detect import JS_SUFFIXES, MUTATING, PY_SUFFIXES, find_routes, node_reads_
 from .source import Tree
 
 MODULE_ATTR = re.compile(r"^[A-Za-z_][\w.]*:[A-Za-z_]\w*$")
+STATIC_PORT = 8080  # the unprivileged nginx port
 
 
 def check_spec(spec: dict, root: Path, platform: dict) -> tuple[list[str], list[str], list[str]]:
@@ -21,9 +22,10 @@ def check_spec(spec: dict, root: Path, platform: dict) -> tuple[list[str], list[
     if errors:
         return errors, [], []
     tree = Tree(root)
+    # Beyond-schema checks. A new check here needs a rule in guide.FIELDS (tests/builder/test_guide.py lists the fields).
     errors = _entrypoint_errors(spec, tree) + _authz_errors(spec) + _egress_errors(spec, platform) + _env_errors(spec)
-    if spec["app_type"] == "static" and spec["port"] != 8080:
-        errors.append("static sites must use port 8080 (the unprivileged nginx port)")
+    if spec["app_type"] == "static" and spec["port"] != STATIC_PORT:
+        errors.append(f"static sites must use port {STATIC_PORT} (the unprivileged nginx port)")
     if errors:
         return errors, [], []
 

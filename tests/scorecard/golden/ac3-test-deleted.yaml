@@ -1,0 +1,9 @@
+name: ac3-test-deleted
+description: "AC-3: the PR deletes the test file (VC-1)."
+app: notes
+intake: {tier: moderate, data_classification: internal, purpose: "Stores short team notes. It does not send email, call external APIs, or store files."}
+change:
+  write: {tests/test_api.py: null}
+expect: {triggers: [T-3], level: security_review}
+oracle:
+  default: {status: pass, evidence: [{file: app.py, text: 'if note is None or note["owner"] != x_user:'}]}

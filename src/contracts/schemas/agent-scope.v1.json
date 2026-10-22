@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://platform.internal/schemas/agent-scope.v1.json",
+  "title": "agent-scope/v1",
+  "description": "What the review agent is asked about for one tree: the tree SHA to put in its assessment, and the ASVS requirements code left to it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "tree_sha", "asvs_level", "requirements"],
+  "properties": {
+    "schema": {"const": "agent-scope/v1"},
+    "tree_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "asvs_level": {"enum": [1, 2, 3]},
+    "requirements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["asvs_id", "chapter", "section", "level", "text"],
+        "properties": {
+          "asvs_id": {"type": "string", "pattern": "^v5\\.0\\.0-[1-9][0-9]*\\.[1-9][0-9]*\\.[1-9][0-9]*$"},
+          "chapter": {"type": "string", "pattern": "^v5\\.0\\.0-[1-9][0-9]*$"},
+          "section": {"type": "string", "pattern": "^v5\\.0\\.0-[1-9][0-9]*\\.[1-9][0-9]*$"},
+          "level": {"enum": [1, 2, 3]},
+          "text": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

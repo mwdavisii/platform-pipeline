@@ -1,0 +1,171 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://platform.internal/schemas/scorecard-config.v1.json",
+  "title": "scorecard-config/v1",
+  "description": "The factory's config/scorecard.yaml. Every key is required, so nothing silently falls back to a code default.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "tier_asvs_level", "classification_asvs_level", "missing_intake_asvs_level", "tier_floor", "blocking",
+               "coverage_threshold", "triggers", "sensitive_classifications", "gate1_checks", "drift_check", "platform_provided",
+               "tool_covered", "na_rules", "reviewers", "paths", "patterns", "max_comment_block_lines", "registry", "suppressions", "evidence", "agent"],
+  "properties": {
+    "schema": {"const": "scorecard-config/v1"},
+    "tier_asvs_level": {
+      "type": "object", "additionalProperties": false, "required": ["low", "moderate", "high"],
+      "properties": {"low": {"$ref": "#/$defs/asvs_level"}, "moderate": {"$ref": "#/$defs/asvs_level"}, "high": {"$ref": "#/$defs/asvs_level"}}
+    },
+    "classification_asvs_level": {
+      "type": "object", "additionalProperties": false, "required": ["public", "internal", "restricted", "phi"],
+      "properties": {"public": {"$ref": "#/$defs/asvs_level"}, "internal": {"$ref": "#/$defs/asvs_level"},
+                     "restricted": {"$ref": "#/$defs/asvs_level"}, "phi": {"$ref": "#/$defs/asvs_level"}}
+    },
+    "missing_intake_asvs_level": {"$ref": "#/$defs/asvs_level"},
+    "tier_floor": {
+      "type": "object", "additionalProperties": false, "required": ["low", "moderate", "high"],
+      "properties": {"low": {"$ref": "#/$defs/level"}, "moderate": {"$ref": "#/$defs/level"}, "high": {"$ref": "#/$defs/level"}}
+    },
+    "blocking": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/selector"}},
+    "coverage_threshold": {"type": "number", "minimum": 0, "maximum": 100},
+    "triggers": {
+      "type": "object", "additionalProperties": false,
+      "required": ["T-1", "T-2", "T-3", "T-4", "T-5", "T-6", "T-7", "T-8", "T-9", "T-10", "T-11", "T-12", "T-14", "T-15", "T-16"],
+      "patternProperties": {"^T-(1[0-2]|1[4-6]|[1-9])$": {"$ref": "#/$defs/trigger_level"}}
+    },
+    "sensitive_classifications": {"type": "array", "uniqueItems": true, "items": {"enum": ["public", "internal", "restricted", "phi"]}},
+    "gate1_checks": {"type": "array", "minItems": 1, "items": {"type": "object"}},
+    "drift_check": {"type": "string", "minLength": 1},
+    "platform_provided": {
+      "type": "array",
+      "items": {"type": "object", "additionalProperties": false, "required": ["id", "control", "requires_authz"],
+                "properties": {"id": {"$ref": "#/$defs/requirement"}, "control": {"$ref": "#/$defs/text"}, "requires_authz": {"type": "boolean"}}}
+    },
+    "tool_covered": {
+      "type": "array",
+      "items": {"type": "object", "additionalProperties": false, "required": ["id", "tool"],
+                "properties": {"id": {"$ref": "#/$defs/requirement"}, "tool": {"$ref": "#/$defs/text"}}}
+    },
+    "na_rules": {
+      "type": "array",
+      "items": {"type": "object", "additionalProperties": false, "required": ["selector", "justification", "unless_packages"],
+                "properties": {"selector": {"$ref": "#/$defs/selector"}, "justification": {"$ref": "#/$defs/text"},
+                               "unless_packages": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}}}
+    },
+    "reviewers": {
+      "type": "object", "additionalProperties": false, "required": ["elevated", "security_review"],
+      "properties": {"elevated": {"$ref": "#/$defs/teams"}, "security_review": {"$ref": "#/$defs/teams"}}
+    },
+    "paths": {
+      "type": "object", "additionalProperties": false,
+      "required": ["test_files", "suppression_files", "workflow_files", "shadow_files", "purpose_files", "generated_dirs",
+                   "test_config_files", "scanner_config_files"],
+      "properties": {
+        "test_files": {"$ref": "#/$defs/globs"}, "suppression_files": {"$ref": "#/$defs/globs"}, "workflow_files": {"$ref": "#/$defs/globs"},
+        "shadow_files": {"$ref": "#/$defs/globs"}, "purpose_files": {"$ref": "#/$defs/globs"}, "generated_dirs": {"$ref": "#/$defs/globs"},
+        "test_config_files": {"$ref": "#/$defs/globs"}, "scanner_config_files": {"$ref": "#/$defs/globs"}
+      }
+    },
+    "patterns": {
+      "type": "object", "additionalProperties": false,
+      "required": ["skip_markers", "suppression_markers", "injection", "platform_import", "test_function",
+                   "test_container", "test_config_sections"],
+      "properties": {
+        "skip_markers": {"$ref": "#/$defs/regexes"}, "suppression_markers": {"$ref": "#/$defs/regexes"}, "injection": {"$ref": "#/$defs/regexes", "description": "Matched against file contents, commit messages, and PR text. File names are checked against a fixed set of override phrases in the code (injection.NAME_PATTERNS), not these patterns."},
+        "platform_import": {"$ref": "#/$defs/regexes"}, "test_function": {"$ref": "#/$defs/regexes"},
+        "test_container": {"$ref": "#/$defs/regexes"}, "test_config_sections": {"$ref": "#/$defs/regexes"}
+      }
+    },
+    "evidence": {
+      "type": "object", "additionalProperties": false, "required": ["excluded_paths"],
+      "properties": {"excluded_paths": {"$ref": "#/$defs/globs"}}
+    },
+    "max_comment_block_lines": {"type": "integer", "minimum": 5},
+    "registry": {
+      "type": "object", "additionalProperties": false,
+      "required": ["new_package_days", "timeout_seconds", "max_total_seconds", "internal_npm_scopes", "internal_packages", "internal_registries"],
+      "properties": {
+        "new_package_days": {"type": "integer", "minimum": 1},
+        "timeout_seconds": {"type": "number", "exclusiveMinimum": 0, "maximum": 60},
+        "internal_npm_scopes": {"type": "array", "items": {"type": "string", "pattern": "^@[a-z0-9][a-z0-9._-]*$"}},
+        "max_total_seconds": {"type": "number", "exclusiveMinimum": 0, "maximum": 600},
+        "internal_packages": {
+          "type": "object", "additionalProperties": false, "required": ["pypi", "npm"],
+          "properties": {"pypi": {"type": "array", "items": {"type": "string", "minLength": 1}},
+                         "npm": {"type": "array", "items": {"type": "string", "minLength": 1}}}
+        },
+        "internal_registries": {
+          "type": "object", "additionalProperties": false, "required": ["pypi", "npm"],
+          "properties": {"pypi": {"$ref": "#/$defs/https_prefixes"}, "npm": {"$ref": "#/$defs/https_prefixes"}}
+        }
+      }
+    },
+    "suppressions": {
+      "type": "object", "additionalProperties": false, "required": ["secret_rule_prefixes"],
+      "properties": {"secret_rule_prefixes": {"type": "array", "items": {"type": "string", "minLength": 1}}}
+    },
+    "agent": {
+      "type": "object", "additionalProperties": false,
+      "required": ["prompt_version", "model", "gateway", "budget", "batching", "tools"],
+      "properties": {
+        "prompt_version": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,63}$"},
+        "model": {
+          "type": "object", "additionalProperties": false, "required": ["name", "version"],
+          "properties": {"name": {"$ref": "#/$defs/text"}, "version": {"$ref": "#/$defs/text"}}
+        },
+        "gateway": {
+          "type": "object", "additionalProperties": false,
+          "required": ["url", "auth", "credential_env", "timeout_seconds", "retry_seconds", "max_response_bytes"],
+          "properties": {
+            "url": {"type": "string", "maxLength": 2000, "pattern": "^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?/[^\\s#@\\\\]*$"},
+            "auth": {
+              "oneOf": [
+                {"type": "object", "additionalProperties": false, "required": ["scheme"], "properties": {"scheme": {"const": "bearer"}}},
+                {"type": "object", "additionalProperties": false, "required": ["scheme", "header"],
+                 "properties": {"scheme": {"const": "header"}, "header": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]{0,63}$"}}}
+              ]
+            },
+            "credential_env": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,63}$"},
+            "timeout_seconds": {"type": "number", "exclusiveMinimum": 0, "maximum": 600},
+            "retry_seconds": {"type": "number", "minimum": 0, "maximum": 60},
+            "max_response_bytes": {"type": "integer", "minimum": 10000, "maximum": 20000000}
+          }
+        },
+        "budget": {
+          "type": "object", "additionalProperties": false, "required": ["max_total_tokens", "max_tokens_per_call", "max_run_seconds"],
+          "properties": {
+            "max_total_tokens": {"type": "integer", "minimum": 1000},
+            "max_tokens_per_call": {"type": "integer", "minimum": 256, "maximum": 65536},
+            "max_run_seconds": {"type": "number", "exclusiveMinimum": 0, "maximum": 7200}
+          }
+        },
+        "batching": {
+          "type": "object", "additionalProperties": false, "required": ["max_requirements", "max_turns"],
+          "properties": {"max_requirements": {"type": "integer", "minimum": 1, "maximum": 50},
+                         "max_turns": {"type": "integer", "minimum": 2, "maximum": 50}}
+        },
+        "tools": {
+          "type": "object", "additionalProperties": false,
+          "required": ["max_read_lines", "max_output_chars", "max_grep_matches", "max_list_files", "max_diff_chars"],
+          "properties": {
+            "max_read_lines": {"type": "integer", "minimum": 10, "maximum": 2000},
+            "max_output_chars": {"type": "integer", "minimum": 1000, "maximum": 200000},
+            "max_grep_matches": {"type": "integer", "minimum": 1, "maximum": 1000},
+            "max_list_files": {"type": "integer", "minimum": 10, "maximum": 10000},
+            "max_diff_chars": {"type": "integer", "minimum": 0, "maximum": 500000}
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "asvs_level": {"enum": [1, 2, 3]},
+    "level": {"enum": ["standard", "elevated", "security_review"]},
+    "trigger_level": {"enum": ["elevated", "security_review"]},
+    "selector": {"type": "string", "pattern": "^v5\\.0\\.0-[1-9][0-9]*(\\.[1-9][0-9]*){0,2}$"},
+    "requirement": {"type": "string", "pattern": "^v5\\.0\\.0-[1-9][0-9]*\\.[1-9][0-9]*\\.[1-9][0-9]*$"},
+    "text": {"type": "string", "minLength": 1, "not": {"pattern": "[\\r\\n]"}},
+    "teams": {"type": "array", "items": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"}},
+    "globs": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "https_prefixes": {"type": "array", "items": {"type": "string", "pattern": "^https://[^\\s?#]+/$"}},
+    "regexes": {"type": "array", "items": {"type": "string", "minLength": 1}}
+  }
+}

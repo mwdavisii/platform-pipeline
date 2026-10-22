@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": ["command", "status", "builder_version", "warnings", "questions", "errors"],
   "properties": {
-    "command": {"enum": ["detect", "generate", "verify"]},
+    "command": {"enum": ["detect", "generate", "verify", "guide"]},
     "status": {"enum": ["ok", "invalid", "needs_input", "drift"]},
     "builder_version": {"type": "string"},
     "draft_spec": {"type": "object"},

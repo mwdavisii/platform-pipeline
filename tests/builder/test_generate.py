@@ -8,6 +8,7 @@ from builder import VERSION
 from builder.errors import EXIT_INVALID, EXIT_NEEDS_INPUT, BuilderError
 from builder.generate import generate
 from builder.lock import canonical_json, sha256_text
+from builder.render.agents import BEGIN, END, MANAGED_FILES, render_blocks
 
 
 def tree(root):
@@ -230,3 +231,102 @@ def test_missing_data_classification_raises_exit_2(notes_spec, python_app):
     assert err.value.exit_code == EXIT_INVALID
     assert any("data_classification" in e for e in err.value.errors)
     assert not (python_app / "Dockerfile").exists()
+
+
+# ---- the golden-road blocks in AGENTS.md and CLAUDE.md ----
+
+def test_generate_creates_agents_and_claude_files(notes_spec, python_app):
+    result = generate(python_app, notes_spec)
+    blocks = render_blocks(notes_spec)
+    assert (python_app / "AGENTS.md").read_text() == blocks["AGENTS.md"]
+    assert (python_app / "CLAUDE.md").read_text() == f"{BEGIN}\n@AGENTS.md\n{END}\n"
+    assert {"AGENTS.md", "CLAUDE.md"} <= set(result["files"])
+    lock = json.loads((python_app / ".builder.lock").read_text())
+    assert lock["blocks"] == {name: sha256_text(text) for name, text in blocks.items()}
+    assert not set(MANAGED_FILES) & set(lock["files"])
+
+
+def test_generate_puts_the_block_on_top_of_the_team_text(notes_spec, python_app):
+    (python_app / "AGENTS.md").write_text("# Team notes\n\nRun the tests with pytest.\n")
+    generate(python_app, notes_spec)
+    assert (python_app / "AGENTS.md").read_text() == render_blocks(notes_spec)["AGENTS.md"] + "\n# Team notes\n\nRun the tests with pytest.\n"
+
+
+def test_generate_replaces_only_the_block(notes_spec, python_app):
+    generate(python_app, notes_spec)
+    path = python_app / "AGENTS.md"
+    path.write_text("intro\n" + path.read_text().replace("Never make", "Feel free to make") + "outro\n")
+    notes_spec["data_classification"] = "restricted"
+    generate(python_app, notes_spec)
+    assert path.read_text() == "intro\n" + render_blocks(notes_spec)["AGENTS.md"] + "outro\n"
+
+
+def test_regenerating_leaves_the_managed_files_unchanged(notes_spec, python_app):
+    (python_app / "CLAUDE.md").write_text("Use tabs.\n")
+    generate(python_app, notes_spec)
+    first = {name: (python_app / name).read_bytes() for name in MANAGED_FILES}
+    generate(python_app, notes_spec)
+    assert {name: (python_app / name).read_bytes() for name in MANAGED_FILES} == first
+
+
+@pytest.mark.parametrize("name", MANAGED_FILES)
+def test_symlinked_managed_file_is_refused_before_any_write(notes_spec, python_app, name):
+    target = python_app.parent / "elsewhere.md"
+    target.write_text("keep\n")
+    (python_app / name).symlink_to(target)
+    before = snapshot(python_app)
+    with pytest.raises(BuilderError) as err:
+        generate(python_app, notes_spec)
+    assert err.value.exit_code == EXIT_INVALID and "link" in err.value.errors[0] and name in err.value.errors[0]
+    assert snapshot(python_app) == before and target.read_text() == "keep\n"
+    assert not (python_app / "Dockerfile").exists()
+
+
+@pytest.mark.parametrize("text", [f"{BEGIN}\n{END}\n{BEGIN}\n{END}\n", f"{END}\nours\n{BEGIN}\n", f"{BEGIN}\nno end\n"])
+def test_bad_markers_are_refused_before_any_write(notes_spec, python_app, text):
+    (python_app / "AGENTS.md").write_text(text)
+    before = snapshot(python_app)
+    with pytest.raises(BuilderError) as err:
+        generate(python_app, notes_spec)
+    assert err.value.exit_code == EXIT_INVALID and "markers" in err.value.errors[0] and "code fence" in err.value.errors[0]
+    assert snapshot(python_app) == before
+
+
+def test_oversize_managed_file_is_refused(notes_spec, python_app):
+    (python_app / "AGENTS.md").write_text("x" * 1_000_001)
+    before = snapshot(python_app)
+    with pytest.raises(BuilderError) as err:
+        generate(python_app, notes_spec)
+    assert err.value.exit_code == EXIT_INVALID and "1 MB" in err.value.errors[0]
+    assert snapshot(python_app) == before
+
+
+def test_merged_size_over_the_limit_is_refused(notes_spec, python_app):
+    """verify can't read a file over 1 MB, so generate must not write one by adding the block to a file just under it."""
+    (python_app / "AGENTS.md").write_text("x" * 999_900)
+    before = snapshot(python_app)
+    with pytest.raises(BuilderError) as err:
+        generate(python_app, notes_spec)
+    assert err.value.exit_code == EXIT_INVALID and "1 MB" in err.value.errors[0]
+    assert snapshot(python_app) == before
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs os.mkfifo")
+def test_fifo_managed_file_is_refused(notes_spec, python_app):
+    os.mkfifo(python_app / "AGENTS.md")
+    with pytest.raises(BuilderError) as err:
+        generate(python_app, notes_spec)
+    assert err.value.exit_code == EXIT_INVALID and "not a regular file" in err.value.errors[0]
+    assert not (python_app / "Dockerfile").exists()
+
+
+def test_non_utf8_or_directory_managed_file_is_refused(notes_spec, python_app):
+    (python_app / "AGENTS.md").write_bytes(b"\xff\xfe notes\n")
+    with pytest.raises(BuilderError) as err:
+        generate(python_app, notes_spec)
+    assert "UTF-8" in err.value.errors[0]
+    (python_app / "AGENTS.md").unlink()
+    (python_app / "CLAUDE.md").mkdir()
+    with pytest.raises(BuilderError) as err:
+        generate(python_app, notes_spec)
+    assert err.value.exit_code == EXIT_INVALID and "directory" in err.value.errors[0]

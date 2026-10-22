@@ -1,0 +1,49 @@
+# An app's intake request. Security reads it, sets the tier, and adds intake/<owner>/<repo>.yaml by pull request.
+# golden-road doctor finds it by the title, which must name <owner>/<repo>.
+name: Intake request
+description: Ask security to add an app to the scorecard (its purpose, owner and data classification). Security sets the tier.
+title: "Intake request: "
+labels: ["intake-request"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        One request per app repository. Put the repository after "Intake request: " in the title, as `owner/repo`.
+        Security sets the tier and turns this into `intake/<owner>/<repo>.yaml` by pull request.
+  - type: input
+    id: repository
+    attributes:
+      label: Repository
+      description: The app repository, as owner/repo.
+      placeholder: owner/repo
+    validations:
+      required: true
+  - type: textarea
+    id: does
+    attributes:
+      label: What the app does
+      description: In plain words, what the app is for and what it does with its data.
+    validations:
+      required: true
+  - type: textarea
+    id: does-not
+    attributes:
+      label: What the app does not do
+      description: Data it doesn't store, calls it doesn't make, people it doesn't serve.
+    validations:
+      required: true
+  - type: input
+    id: owner
+    attributes:
+      label: Owner
+      description: The person or team who answers for the app.
+    validations:
+      required: true
+  - type: dropdown
+    id: data-classification
+    attributes:
+      label: Data classification
+      description: The most sensitive data the app handles.
+      options: [public, internal, restricted, phi]
+    validations:
+      required: true

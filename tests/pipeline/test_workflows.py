@@ -9,11 +9,13 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 SCANS = ROOT / "reference/security-scans"
-DIRS = [ROOT / ".github/workflows", ROOT / "bootstrap/hello-app/.github/workflows", SCANS / ".github/workflows"]
+DIRS = [ROOT / ".github/workflows", ROOT / "bootstrap/hello-app/.github/workflows", ROOT / "bootstrap/scorecard-factory/.github/workflows",
+        ROOT / "bootstrap/golden-road-agents/.github/workflows", SCANS / ".github/workflows"]
 WORKFLOWS = sorted(p for d in DIRS if d.is_dir() for p in d.glob("*.yml"))
 ACTIONLINT = "rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667"
 SHA_PIN = re.compile(r"^[\w.-]+/[\w.-]+(/[\w./-]+)?@[0-9a-f]{40}$")
-REUSABLE = re.compile(r"^[A-Za-z0-9_-]+/(platform-pipeline/\.github/workflows/golden-road(-promote)?|security-scans/\.github/workflows/scan)\.yml@main$")
+REUSABLE = re.compile(r"^[A-Za-z0-9_-]+/(platform-pipeline/\.github/workflows/golden-road(-promote)?\.yml|security-scans/\.github/workflows/scan\.yml"
+                      r"|scorecard-factory/\.github/workflows/scorecard\.yml|scorecard-factory/\.github/actions/intake)@main$")
 
 
 def load(path):
@@ -32,7 +34,7 @@ def uses(doc):
 
 
 def test_expected_workflows_exist():
-    expected = {"golden-road.yml", "golden-road-promote.yml", "release-builder.yml", "test.yml", "ci.yml", "promote.yml", "security-scans.yml"}
+    expected = {"golden-road.yml", "golden-road-promote.yml", "release-builder.yml", "test.yml", "ci.yml", "promote.yml", "security-scans.yml", "factory-check.yml", "scorecard.yml", "release-skill.yml"}
     assert expected | ({"scan.yml"} if SCANS.is_dir() else set()) <= {p.name for p in WORKFLOWS}
 
 
@@ -183,6 +185,12 @@ ALLOWED_EXPR = [
     r"inputs\.[A-Za-z_][\w-]*", r"github\.token", r"github\.actor", r"github\.triggering_actor", r"github\.run_id",
     r"github\.run_attempt", r"github\.server_url", r"github\.repository", r"github\.event\.pull_request\.number",
     r"steps\.[\w-]+\.outputs\.[\w-]+", r"github\.run_id", r"github\.server_url", r"job\.workflow_repository", r"job\.workflow_sha", r"needs\.(semgrep|trivy|preview)\.result", r"github\.sha",
+    # the scorecard: job results, the factory's own job outputs, and the gateway key secret
+    r"needs\.(precondition|assess|score|report|level)\.result", r"needs\.precondition\.outputs\.checks",
+    r"needs\.assess\.outputs\.(assessment_sha256|factory_sha256)", r"needs\.score\.outputs\.(level|comment_sha256|github_sha256)",
+    r"secrets\.SCORECARD_GATEWAY_KEY", r"github\.event\.pull_request\.base\.ref",  # the base ref reaches only an env var, never a script
+    # the builder release's kit job: the image digest from the release job, and the App that may publish in golden-road-agents
+    r"needs\.release\.outputs\.image", r"vars\.GOLDEN_ROAD_AGENTS_APP_CLIENT_ID", r"secrets\.GOLDEN_ROAD_AGENTS_APP_KEY",
 ]
 
 
@@ -726,3 +734,112 @@ def test_promote_says_plainly_when_the_approval_was_a_self_approval():
     assert not re.search(r"(^|\s)(-e|--env|--env-file)(\s|=)", docker_run)
     assert len(re.findall(r"(^|\s)(-v|--volume)(\s|=)", docker_run)) == 1
     assert "single" not in " ".join(load(ROOT / ".github/workflows/golden-road-promote.yml")["on"]["workflow_call"]["inputs"])
+
+
+# ---- golden-road-agents' release-skill.yml ----
+
+RELEASE_SKILL = ROOT / "bootstrap/golden-road-agents/.github/workflows/release-skill.yml"
+ATTEST = "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8"  # v4.2.2
+
+
+def step_index(steps, predicate):
+    return next(i for i, s in enumerate(steps) if predicate(s))
+
+
+def test_release_skill_runs_only_on_skill_tags_with_only_what_it_needs():
+    doc = load(RELEASE_SKILL)
+    assert doc["on"] == {"push": {"tags": ["skill-v*"]}} and doc["permissions"] == {}
+    assert doc["concurrency"] == {"group": "release-skill", "cancel-in-progress": False}
+    assert list(doc["jobs"]) == ["release"]
+    assert doc["jobs"]["release"]["permissions"] == {"contents": "write", "id-token": "write", "attestations": "write"}
+
+
+def test_release_skill_checks_the_tag_then_builds_attests_and_publishes():
+    steps = load(RELEASE_SKILL)["jobs"]["release"]["steps"]
+    assert steps[0]["uses"].startswith("actions/checkout@") and steps[0]["with"] == {"persist-credentials": False, "fetch-depth": 0}
+    check = step_index(steps, lambda s: "merge-base --is-ancestor" in s.get("run", ""))
+    build = step_index(steps, lambda s: "scripts/build_release.py" in s.get("run", ""))
+    attest = step_index(steps, lambda s: s.get("uses") == ATTEST)
+    publish = step_index(steps, lambda s: "gh release create" in s.get("run", ""))
+    assert check < build < attest < publish == len(steps) - 1
+    assert '"$GITHUB_SHA" origin/main' in steps[check]["run"] and "^skill-v" in steps[check]["run"]
+    assert '"${GITHUB_REF_NAME#skill-v}" dist' in steps[build]["run"]
+    assert steps[attest]["id"] == "attest" and steps[attest]["with"] == {"subject-path": "dist/*"}
+    run = steps[publish]["run"]
+    command = run.split("--notes")[0]  # the flags, not the release notes text that follows
+    for needle in ('gh release create "$GITHUB_REF_NAME" dist/*', '--repo "$GITHUB_REPOSITORY"', "--verify-tag --latest "):
+        assert needle in command, needle
+    assert ".sigstore.json" in run
+    assert steps[publish]["env"] == {"GH_TOKEN": "${{ github.token }}", "ATTESTATION": "${{ steps.attest.outputs.bundle-path }}"}
+
+
+def test_the_stub_trusts_exactly_this_workflow():
+    text = (ROOT / "bootstrap/golden-road-agents/stub/golden-road/fetch_skill.py").read_text()
+    assert 'SIGNER = f"{REPO}/.github/workflows/release-skill.yml"' in text and RELEASE_SKILL.name == "release-skill.yml"
+
+
+# ---- release-builder.yml: the builder kit ----
+
+RELEASE_BUILDER = ROOT / ".github/workflows/release-builder.yml"
+APP_TOKEN = "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510"  # v3.3.0
+
+
+def test_release_builder_checks_the_tag_against_builder_version_before_the_image_is_built():
+    steps = load(RELEASE_BUILDER)["jobs"]["release"]["steps"]
+    tag = step_index(steps, lambda s: '"builder-v$version"' in s.get("run", ""))
+    assert "src/builder/__init__.py" in steps[tag]["run"] and "exit 1" in steps[tag]["run"]
+    assert tag < step_index(steps, lambda s: "buildx build" in s.get("run", ""))
+
+
+def test_release_builder_hands_the_pushed_image_digest_to_the_kit_job():
+    release = load(RELEASE_BUILDER)["jobs"]["release"]
+    assert release["permissions"] == {"contents": "read", "packages": "write", "id-token": "write"}
+    assert release["outputs"] == {"image": "${{ steps.image.outputs.image }}"}
+    push = next(s for s in release["steps"] if "buildx build" in s.get("run", ""))
+    assert push["id"] == "image" and 'echo "image=$image@$digest" >> "$GITHUB_OUTPUT"' in push["run"]
+    assert push["run"].index("cosign sign") < push["run"].index("GITHUB_OUTPUT")
+
+
+def test_the_kit_job_builds_attests_then_publishes_a_draft_with_a_token_only_it_sees():
+    doc = load(RELEASE_BUILDER)
+    assert set(doc["jobs"]) == {"release", "kit"}
+    kit = doc["jobs"]["kit"]
+    assert kit["needs"] == "release" and kit["runs-on"] == "ubuntu-24.04"
+    assert kit["permissions"] == {"contents": "read", "id-token": "write", "attestations": "write"}
+    steps = kit["steps"]
+    assert steps[0]["uses"].startswith("actions/checkout@") and steps[0]["with"] == {"persist-credentials": False}
+    build = step_index(steps, lambda s: "scripts/build_builder_kit.py" in s.get("run", ""))
+    attest = step_index(steps, lambda s: s.get("uses") == ATTEST)
+    token = step_index(steps, lambda s: s.get("uses") == APP_TOKEN)
+    publish = step_index(steps, lambda s: "gh release create" in s.get("run", ""))
+    assert build < attest < token < publish == len(steps) - 1
+    run = steps[build]["run"]
+    for needle in ("--require-hashes", "--only-binary=:all:", "images/builder/requirements.txt", '--tag "$GITHUB_REF_NAME"', '--image "$IMAGE"',
+                   "--source-date-epoch", "--self-test"):
+        assert needle in run, needle
+    assert steps[build]["env"] == {"IMAGE": "${{ needs.release.outputs.image }}"}
+    assert steps[attest]["id"] == "attest"
+    assert steps[attest]["with"]["subject-path"].split() == ["dist/golden_road-*.whl", "dist/golden_road-*-requirements.txt", "dist/platform-pin.json"]
+    assert steps[token]["id"] == "agents-token" and steps[token]["with"] == {
+        "client-id": "${{ vars.GOLDEN_ROAD_AGENTS_APP_CLIENT_ID }}", "private-key": "${{ secrets.GOLDEN_ROAD_AGENTS_APP_KEY }}",
+        "repositories": "golden-road-agents", "permission-contents": "write"}
+    publish_step = steps[publish]
+    assert publish_step["env"] == {"GH_TOKEN": "${{ steps.agents-token.outputs.token }}", "ATTESTATION": "${{ steps.attest.outputs.bundle-path }}"}
+    run = publish_step["run"]
+    command = run.split("--notes")[0]  # the flags, not the release notes text that follows (it mentions both)
+    for needle in ('gh release create "$GITHUB_REF_NAME" dist/*', '--repo "${GITHUB_REPOSITORY_OWNER}/golden-road-agents"', "--draft --latest=false "):
+        assert needle in command, needle
+    assert '"dist/${GITHUB_REF_NAME}.sigstore.json"' in run
+    # a stale draft with this tag name is a failure, not a second draft (gh release create would make one)
+    check = run.index("gh release list")
+    assert check < run.index("gh release create") and "delete the stale draft" in run[check:run.index("gh release create")]
+    assert '--repo "${GITHUB_REPOSITORY_OWNER}/golden-road-agents"' in run[check:run.index("gh release create")]
+    assert '[ "$existing" = "0" ] \\\n' in run and "exit 1" in run[check:run.index("gh release create")]
+    assert [i for i, s in enumerate(steps) if "agents-token.outputs" in json.dumps(s)] == [publish]
+    assert [i for i, s in enumerate(steps) if "secrets." in json.dumps(s)] == [token]
+
+
+def test_no_other_workflow_uses_the_app_secret():
+    for path in WORKFLOWS:
+        if path != RELEASE_BUILDER:
+            assert "GOLDEN_ROAD_AGENTS_APP" not in path.read_text(), path

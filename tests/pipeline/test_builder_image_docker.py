@@ -1,6 +1,7 @@
 """Build the builder image and run it. Opt-in: pytest -m docker"""
 
 import hashlib
+import json
 import shutil
 import os
 import uuid
@@ -63,3 +64,14 @@ def test_malformed_required_checks_fail_the_build(tmp_path, bad):
         assert out.returncode != 0, "a malformed required-checks.json must not produce an image"
     finally:
         subprocess.run(["docker", "rmi", "-f", tag], capture_output=True)
+
+
+def test_package_version_guide_and_doctor(builder_image):
+    """pyproject takes its version from builder.VERSION, so the installed package carries it; guide and doctor ship."""
+    out = run(builder_image, "python", "-c", "import builder, importlib.metadata as m; print(m.version('golden-road'), builder.VERSION)")
+    assert out.returncode == 0, out.stderr
+    installed, constant = out.stdout.split()
+    assert installed == constant
+    guide = run(builder_image, "builder", "guide")
+    assert guide.returncode == 0 and json.loads(guide.stdout)["builder_version"] == constant
+    assert run(builder_image, "golden-road", "doctor", "--help").returncode == 0

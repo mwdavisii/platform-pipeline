@@ -29,7 +29,8 @@ def runner_env(environ) -> list[str]:
     """Names of the runner's variables in `environ`: the exact names in RUNNER_TOKENS and anything starting with GITHUB_, ACTIONS_ or RUNNER_."""
     return sorted(name for name in environ if name in RUNNER_TOKENS or name.startswith(RUNNER_PREFIXES))
 # Headers the gateway client sets itself; the credential header can't replace them.
-RESERVED_HEADERS = {"host", "content-type", "content-length", "transfer-encoding", "connection", "accept"}
+RESERVED_HEADERS = {"host", "content-type", "content-length", "transfer-encoding", "connection", "accept",
+                    "cf-access-client-id", "cf-access-client-secret"}  # the Access service-token headers are set from their own variables
 _REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 

@@ -201,6 +201,8 @@ def test_sample_agent_config(config):
     {"prompt_version": "review-1\n"},
     {"gateway.auth": {"scheme": "header"}},
     {"gateway.auth": {"scheme": "header", "header": "Host"}},
+    {"gateway.auth": {"scheme": "header", "header": "CF-Access-Client-Id"}},
+    {"gateway.auth": {"scheme": "header", "header": "cf-access-client-secret"}},
     {"gateway.auth": {"scheme": "basic"}},
     {"budget.max_total_tokens": 0},
     {"batching.max_turns": 1},

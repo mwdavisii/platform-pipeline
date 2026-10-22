@@ -3,12 +3,13 @@
 import http.client
 import io
 import json
+import traceback
 import urllib.error
 
 import pytest
 
 from golden_road.io import InputError
-from scorecard.agent.gateway import GatewayClient, GatewayError, credential, parse_completion
+from scorecard.agent.gateway import GatewayClient, GatewayError, access_headers, credential, parse_completion
 
 TOKEN = "gw-token-" + "x" * 20
 REPLY = {"choices": [{"message": {"role": "assistant", "content": None, "tool_calls": [
@@ -77,7 +78,7 @@ def test_one_retry_on_transient_errors(config):
         client(config, Opener(TimeoutError(), urllib.error.URLError("down"))).complete([], [], max_tokens=300)
 
 
-@pytest.mark.parametrize("code, fatal", [(401, True), (403, True), (400, False), (302, False)])
+@pytest.mark.parametrize("code, fatal", [(401, True), (403, True), (400, False), (302, True), (301, True), (307, True)])
 def test_no_retry_on_other_errors_and_auth_is_fatal(config, code, fatal):
     opener = Opener(http_error(code))
     with pytest.raises(GatewayError) as caught:
@@ -236,3 +237,96 @@ def test_duplicate_tool_call_ids_are_a_gateway_error():
     body = json.dumps({"choices": [{"message": {"content": None, "tool_calls": [call, call]}}]}).encode()
     with pytest.raises(GatewayError, match="repeats a tool call id"):
         parse_completion(body)
+
+
+ACCESS_ID = "sentinelid0123456789abcdef.access"
+ACCESS_SECRET = "sentinelsecret" + "ab" * 24
+ACCESS_ENV = {"SCORECARD_GATEWAY_ACCESS_ID": ACCESS_ID, "SCORECARD_GATEWAY_ACCESS_SECRET": ACCESS_SECRET}
+
+
+def test_access_headers_are_sent_on_every_request_when_both_are_set(config):
+    opener = Opener(http_error(503), REPLY)
+    GatewayClient(config, TOKEN, access=access_headers(ACCESS_ENV), opener=opener, sleep=lambda s: None).complete([], [], max_tokens=300)
+    assert len(opener.requests) == 2
+    for request, _ in opener.requests:
+        assert request.get_header("Cf-access-client-id") == ACCESS_ID
+        assert request.get_header("Cf-access-client-secret") == ACCESS_SECRET
+        assert request.get_header("Authorization") == f"Bearer {TOKEN}"
+
+
+def test_no_access_headers_when_neither_is_set(config):
+    assert access_headers({}) is None and access_headers({"SCORECARD_GATEWAY_ACCESS_ID": " ", "SCORECARD_GATEWAY_ACCESS_SECRET": ""}) is None
+    opener = Opener(REPLY)
+    client(config, opener).complete([], [], max_tokens=300)
+    request = opener.requests[0][0]
+    assert request.get_header("Cf-access-client-id") is None and request.get_header("Cf-access-client-secret") is None
+
+
+@pytest.mark.parametrize("env", [{"SCORECARD_GATEWAY_ACCESS_ID": ACCESS_ID}, {"SCORECARD_GATEWAY_ACCESS_SECRET": ACCESS_SECRET}])
+def test_one_access_value_alone_is_a_configuration_error(env):
+    with pytest.raises(InputError, match="both") as caught:
+        access_headers(env)
+    assert ACCESS_ID not in str(caught.value) and ACCESS_SECRET not in str(caught.value)
+
+
+def test_access_values_shorter_than_16_characters_are_refused_without_echoing_them():
+    short = "a" * 15
+    for env in ({**ACCESS_ENV, "SCORECARD_GATEWAY_ACCESS_ID": short}, {**ACCESS_ENV, "SCORECARD_GATEWAY_ACCESS_SECRET": short}):
+        with pytest.raises(InputError) as caught:
+            access_headers(env)
+        assert short not in str(caught.value)
+    assert access_headers({**ACCESS_ENV, "SCORECARD_GATEWAY_ACCESS_ID": "a" * 16}) is not None
+
+
+@pytest.mark.parametrize("bad", ["a\rb", "a\nb", "a b", "a=b", "t\u00f6k", "a:b"])
+def test_access_values_with_unexpected_characters_are_refused_without_echoing_them(bad):
+    for env in ({**ACCESS_ENV, "SCORECARD_GATEWAY_ACCESS_ID": bad}, {**ACCESS_ENV, "SCORECARD_GATEWAY_ACCESS_SECRET": bad}):
+        with pytest.raises(InputError) as caught:
+            access_headers(env)
+        assert bad not in str(caught.value) and repr(bad) not in str(caught.value)
+
+
+def test_access_values_never_appear_in_errors_reprs_or_exceptions(config):
+    access = access_headers(ACCESS_ENV)
+    gateway = GatewayClient(config, TOKEN, access=access, opener=Opener(http_error(403)))
+    for text in (repr(access), str(access), repr(gateway), str(gateway), repr(vars(gateway))):
+        assert ACCESS_ID not in text and ACCESS_SECRET not in text
+    assert dict(access)["CF-Access-Client-Secret"] == ACCESS_SECRET, "the headers are still real; only their repr is redacted"
+    for outcome in (http_error(401), http_error(503), http_error(302), OSError(ACCESS_SECRET), b"not json", {"choices": []}):
+        gateway = GatewayClient(config, TOKEN, access=access, opener=Opener(outcome, outcome), sleep=lambda s: None)
+        with pytest.raises(GatewayError) as caught:
+            gateway.complete([], [], max_tokens=300)
+        shown = "".join(traceback.format_exception(caught.value))  # what a log would show (the suppressed context is not shown)
+        for text in (str(caught.value), repr(caught.value), shown):
+            assert ACCESS_ID not in text and ACCESS_SECRET not in text
+
+
+def test_a_redirect_is_never_followed_and_is_fatal(config):
+    import http.server
+    import threading
+
+    from golden_road.checks import _open
+
+    seen = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            seen.append(self.path)
+            self.send_response(302)
+            self.send_header("Location", "/login")
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        config["agent"]["gateway"]["url"] = f"http://127.0.0.1:{server.server_port}/v1/chat/completions"
+        gateway = GatewayClient(config, TOKEN, access=access_headers(ACCESS_ENV), opener=_open)
+        with pytest.raises(GatewayError) as caught:
+            gateway.complete([], [], max_tokens=300)
+    finally:
+        server.shutdown()
+    assert caught.value.fatal and seen == ["/v1/chat/completions"]
+    assert ACCESS_SECRET not in str(caught.value)

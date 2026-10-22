@@ -342,7 +342,8 @@ def test_hello_app_calls_the_factory_workflow_on_pull_requests_only():
     [(name, job)] = doc["jobs"].items()
     assert name == "scorecard" and "name" not in job, "the checks are `scorecard / <job>`"
     assert CALLER_USES.match(job["uses"]) or job["uses"].startswith("ORG_PLACEHOLDER/scorecard-factory/")
-    assert job["secrets"] == {"SCORECARD_GATEWAY_KEY": "${{ secrets.SCORECARD_GATEWAY_KEY }}"}, "never `secrets: inherit`"
+    assert job["secrets"] == {name: "${{ secrets.%s }}" % name for name in (
+        "SCORECARD_GATEWAY_KEY", "SCORECARD_GATEWAY_ACCESS_ID", "SCORECARD_GATEWAY_ACCESS_SECRET")}, "never `secrets: inherit`"
     assert "with" not in job and "concurrency" not in doc, "the called workflow sets the concurrency group; the same group here would deadlock"
 
 
@@ -388,7 +389,8 @@ def test_the_personal_poc_doc_sets_up_the_scorecard_in_order():
                    "anyone with write access to `hello-app` can read", "prefer GitHub OIDC", "builder-v$version",
                    "grep -rlE '^  BUILDER_IMAGE: '", "GOLDEN_ROAD_SCORECARD_LIVE=1",
                    "GOLDEN_ROAD_SCORECARD_FACTORY=bootstrap/scorecard-factory", "baseline_relative", "scripts/push-bootstrap.sh <you> scorecard-factory --public",
-                   "gh secret set SCORECARD_GATEWAY_KEY --repo <you>/hello-app", "scorecard / level: security_review", "scorecard / assessed",
+                   "gh secret set SCORECARD_GATEWAY_KEY --repo <you>/hello-app", "gh secret set SCORECARD_GATEWAY_ACCESS_ID --repo <you>/hello-app",
+                   "gh secret set SCORECARD_GATEWAY_ACCESS_SECRET --repo <you>/hello-app", "Service Auth", "CF-Access-Client-Id", "scorecard / level: security_review", "scorecard / assessed",
                    "gh pr ready", "T-2", "T-15", "T-16", 'select(.context != "scorecard / assessed")'):
         assert needle in text, needle
     order = ["### 13.1", "### 13.2", "### 13.3", "### 13.4", "### 13.5", "### 13.6", "### 13.7"]
@@ -410,6 +412,8 @@ def test_the_personal_poc_doc_names_every_value_the_owner_must_decide():
 def test_the_dependabot_secret_step_and_its_limit_are_documented_in_the_poc_doc():
     step = poc_step_13()
     assert "gh secret set SCORECARD_GATEWAY_KEY --repo <you>/hello-app --app dependabot" in step
+    assert "gh secret set SCORECARD_GATEWAY_ACCESS_ID --repo <you>/hello-app --app dependabot" in step
+    assert "gh secret set SCORECARD_GATEWAY_ACCESS_SECRET --repo <you>/hello-app --app dependabot" in step
     assert "gh secret list --repo <you>/hello-app --app dependabot" in step
     assert "Dependabot-triggered runs can read" in step and "proof item 10" in step
     assert step.index("--app dependabot") < step.index("  unset SCORECARD_GATEWAY_TOKEN\nelse"), "the key is still set when the second command runs"
@@ -546,3 +550,23 @@ def test_the_readme_names_the_form_and_the_title():
     text = " ".join((FACTORY / "README.md").read_text().split())
     for needle in ("`.github/ISSUE_TEMPLATE/intake-request.yml`", "`Intake request: <owner>/<repo>`", "no label"):
         assert needle in text, needle
+
+
+def test_the_access_setup_in_the_poc_doc_keeps_the_secret_out_of_argv_and_sets_all_four_secrets_guarded():
+    step = poc_step_13()
+    assert not re.search(r'-H\s+"[^"\n]*\$SCORECARD_GATEWAY_ACCESS_(SECRET|ID)', step), "a curl -H argument would put the secret in argv"
+    assert "-H @<(printf 'CF-Access-Client-Id: %s\\nCF-Access-Client-Secret: %s\\n' \"$SCORECARD_GATEWAY_ACCESS_ID\" \"$SCORECARD_GATEWAY_ACCESS_SECRET\")" in step
+    guard = 'if [ -n "${SCORECARD_GATEWAY_ACCESS_ID:-}" ] && [ -n "${SCORECARD_GATEWAY_ACCESS_SECRET:-}" ]; then'
+    block = step[step.index(guard):]
+    block = block[:block.index("\nfi\n")]
+    for name in ("ID", "SECRET"):
+        for extra in ("", " --app dependabot"):
+            assert f"printf '%s' \"$SCORECARD_GATEWAY_ACCESS_{name}\" | gh secret set SCORECARD_GATEWAY_ACCESS_{name} --repo <you>/hello-app{extra}\n" in block + "\n"
+    assert "unset SCORECARD_GATEWAY_ACCESS_ID SCORECARD_GATEWAY_ACCESS_SECRET" in block and "paste it" not in step
+    assert "printf 'Access client id: '; read -rs SCORECARD_GATEWAY_ACCESS_ID; echo" in step
+    assert "printf 'Access client secret: '; read -rs SCORECARD_GATEWAY_ACCESS_SECRET; echo" in step
+    checks = step[step.index("**Check:** `gh secret list --repo <you>/hello-app` lists"):]
+    assert checks.index("SCORECARD_GATEWAY_ACCESS_ID") < checks.index("Fork PRs") and "SCORECARD_GATEWAY_ACCESS_SECRET" in checks[:checks.index("Fork PRs")]
+    for needle in ("Return 401 response for service auth policies", "empty path", "before the tunnel hostname exists"):
+        assert needle in step, needle
+    assert "path `/v1/chat/completions`, and a policy" not in step

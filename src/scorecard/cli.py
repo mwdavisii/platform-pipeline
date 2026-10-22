@@ -13,7 +13,7 @@ from pathlib import Path
 
 from golden_road.io import InputError, load_json, write_json, write_text_atomic
 
-from .agent.gateway import GatewayClient, credential
+from .agent.gateway import GatewayClient, access_headers, credential
 from .agent.runner import assess
 from .build import NotAssessed, agent_scope, build_scorecard, prepare
 from .asvs import check_ids, load_asvs
@@ -234,7 +234,7 @@ def _cmd_assess(args, registry, model) -> int:
     # prepare checks the precondition first, so a PR that is not assessed never reaches the model (AC-11).
     prepared = prepare(repo_root=args.repo_root, repo=args.repo, base_ref=args.base, factory=args.factory, checks_doc=load_json(args.checks),
                        event=load_json(args.event) if args.event else None, now=_now(args.now))
-    client = model or GatewayClient(prepared.config, credential(prepared.config))
+    client = model or GatewayClient(prepared.config, credential(prepared.config), access=access_headers())
     doc, stats = assess(prepared, client)
     write_json(args.out, doc)
     print(json.dumps(stats))

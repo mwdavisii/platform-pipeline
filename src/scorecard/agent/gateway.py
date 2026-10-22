@@ -2,8 +2,9 @@
 
 The URL is the full chat-completions endpoint from the factory config, so an OpenAI-compatible proxy
 (`https://<proxy>/v1/chat/completions`) and an API-management front end (`.../chat/completions?api-version=...`) both work.
-The credential is an OIDC-derived bearer token or a scoped key (R3), read only from the environment variable the config
-names. No redirect is followed, and no error message carries the response body or the credential.
+The optional Cloudflare Access service token (`SCORECARD_GATEWAY_ACCESS_ID` and `_SECRET`, both or neither) adds two headers to
+every request, and is never logged or put in an error. The credential is an OIDC-derived bearer token or a scoped key (R3), read only from the environment variable the config
+names. No redirect is followed (a 3xx stops the run like a refused credential), and no error message carries the response body or the credential.
 
 Time: urllib's `timeout_seconds` applies to each socket operation, so a server that sends one byte at a time would never trip it.
 The response body is therefore read in chunks (one socket read each) against the run's deadline (`set_time_limit`), and a call
@@ -16,6 +17,7 @@ import dataclasses
 import http.client
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -60,11 +62,40 @@ def credential(config: dict, environ=None) -> str:
     return value
 
 
+ACCESS_ID_ENV, ACCESS_SECRET_ENV = "SCORECARD_GATEWAY_ACCESS_ID", "SCORECARD_GATEWAY_ACCESS_SECRET"
+_ACCESS_VALUE = re.compile(r"[A-Za-z0-9._-]{16,512}")
+
+
+class AccessHeaders(dict):
+    """The Cloudflare Access service-token headers. Its repr never shows the values."""
+
+    def __repr__(self) -> str:
+        return "AccessHeaders(<redacted>)"
+
+    __str__ = __repr__
+
+
+def access_headers(environ=None) -> AccessHeaders | None:
+    """The optional Cloudflare Access service token (the gateway's public route sits behind it). Both variables or neither:
+    one alone, or a value with unexpected characters, is a configuration error. No message carries a value."""
+    env = os.environ if environ is None else environ
+    values = {name: env.get(name, "").strip() for name in (ACCESS_ID_ENV, ACCESS_SECRET_ENV)}
+    if not any(values.values()):
+        return None
+    if not all(values.values()):
+        raise InputError(f"set both {ACCESS_ID_ENV} and {ACCESS_SECRET_ENV}, or neither")
+    for name, value in values.items():
+        if not _ACCESS_VALUE.fullmatch(value):
+            raise InputError(f"{name} is not a valid Cloudflare Access value")
+    return AccessHeaders({"CF-Access-Client-Id": values[ACCESS_ID_ENV], "CF-Access-Client-Secret": values[ACCESS_SECRET_ENV]})
+
+
 class GatewayClient:
-    def __init__(self, config: dict, token: str, *, opener=_open, sleep=time.sleep, clock=time.monotonic):
+    def __init__(self, config: dict, token: str, *, access: AccessHeaders | None = None, opener=_open, sleep=time.sleep, clock=time.monotonic):
         agent = config["agent"]
         self.gateway, self.model = agent["gateway"], agent["model"]["name"]
         self.token, self.opener, self.sleep, self.clock = token, opener, sleep, clock
+        self.access = access
         self.deadline: float | None = None
 
     def set_time_limit(self, seconds: float) -> None:
@@ -84,6 +115,8 @@ class GatewayClient:
             headers["Authorization"] = f"Bearer {self.token}"
         else:
             headers[auth["header"]] = self.token
+        if self.access:
+            headers.update(self.access)
         return headers
 
     def complete(self, messages: list[dict], tools: list[dict], *, max_tokens: int) -> Completion:
@@ -112,7 +145,7 @@ class GatewayClient:
             with self.opener(request, timeout) as response:
                 data = self._read(response, limit)
         except urllib.error.HTTPError as exc:
-            raise GatewayError(f"the gateway returned HTTP {exc.code}", fatal=exc.code in (401, 403),
+            raise GatewayError(f"the gateway returned HTTP {exc.code}", fatal=exc.code in (401, 403) or 300 <= exc.code < 400,  # a redirect (Access sends a bad token to a login page) is never followed
                                transient=exc.code == 429 or exc.code >= 500) from None
         except (OSError, ValueError, http.client.HTTPException) as exc:  # URLError, timeouts, connection errors, and malformed replies
             raise GatewayError(f"the gateway could not be reached ({type(exc).__name__})", transient=True) from None

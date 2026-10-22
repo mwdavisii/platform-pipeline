@@ -24,3 +24,5 @@ jobs:
     uses: mwdavisii/scorecard-factory/.github/workflows/scorecard.yml@main
     secrets:
       SCORECARD_GATEWAY_KEY: ${{ secrets.SCORECARD_GATEWAY_KEY }}
+      SCORECARD_GATEWAY_ACCESS_ID: ${{ secrets.SCORECARD_GATEWAY_ACCESS_ID }}
+      SCORECARD_GATEWAY_ACCESS_SECRET: ${{ secrets.SCORECARD_GATEWAY_ACCESS_SECRET }}

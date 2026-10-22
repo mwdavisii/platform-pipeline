@@ -423,7 +423,7 @@ Nothing here has a safe default, so the steps use these placeholders and you fil
 ### 13.1 A public route to the gateway, and a scoped key
 GitHub's runners can't reach a gateway inside your cluster. Give the LiteLLM proxy a public hostname, `<scorecard gateway host>`, through the in-cluster `cloudflared` tunnel, and protect it with a LiteLLM virtual key that can only call the reviewer model, with a daily budget. **The hostname becomes public** (it is in the factory config), and the key is stored as a `hello-app` secret, which **anyone with write access to `hello-app` can read** (a workflow they write can print it). That is the accepted fallback for a personal account; in an organization, prefer GitHub OIDC to the gateway, bound to the factory workflow, so no key exists at all (`GATEWAY_AUTH: oidc` in `scorecard.yml`).
 
-1. **Firewall rule first, then the route.** Make the WAF rule before the hostname exists, so the admin API is never reachable on it, even briefly. In the Cloudflare dashboard for the zone, add a WAF custom rule that blocks everything on that host except the one call the agent makes: expression `(http.host eq "<scorecard gateway host>" and not (http.request.method eq "POST" and http.request.uri.path eq "/v1/chat/completions"))`, action **Block**. The LiteLLM admin API (`/key/*`, `/user/*`, the UI) then stays reachable only from inside your network. Only then add the public hostname to the tunnel: `<scorecard gateway host>` to the LiteLLM service (for a locally managed tunnel, an `ingress:` rule above the catch-all, such as `- hostname: <scorecard gateway host>` with `service: http://<litellm service>.<namespace>.svc:4000`; for a remotely managed one, Zero Trust -> Networks -> Tunnels -> your tunnel -> Public Hostname).
+1. **Firewall rule first, then the route.** Make the WAF rule before the hostname exists (and the Access application of step 4, if you use it), so the admin API is never reachable on it, even briefly. In the Cloudflare dashboard for the zone, add a WAF custom rule that blocks everything on that host except the one call the agent makes: expression `(http.host eq "<scorecard gateway host>" and not (http.request.method eq "POST" and http.request.uri.path eq "/v1/chat/completions"))`, action **Block**. The LiteLLM admin API (`/key/*`, `/user/*`, the UI) then stays reachable only from inside your network. Only then add the public hostname to the tunnel: `<scorecard gateway host>` to the LiteLLM service (for a locally managed tunnel, an `ingress:` rule above the catch-all, such as `- hostname: <scorecard gateway host>` with `service: http://<litellm service>.<namespace>.svc:4000`; for a remotely managed one, Zero Trust -> Networks -> Tunnels -> your tunnel -> Public Hostname).
    **Check:** `curl -sS -o /dev/null -w '%{http_code}\n' -X POST https://<scorecard gateway host>/v1/chat/completions -H 'Content-Type: application/json' -d '{}'` prints `401` (the route works and LiteLLM wants a key), and `curl -sS -o /dev/null -w '%{http_code}\n' https://<scorecard gateway host>/key/info` prints `403` (the WAF rule); a `GET` of the chat-completions path should print `403` too (only `POST` is let through).
 2. **Model.** In LiteLLM's `model_list`, add a model named `scorecard-reviewer` that points at `<reviewer model>`, the exact model version you chose (not a moving alias), and deploy it the way you deploy LiteLLM's config. **Decide this:** which model, and its version string (13.2 writes `<model version string>` into the factory config's `agent.model.version`).
 3. **Key.** From inside your network (never through the public route), create a virtual key limited to that model, with a budget. The key goes into a shell variable and is never printed:
@@ -444,6 +444,18 @@ GitHub's runners can't reach a gateway inside your cluster. Give the LiteLLM pro
    ask scorecard-reviewer   # 200
    ask <any other model>    # 401 or 403
    ```
+4. **Optional second layer: a Cloudflare Access service token.** With it, Cloudflare itself rejects any request that lacks the two headers `CF-Access-Client-Id` and `CF-Access-Client-Secret`, before it reaches LiteLLM; the LiteLLM key stays as the second layer, and the WAF rule stays. Both the Access application and the WAF rule can be created before the tunnel hostname exists, so do them first: if you want this layer, do this step before step 1 adds the public hostname. In Zero Trust -> Access -> Service credentials, create a service token (name it `scorecard-hello-app`) and copy the client id (`<hex>.access`) and the client secret now; the secret is shown once. Then Access -> Applications -> Add an application -> **Self-hosted**: hostname `<scorecard gateway host>` with an empty path, so the whole hostname is covered (the WAF rule still limits it to `POST /v1/chat/completions`), and a policy with action **Service Auth** that includes that service token (no other rule). In the application's settings turn on **Return 401 response for service auth policies**, so a request without a valid token gets a `401` and not a `302` to a login page. Put the values in shell variables and never print them:
+   ```bash
+   printf 'Access client id: '; read -rs SCORECARD_GATEWAY_ACCESS_ID; echo
+   printf 'Access client secret: '; read -rs SCORECARD_GATEWAY_ACCESS_SECRET; echo
+   export SCORECARD_GATEWAY_ACCESS_ID SCORECARD_GATEWAY_ACCESS_SECRET
+   ```
+   **Check:** the call from step 1 without the headers is refused by Cloudflare (`401`, or `403`), and the same call with the headers reaches LiteLLM and prints `401` for the missing key (not a Cloudflare answer); the secret stays out of the command line:
+   ```bash
+   curl -sS -o /dev/null -w '%{http_code}\n' -X POST https://<scorecard gateway host>/v1/chat/completions -H 'Content-Type: application/json' -d '{}' \
+     -H @<(printf 'CF-Access-Client-Id: %s\nCF-Access-Client-Secret: %s\n' "$SCORECARD_GATEWAY_ACCESS_ID" "$SCORECARD_GATEWAY_ACCESS_SECRET")
+   ```
+   The scorecard sends both headers on every model call, never follows a redirect, and stops with "needs a human" (T-14) on a `302`, `401` or `403`. Set both secrets in 13.5, or neither: setting only one makes the run "not assessed".
 
 ### 13.2 Bring the scorecard into the platform tree and release the builder
 The scorecard code ships inside the builder image (it needs `git`, which this release adds), so the platform tree needs the new code, a configured factory, and a new builder release. Make a fresh export, configure it the same way as step 1 plus the scorecard's gateway URL, carry over the things that only your published tree has, and copy the result over the published tree.
@@ -545,7 +557,19 @@ else
   echo "SCORECARD_GATEWAY_TOKEN is empty: redo 13.1 step 3 before setting the secrets"
 fi
 ```
-**Check:** `gh secret list --repo <you>/hello-app` lists `SCORECARD_GATEWAY_KEY`, and so does `gh secret list --repo <you>/hello-app --app dependabot`. Fork PRs never get it (and are "not assessed").
+If you did 13.1 step 4, set the two Access secrets too, from the shell where you exported them (both or neither; the same pattern, with the Dependabot copies):
+```bash
+if [ -n "${SCORECARD_GATEWAY_ACCESS_ID:-}" ] && [ -n "${SCORECARD_GATEWAY_ACCESS_SECRET:-}" ]; then
+  printf '%s' "$SCORECARD_GATEWAY_ACCESS_ID" | gh secret set SCORECARD_GATEWAY_ACCESS_ID --repo <you>/hello-app
+  printf '%s' "$SCORECARD_GATEWAY_ACCESS_SECRET" | gh secret set SCORECARD_GATEWAY_ACCESS_SECRET --repo <you>/hello-app
+  printf '%s' "$SCORECARD_GATEWAY_ACCESS_ID" | gh secret set SCORECARD_GATEWAY_ACCESS_ID --repo <you>/hello-app --app dependabot
+  printf '%s' "$SCORECARD_GATEWAY_ACCESS_SECRET" | gh secret set SCORECARD_GATEWAY_ACCESS_SECRET --repo <you>/hello-app --app dependabot
+  unset SCORECARD_GATEWAY_ACCESS_ID SCORECARD_GATEWAY_ACCESS_SECRET
+else
+  echo "the Access client id or secret is empty: redo 13.1 step 4, or skip these secrets"
+fi
+```
+**Check:** `gh secret list --repo <you>/hello-app` lists `SCORECARD_GATEWAY_KEY` (and, if you set them, `SCORECARD_GATEWAY_ACCESS_ID` and `SCORECARD_GATEWAY_ACCESS_SECRET`), and so does `gh secret list --repo <you>/hello-app --app dependabot`. Fork PRs never get it (and are "not assessed").
 
 **Known limit.** Dependabot-triggered runs can read the Dependabot copy of the key, which is the same exposure as the Actions secret (anyone with write access to `hello-app` can already read both). Rotating the key means setting both secrets again: generate a new key (13.1), run the two commands, and delete the old key with LiteLLM's `/key/delete` from inside your network; do that whenever someone loses write access to `hello-app`. Whether a Dependabot-triggered run really reads the Dependabot copy, and whether `report` can then label and comment, is proof item 10 in 13.7.
 

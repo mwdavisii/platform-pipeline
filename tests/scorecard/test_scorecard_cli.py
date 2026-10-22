@@ -572,7 +572,7 @@ def test_assess_builds_the_gateway_client_from_the_config_and_the_named_variable
     made = []
 
     class Recorder(OracleModel):
-        def __init__(self, config, token):
+        def __init__(self, config, token, access=None):
             made.append((config["agent"]["gateway"]["url"], token))
             super().__init__(default=PASS)
 
@@ -580,6 +580,39 @@ def test_assess_builds_the_gateway_client_from_the_config_and_the_named_variable
     code, doc, _, _ = run(command="assess")
     assert code == 0 and doc["complete"] is True
     assert made == [("https://gateway.example.invalid/v1/chat/completions", "gw-token-123")]
+
+
+def test_assess_passes_the_access_token_headers_to_the_gateway_client(app, run, monkeypatch):
+    app.commit({"app.py": APP + "\n# tidy\n"})
+    monkeypatch.setenv("SCORECARD_GATEWAY_TOKEN", "gw-token-123")
+    monkeypatch.setenv("SCORECARD_GATEWAY_ACCESS_ID", "abc123def456abcd.access")
+    monkeypatch.setenv("SCORECARD_GATEWAY_ACCESS_SECRET", "def456def456def456")
+    seen = []
+
+    class Recorder(OracleModel):
+        def __init__(self, config, token, access=None):
+            seen.append(dict(access))
+            super().__init__(default=PASS)
+
+    monkeypatch.setattr("scorecard.cli.GatewayClient", Recorder)
+    code, doc, _, _ = run(command="assess")
+    assert code == 0 and seen == [{"CF-Access-Client-Id": "abc123def456abcd.access", "CF-Access-Client-Secret": "def456def456def456"}]
+
+
+def test_assess_with_only_one_access_value_is_a_tool_error_that_does_not_echo_it(app, run, monkeypatch, capsys):
+    app.commit({"app.py": APP + "\n# tidy\n"})
+    monkeypatch.setenv("SCORECARD_GATEWAY_TOKEN", "gw-token-123")
+    monkeypatch.setenv("SCORECARD_GATEWAY_ACCESS_ID", "sentinel-id.access")
+    monkeypatch.delenv("SCORECARD_GATEWAY_ACCESS_SECRET", raising=False)
+    code, doc, _, _ = run(command="assess")
+    err = capsys.readouterr().err
+    assert code == 1 and doc is None and "both" in err and "sentinel-id" not in err
+
+
+def test_the_access_variables_are_not_runner_variables(app, run, monkeypatch):
+    from scorecard.config import runner_env
+
+    assert runner_env({"SCORECARD_GATEWAY_ACCESS_ID": "x", "SCORECARD_GATEWAY_ACCESS_SECRET": "y"}) == []
 
 
 def test_a_gateway_failure_still_writes_an_incomplete_assessment(app, run):

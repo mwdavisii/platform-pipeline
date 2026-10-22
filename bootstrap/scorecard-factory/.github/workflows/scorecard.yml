@@ -16,6 +16,12 @@ on:
       SCORECARD_GATEWAY_KEY:
         description: The scoped, budget-capped gateway key, used when GATEWAY_AUTH is key. Anyone with write access to the app repo can read it.
         required: false
+      SCORECARD_GATEWAY_ACCESS_ID:
+        description: Optional. The Cloudflare Access service token's client id, sent as CF-Access-Client-Id when the gateway's public route is behind Access. Set both this and SCORECARD_GATEWAY_ACCESS_SECRET, or neither.
+        required: false
+      SCORECARD_GATEWAY_ACCESS_SECRET:
+        description: Optional. The Cloudflare Access service token's client secret, sent as CF-Access-Client-Secret. Anyone with write access to the app repo can read it.
+        required: false
 
 permissions: {}
 
@@ -212,6 +218,8 @@ jobs:
       - name: Gateway credential
         env:
           KEY: ${{ secrets.SCORECARD_GATEWAY_KEY }}
+          ACCESS_ID: ${{ secrets.SCORECARD_GATEWAY_ACCESS_ID }}
+          ACCESS_SECRET: ${{ secrets.SCORECARD_GATEWAY_ACCESS_SECRET }}
         run: |
           set -euo pipefail
           umask 077
@@ -228,8 +236,19 @@ jobs:
               echo "::error::not assessed: GATEWAY_AUTH must be key or oidc"; exit 1 ;;
           esac
           [[ "$token" =~ ^[A-Za-z0-9._~+/=-]{16,8192}$ ]] || { echo "::error::not assessed: the gateway credential is empty or has unexpected characters"; exit 1; }
+          # Optional Cloudflare Access service token: both or neither, a plain charset (nothing that could add a line or a
+          # variable to the env file), never echoed.
+          if [ -n "$ACCESS_ID$ACCESS_SECRET" ]; then
+            { [ -n "$ACCESS_ID" ] && [ -n "$ACCESS_SECRET" ]; } || { echo "::error::not assessed: set both SCORECARD_GATEWAY_ACCESS_ID and SCORECARD_GATEWAY_ACCESS_SECRET, or neither"; exit 1; }
+            [[ "$ACCESS_ID" =~ ^[A-Za-z0-9._-]{16,512}$ && "$ACCESS_SECRET" =~ ^[A-Za-z0-9._-]{16,512}$ ]] || { echo "::error::not assessed: the Cloudflare Access service token has unexpected characters"; exit 1; }
+            echo "::add-mask::$ACCESS_ID"
+            echo "::add-mask::$ACCESS_SECRET"
+          fi
           echo "::add-mask::$token"
           printf 'SCORECARD_GATEWAY_TOKEN=%s\n' "$token" > "$RUNNER_TEMP/scorecard-gateway.env"
+          if [ -n "$ACCESS_ID" ]; then
+            printf 'SCORECARD_GATEWAY_ACCESS_ID=%s\nSCORECARD_GATEWAY_ACCESS_SECRET=%s\n' "$ACCESS_ID" "$ACCESS_SECRET" >> "$RUNNER_TEMP/scorecard-gateway.env"
+          fi
 
       - name: Run the review agent
         id: agent

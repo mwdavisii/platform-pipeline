@@ -167,6 +167,7 @@ def blank_setup_doc_edits(config, required=()):
         node[leaf] = None
     config["agent"]["model"].pop("temperature", None)  # optional: a deployment whose model rejects a temperature sets it to null
     config["agent"]["budget"]["max_run_seconds"] = None  # a deployment may set its own deadline, or 0 for none
+    config["agent"]["batching"]["max_turns"] = None  # a deployment may give the model more calls per batch
     return config
 
 

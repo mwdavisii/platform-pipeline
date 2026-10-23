@@ -115,7 +115,7 @@ def test_alerts_read_only_when_codeql_fails(gh, tmp_path):
     collect(tmp_path)
     assert not any("code-scanning" in " ".join(c["args"]) for c in gh.calls())
     gh.answer(["pr", "checks"], json.dumps([check("CodeQL")]))
-    url = f"repos/{REPO}/code-scanning/alerts?ref=refs/pull/7/merge&state=open&per_page=100"
+    url = f"repos/{REPO}/code-scanning/alerts?ref=refs/pull/7/head&state=open&per_page=100"
     gh.answer(["api", url], "")
     *_, alerts, _ = collect(tmp_path)
     assert alerts == []

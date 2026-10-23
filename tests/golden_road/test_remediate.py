@@ -176,6 +176,17 @@ def test_scorecard_assessed():
     only(run([check(ASSESSED)]), category="rerun", owner="platform")
 
 
+
+def test_the_scorecard_s_own_jobs_are_not_unknown_checks():
+    """A failing `scorecard / precondition` (Gate 1 is red) is the scorecard's, not the user's: alongside `scorecard / assessed` it adds
+    nothing, and alone it is handled as `assessed` is."""
+    gate1_red = [check(DRIFT), check(ASSESSED), check("scorecard / precondition")]
+    doc = run(gate1_red)
+    assert [i["check"] for i in doc["items"] if i["check"].startswith("scorecard")] == [ASSESSED]
+    alone = run([check(DRIFT, "pass", "SUCCESS"), check("scorecard / precondition")])
+    item = only(alone, check="scorecard / precondition")
+    assert item["owner"] != "user" and "not a golden-road check" not in item["guidance"].lower()
+
 def test_scorecard_levels():
     doc = run([check("scorecard / level: elevated", "pass", "SUCCESS")], {"scorecard": scorecard_comment(("T-14", "T-15"))})
     t15, t14 = only(doc, rule_id="T-15"), only(doc, rule_id="T-14")

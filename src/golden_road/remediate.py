@@ -280,6 +280,7 @@ TRIVY_CONFIG = "Fix the configuration the rule names, in the file the finding ci
 _VULN = re.compile(r"(?:CVE|GHSA|PYSEC|GO|RUSTSEC|OSV|NSWG-ECO)-")
 # What the platform names as the callers' workflows (a check's `workflow`); only their run links are offered as a re-run.
 PLATFORM_WORKFLOWS = ("ci", "promote", "scorecard", "security-scans", "CodeQL")
+SCORECARD_JOB = re.compile(r"scorecard / (precondition|assess|score|report)")
 
 
 def _protected(path) -> bool:
@@ -448,6 +449,9 @@ def classify(pr: dict, checks: list, comments: dict, alerts, root: Path, host: s
                 _codeql(items, name, alerts)
         elif name == CHECKS["scorecard"]:
             _assessed(items, name, bucket, link, pr, bool(gate1))
+        elif SCORECARD_JOB.fullmatch(name):  # the scorecard's other jobs: `assessed` already says it all, or stands in for it
+            if not any(n == CHECKS["scorecard"] for n, _, _ in rows):
+                _assessed(items, name, bucket, link, pr, bool(gate1))
         elif ANALYZE_CHECK.match(name) or bucket == "cancel":
             items.rerun(name, "codeql" if ANALYZE_CHECK.match(name) else "check", link)
         else:
@@ -472,9 +476,9 @@ def exit_code(doc: dict) -> int:
 PR_FIELDS = "number,state,isDraft,isCrossRepository,headRefName,headRefOid,url"
 CHECK_FIELDS = "name,state,bucket,link,workflow"
 COMMENT_JQ = ".[] | {id, login: .user.login, type: .user.type, updated_at, body}"
-# GitHub's documented ref for a PR's code scanning results; confirm on the demo PR (spec A15). If it returns nothing while the
-# Files tab shows an alert, switch this to refs/pull/{pr}/head.
-ALERT_REF = "refs/pull/{pr}/merge"
+# The PR's head ref: on the PoC (2026-10-23, CodeQL default setup) a PR's alerts are listed there and refs/pull/N/merge returned none
+# (spec A15).
+ALERT_REF = "refs/pull/{pr}/head"
 MAX_COMMENT_LINES = 1000
 MAX_BODY = 65_536
 _SHA = re.compile(r"[0-9a-f]{40}")

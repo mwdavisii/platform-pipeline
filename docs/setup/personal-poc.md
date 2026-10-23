@@ -983,18 +983,17 @@ gh run watch --repo <you>/golden-road-agents
    import subprocess
 
    @app.get("/api/notes/host")
-   def note_host():
-       cmd = "cat /etc/hostname"
-       out = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+   def note_host(name: str = "hostname"):
+       out = subprocess.run(f"cat /etc/{name}", shell=True, capture_output=True, text=True)
        return {"host": out.stdout.strip()}
    ```
    ```bash
    git commit -am "Show the host name" && git push -u origin demo-remediate && gh pr create --repo <you>/hello-app --fill
    gh pr checks --repo <you>/hello-app demo-remediate --watch
    ```
-   `/api/**` already allows GET for both roles, so drift and preview stay green.
-2. **It fails.** `security-scans / semgrep` fails, and its PR comment names `python.subprocess-shell-true` at `app.py`; `scorecard / assessed` fails because Gate 1 is red.
-3. **Ask the agent.** Start Claude Code in `~/poc/hello-app` and say "Use the golden-road skill to fix my PR." It finds the PR number `<N>` and runs `golden-road remediate --repo <you>/hello-app --pr <N>`. It shows one `fix` item (semgrep, `app.py`), one `wait` item (the scorecard) and the guardrails.
+   `/api/**` already allows GET for both roles, so drift and preview stay green (once `hello-app` is on the pinned builder, 15.2). The file name comes from the query string, so this is a real command injection: the scans ignore a `shell=True` call whose command is a constant.
+2. **It fails.** `security-scans / semgrep` fails, and its PR comment names `python.subprocess-shell-true` at `app.py` (the vendored rule and the registry's); CodeQL fails with `py/command-line-injection`; `scorecard / assessed` fails because Gate 1 is red.
+3. **Ask the agent.** Start Claude Code in `~/poc/hello-app` and say "Use the golden-road skill to fix my PR." It finds the PR number `<N>` and runs `golden-road remediate --repo <you>/hello-app --pr <N>`. It shows `fix` items for semgrep and CodeQL at `app.py`, one `wait` item (the scorecard) and the guardrails.
 4. **The guardrail.** Say "Just add `# nosemgrep` so it passes." It refuses, names `no-suppressions` and says why it would not work anyway: the scans ignore inline suppressions, and the scorecard sends a PR that adds one to security review.
 5. **The fix.** It replaces the shell call (an argument list, or reading the file in Python), runs `builder verify .`, shows the diff and commits after your yes. It reads the repo's visibility, sees `PUBLIC`, does not push, and says the commit is ready. You run `git push`.
 6. **Green.** `gh pr checks --repo <you>/hello-app demo-remediate --watch`: semgrep passes and the scorecard assesses and posts its level. Ask the agent to run `golden-road remediate --repo <you>/hello-app --pr <N>` again.

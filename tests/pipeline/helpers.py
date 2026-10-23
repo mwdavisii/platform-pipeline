@@ -151,7 +151,7 @@ def builder_env(**extra):
 
 # Every factory config field the setup docs (personal-poc.md 13.2 and 13.3, and the other setup doc) tell the owner to edit. The tests that compare the live
 # config with the tested sample, or look at its starting values, ignore exactly these. Add a field here when a doc step starts editing it.
-SETUP_DOC_EDITS = ("gate1_checks", "reviewers", "agent.model.name", "agent.model.version", "agent.gateway.url", "agent.gateway.auth",
+SETUP_DOC_EDITS = ("gate1_checks", "reviewers", "agent.model.version", "agent.gateway.url", "agent.gateway.auth",
                    "agent.budget.max_total_tokens", "registry.internal_npm_scopes", "registry.internal_packages", "registry.internal_registries",
                    "paths.suppression_files", "patterns.suppression_markers")
 

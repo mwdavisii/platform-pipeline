@@ -207,7 +207,7 @@ def test_a_live_config_replaces_only_the_agent_block(tmp_path, golden):
     live = yaml.safe_load(CONFIG.read_text())
     live["gate1_checks"].append({"name": "org / extra-check", "app_id": 1})
     live["patterns"]["injection"] = ["never matches anything"]
-    live["agent"]["model"] = {"name": "live-model", "version": "live-1"}
+    live["agent"]["model"] = {"version": "live-1"}
     path = tmp_path / "live.yaml"
     path.write_text(yaml.safe_dump(live))
     apps, cases, results, _, _ = golden
@@ -217,7 +217,7 @@ def test_a_live_config_replaces_only_the_agent_block(tmp_path, golden):
         want = next(r for r in results if r.name == name)
         assert got.card["level"] == want.card["level"] and got.card["triggers_fired"] == want.card["triggers_fired"]
         assert got.card["asvs"] == want.card["asvs"]
-        assert got.card["assessment"]["model"]["name"] == "live-model"
+        assert got.card["assessment"]["model"] == {"version": "live-1", "temperature": 0}
 
 
 def test_the_relative_report_cancels_noise_the_baseline_twin_also_makes():

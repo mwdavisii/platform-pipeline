@@ -6,6 +6,7 @@ InputError: the scorecard fails closed rather than scoring with a guessed config
 
 import os
 import re
+import urllib.parse
 from pathlib import Path
 
 import yaml
@@ -29,9 +30,20 @@ def runner_env(environ) -> list[str]:
     """Names of the runner's variables in `environ`: the exact names in RUNNER_TOKENS and anything starting with GITHUB_, ACTIONS_ or RUNNER_."""
     return sorted(name for name in environ if name in RUNNER_TOKENS or name.startswith(RUNNER_PREFIXES))
 # Headers the gateway client sets itself; the credential header can't replace them.
-RESERVED_HEADERS = {"host", "content-type", "content-length", "transfer-encoding", "connection", "accept",
+RESERVED_HEADERS = {"host", "content-type", "content-length", "transfer-encoding", "connection", "accept", "user-agent",
                     "cf-access-client-id", "cf-access-client-secret"}  # the Access service-token headers are set from their own variables
 _REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+
+# agent.gateway.url may hold the gateway's model name (SCORECARD_GATEWAY_MODEL) once, in its path: an APIM deployment URL.
+MODEL_PLACEHOLDER = "{model}"
+
+
+def _check_url(url: str, path) -> None:
+    rest = url.replace(MODEL_PLACEHOLDER, "", 1)
+    if "{" in rest or "}" in rest:
+        raise InputError(f"{path} agent.gateway.url can hold {MODEL_PLACEHOLDER} once and no other braces")
+    if MODEL_PLACEHOLDER in url and MODEL_PLACEHOLDER not in urllib.parse.urlsplit(url).path:
+        raise InputError(f"{path} agent.gateway.url can hold {MODEL_PLACEHOLDER} only in its path")
 
 
 def _strings(node):
@@ -136,6 +148,7 @@ def load_config(factory) -> dict:
     credential = agent["gateway"]["credential_env"]
     if credential in RUNNER_TOKENS or credential.startswith(RUNNER_PREFIXES):
         raise InputError(f"{path} agent.gateway.credential_env can't be a runner token")
+    _check_url(agent["gateway"]["url"], path)
     if agent["gateway"]["auth"].get("header", "").lower() in RESERVED_HEADERS:
         raise InputError(f"{path} agent.gateway.auth.header can't replace a header the client sets")
     return config

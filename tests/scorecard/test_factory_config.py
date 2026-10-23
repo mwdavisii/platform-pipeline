@@ -177,9 +177,28 @@ def _agent(factory, **changes):
     path.write_text(yaml.safe_dump(doc))
 
 
+def test_a_factory_config_that_still_names_the_model_is_refused_without_echoing_it(factory):
+    _agent(factory, model={"name": "sentinel-old-name", "version": "pinned-1"})
+    with pytest.raises(InputError, match="'name' was unexpected") as caught:
+        load_config(factory)
+    assert "sentinel-old-name" not in str(caught.value)
+
+
+def test_a_model_placeholder_in_the_path_is_accepted(factory):
+    url = "https://gateway.example.invalid/openai/deployments/{model}/chat/completions?api-version=2024-10-21"
+    _agent(factory, **{"gateway.url": url})
+    assert load_config(factory)["agent"]["gateway"]["url"] == url
+
+
+def test_a_misplaced_placeholder_message_names_the_rule(factory):
+    _agent(factory, **{"gateway.url": "https://gateway.example.invalid/v1/chat/completions?deployment={model}"})
+    with pytest.raises(InputError, match=r"\{model\} only in its path"):
+        load_config(factory)
+
+
 def test_sample_agent_config(config):
     agent = config["agent"]
-    assert agent["prompt_version"] == "review-1" and agent["model"] == {"name": "scorecard-reviewer", "version": "pinned-1"}
+    assert agent["prompt_version"] == "review-1" and agent["model"] == {"version": "pinned-1"}
     assert agent["gateway"]["auth"] == {"scheme": "bearer"} and agent["gateway"]["credential_env"] == "SCORECARD_GATEWAY_TOKEN"
 
 
@@ -189,6 +208,11 @@ def test_sample_agent_config(config):
     {"gateway.url": "http://gateway.example.invalid/v1/chat/completions"},
     {"gateway.url": "https://user@gateway.example.invalid/v1/chat/completions"},
     {"gateway.url": "https://gateway.example.invalid"},
+    {"gateway.url": "https://gateway.example.invalid/openai/deployments/{model}/{model}/chat/completions"},
+    {"gateway.url": "https://gateway.example.invalid/v1/chat/completions?deployment={model}"},
+    {"gateway.url": "https://gateway.example.invalid/openai/deployments/{deployment}/chat/completions"},
+    {"gateway.url": "https://gateway.example.invalid/openai/deployments/{model/chat/completions"},
+    {"gateway.url": "https://gateway.example.invalid/openai/deployments/model}/chat/completions"},
     {"gateway.credential_env": "GITHUB_TOKEN"},
     {"gateway.credential_env": "ACTIONS_ID_TOKEN_REQUEST_TOKEN"},
     {"gateway.credential_env": "lower_case"},
@@ -197,13 +221,15 @@ def test_sample_agent_config(config):
     {"gateway.credential_env": "ACTIONS_STUFF"},
     {"gateway.credential_env": "RUNNER_TEMP"},
     {"gateway.auth": {"scheme": "header", "header": "api-key\n"}},
-    {"model.name": "pinned\n"},
+    {"model.version": "pinned\n"},
+    {"model": {"name": "scorecard-reviewer", "version": "pinned-1"}},
     {"prompt_version": "review-1\n"},
     {"gateway.auth": {"scheme": "header"}},
     {"gateway.auth": {"scheme": "header", "header": "Host"}},
     {"gateway.auth": {"scheme": "header", "header": "CF-Access-Client-Id"}},
     {"gateway.auth": {"scheme": "header", "header": "cf-access-client-secret"}},
     {"gateway.auth": {"scheme": "basic"}},
+    {"gateway.auth": {"scheme": "header", "header": "User-Agent"}},
     {"budget.max_total_tokens": 0},
     {"batching.max_turns": 1},
     {"tools.max_read_lines": 100000},

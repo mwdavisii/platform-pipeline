@@ -141,7 +141,7 @@ def assess(prepared: Prepared, client: ModelClient, *, clock=time.monotonic) -> 
     if len(kept) > MAX_FINDINGS:
         kept, failed = kept[:MAX_FINDINGS], [*failed, {"batch": "all", "reason": f"more than {MAX_FINDINGS} findings"}]
     doc = {"schema": "assessment/v1", "tree_sha": scope["tree_sha"], "prompt_version": agent["prompt_version"],
-           "model": {"name": agent["model"]["name"], "version": agent["model"]["version"], "temperature": 0},
+           "model": {"version": agent["model"]["version"], "temperature": 0},
            "complete": not failed, "results": results, "findings": kept}
     try:
         check_assessment(doc, prepared.tree_sha)

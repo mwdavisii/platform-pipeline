@@ -169,11 +169,13 @@ suppressions:
 evidence:
   excluded_paths: ["_platform/*", ".builder.lock", "Dockerfile", "deploy/*", "*.md", "docs/*"]
 
-# The review agent. `scorecard run` refuses an assessment made with any other model or prompt version.
+# The review agent. `scorecard run` refuses an assessment made with any other model version or prompt version.
+# The model name the gateway expects is not here: it is the SCORECARD_GATEWAY_MODEL secret (it can be organization-sensitive).
+# Raise model.version whenever that secret's value, or the model behind it, changes.
 # The gateway credential (an OIDC-derived token or a scoped key) comes only from the named environment variable.
 agent:
   prompt_version: review-1
-  model: {name: scorecard-reviewer, version: "opus-5-pinned-1"}
+  model: {version: "opus-5-pinned-1"}
   gateway:
     url: "https://llm.mwdavisii.com/v1/chat/completions"
     auth: {scheme: bearer}

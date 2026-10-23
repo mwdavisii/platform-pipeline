@@ -193,7 +193,7 @@ def test_assess_answers_every_requirement_and_scores_standard(prepared):
     doc, stats = assess(p, model)
     assert validate("assessment.v1", doc) == [] and doc["complete"] is True
     assert [r["asvs_id"] for r in doc["results"]] == [r["id"] for r in p.agent_reqs]
-    assert doc["model"] == {"name": "scorecard-reviewer", "version": "pinned-1", "temperature": 0} and doc["prompt_version"] == "review-1"
+    assert doc["model"] == {"version": "pinned-1", "temperature": 0} and doc["prompt_version"] == "review-1"
     assert stats["batches"] == len(model.sent) // 2 and stats["failed_batches"] == [] and stats["tokens_used"] >= 1000 * len(model.sent)
     card, _ = finish(p, doc, registry=_NoLookups())
     assert card["level"] == "standard" and card["asvs"]["coverage"] == 100.0

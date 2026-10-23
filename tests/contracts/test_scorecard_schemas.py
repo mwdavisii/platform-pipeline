@@ -20,7 +20,7 @@ RESULT = {
 
 ASSESSMENT = {
     "schema": "assessment/v1", "tree_sha": "d" * 40, "prompt_version": "2026-10-21.1",
-    "model": {"name": "fixture-model", "version": "1", "temperature": 0}, "complete": True,
+    "model": {"version": "1", "temperature": 0}, "complete": True,
     "results": [{"asvs_id": "v5.0.0-8.2.2", "status": "pass", "confidence": "high", "justification": "Owner filter.", "evidence": [ANCHOR]}],
     "findings": [],
 }
@@ -92,6 +92,7 @@ def test_requirement_result_accepts_computed_sources(patch):
         lambda a: a["results"][0].update(status_source="agent"),  # the agent can't set computed fields
         lambda a: a["results"][0].update(evidence_verified=True),
         lambda a: a["model"].pop("temperature"),
+        lambda a: a["model"].update(name="fixture-model"),
         lambda a: a.update(findings=[{"id": HEX}]),
     ],
 )

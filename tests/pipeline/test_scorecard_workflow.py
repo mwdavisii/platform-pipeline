@@ -68,7 +68,7 @@ def test_triggers_permissions_and_concurrency():
     assert DOC["on"] == {
         "pull_request": {"types": ["opened", "synchronize", "reopened", "ready_for_review", "edited"]},
         "workflow_call": {"secrets": {name: {"description": DOC["on"]["workflow_call"]["secrets"][name]["description"], "required": False}
-                                      for name in ("SCORECARD_GATEWAY_KEY", "SCORECARD_GATEWAY_ACCESS_ID", "SCORECARD_GATEWAY_ACCESS_SECRET")}},
+                                      for name in ("SCORECARD_GATEWAY_KEY", "SCORECARD_GATEWAY_MODEL", "SCORECARD_GATEWAY_ACCESS_ID", "SCORECARD_GATEWAY_ACCESS_SECRET")}},
     }
     assert "inputs" not in DOC["on"]["workflow_call"], "a caller passes nothing that could weaken the run"
     assert DOC["permissions"] == {}
@@ -182,10 +182,14 @@ def credential_step():
     return step("assess", "Gateway credential")
 
 
-def run_credential(tmp_path, auth="key", key="", audience="", extra=None, bin_dir=None, access_id="", access_secret=""):
+GOOD_KEY, GOOD_ID, GOOD_SECRET = "sk-scorecard-0123456789abcdef", "0123456789abcdef.access", "ab" * 32
+GOOD_MODEL = "acme-sensitive-deploy-7"
+
+
+def run_credential(tmp_path, auth="key", key="", audience="", extra=None, bin_dir=None, access_id="", access_secret="", model=GOOD_MODEL):
     temp = tmp_path / "runner-temp"
     temp.mkdir(exist_ok=True)
-    env = {"GATEWAY_AUTH": auth, "KEY": key, "GATEWAY_OIDC_AUDIENCE": audience, "RUNNER_TEMP": str(temp),
+    env = {"GATEWAY_AUTH": auth, "KEY": key, "MODEL": model, "GATEWAY_OIDC_AUDIENCE": audience, "RUNNER_TEMP": str(temp),
            "ACCESS_ID": access_id, "ACCESS_SECRET": access_secret, **(extra or {})}
     out = run_step(credential_step()["run"], tmp_path, env, [bin_dir] if bin_dir else [])
     return out, temp / "scorecard-gateway.env"
@@ -193,7 +197,7 @@ def run_credential(tmp_path, auth="key", key="", audience="", extra=None, bin_di
 
 def test_the_credential_step_reads_only_the_key_secret():
     s = credential_step()
-    assert s["env"] == {"KEY": "${{ secrets.SCORECARD_GATEWAY_KEY }}", "ACCESS_ID": "${{ secrets.SCORECARD_GATEWAY_ACCESS_ID }}",
+    assert s["env"] == {"KEY": "${{ secrets.SCORECARD_GATEWAY_KEY }}", "MODEL": "${{ secrets.SCORECARD_GATEWAY_MODEL }}", "ACCESS_ID": "${{ secrets.SCORECARD_GATEWAY_ACCESS_ID }}",
                         "ACCESS_SECRET": "${{ secrets.SCORECARD_GATEWAY_ACCESS_SECRET }}"}
     agent = index("assess", lambda x: x.get("id") == "agent")
     assert index("assess", lambda x: x is s) == agent - 1, "the credential is made in its own step, right before the agent"
@@ -203,7 +207,7 @@ def test_the_credential_step_reads_only_the_key_secret():
 def test_a_key_becomes_a_private_env_file_naming_only_the_gateway_variable(tmp_path):
     out, cred = run_credential(tmp_path, key="sk-scorecard-0123456789abcdef")
     assert out.returncode == 0, out.stdout + out.stderr
-    assert cred.read_text() == "SCORECARD_GATEWAY_TOKEN=sk-scorecard-0123456789abcdef\n"
+    assert cred.read_text() == "SCORECARD_GATEWAY_TOKEN=sk-scorecard-0123456789abcdef\nSCORECARD_GATEWAY_MODEL=" + GOOD_MODEL + "\n"
     assert cred.stat().st_mode & 0o077 == 0
     assert "::add-mask::sk-scorecard-0123456789abcdef" in out.stdout
 
@@ -222,14 +226,13 @@ def test_a_missing_or_odd_credential_is_not_assessed_and_writes_nothing(tmp_path
     assert out.returncode == 1 and message in out.stdout and not cred.exists()
 
 
-GOOD_KEY, GOOD_ID, GOOD_SECRET = "sk-scorecard-0123456789abcdef", "0123456789abcdef.access", "ab" * 32
 NOT_BOTH = "::error::not assessed: set both SCORECARD_GATEWAY_ACCESS_ID and SCORECARD_GATEWAY_ACCESS_SECRET, or neither"
 
 
 def test_access_token_goes_to_the_env_file_only_when_both_are_set_and_is_never_echoed(tmp_path):
     out, cred = run_credential(tmp_path, key=GOOD_KEY, access_id=GOOD_ID, access_secret=GOOD_SECRET)
     assert out.returncode == 0, out.stdout + out.stderr
-    assert cred.read_text() == (f"SCORECARD_GATEWAY_TOKEN={GOOD_KEY}\nSCORECARD_GATEWAY_ACCESS_ID={GOOD_ID}\n"
+    assert cred.read_text() == (f"SCORECARD_GATEWAY_TOKEN={GOOD_KEY}\nSCORECARD_GATEWAY_MODEL={GOOD_MODEL}\nSCORECARD_GATEWAY_ACCESS_ID={GOOD_ID}\n"
                                 f"SCORECARD_GATEWAY_ACCESS_SECRET={GOOD_SECRET}\n")
     assert cred.stat().st_mode & 0o077 == 0
     for line in (out.stdout + out.stderr).splitlines():
@@ -240,7 +243,7 @@ def test_access_token_goes_to_the_env_file_only_when_both_are_set_and_is_never_e
 
 def test_without_an_access_token_the_env_file_is_unchanged(tmp_path):
     out, cred = run_credential(tmp_path, key=GOOD_KEY)
-    assert out.returncode == 0 and cred.read_text() == f"SCORECARD_GATEWAY_TOKEN={GOOD_KEY}\n"
+    assert out.returncode == 0 and cred.read_text() == f"SCORECARD_GATEWAY_TOKEN={GOOD_KEY}\nSCORECARD_GATEWAY_MODEL={GOOD_MODEL}\n"
 
 
 @pytest.mark.parametrize("access_id,access_secret", [(GOOD_ID, ""), ("", GOOD_SECRET)])
@@ -274,11 +277,13 @@ def test_an_access_value_with_unexpected_characters_is_not_assessed_and_not_echo
 def test_the_access_values_are_only_in_the_env_file_and_the_masks():
     run = credential_step()["run"]
     assert "SCORECARD_GATEWAY_ACCESS_ID=%s" in run and "SCORECARD_GATEWAY_ACCESS_SECRET=%s" in run
-    for name in ("ACCESS_ID", "ACCESS_SECRET"):
+    assert "SCORECARD_GATEWAY_MODEL=%s" in run
+    for name in ("MODEL", "ACCESS_ID", "ACCESS_SECRET"):
         for line in run.splitlines():
             if f"${name}" in line or f"${{{name}" in line:
                 assert not line.strip().startswith("echo") or "add-mask" in line, line
     assert "ACCESS" not in json.dumps(step("assess", "Run the review agent")), "the agent step never sees the secrets; the env file carries them"
+    assert "GATEWAY_MODEL" not in json.dumps(step("assess", "Run the review agent"))
 
 
 FAKE_CURL = r'''
@@ -295,7 +300,7 @@ def test_oidc_mode_asks_github_for_a_token_with_the_audience(tmp_path):
              "OIDC_TOKEN": jwt, "HEADER_LOG": str(tmp_path / "header"), "URL_LOG": str(tmp_path / "url")}
     out, cred = run_credential(tmp_path, auth="oidc", audience="scorecard-gateway", extra=extra, bin_dir=bin_dir)
     assert out.returncode == 0, out.stdout + out.stderr
-    assert cred.read_text() == f"SCORECARD_GATEWAY_TOKEN={jwt}\n"
+    assert cred.read_text() == f"SCORECARD_GATEWAY_TOKEN={jwt}\nSCORECARD_GATEWAY_MODEL={GOOD_MODEL}\n"
     assert (tmp_path / "url").read_text().strip() == "https://token.example/id?api-version=2.0&audience=scorecard-gateway"
     assert (tmp_path / "header").read_text() == "Authorization: bearer request-token\n", "the request token is never on curl's command line"
 
@@ -850,3 +855,39 @@ def test_assessed_writes_the_level_into_its_own_summary_from_env_only(tmp_path):
     env["LEVEL"] = "bogus"  # a value that is not a level never reaches the summary
     (tmp_path / "s").unlink()
     assert run_step(s["run"], tmp_path, env).returncode == 1
+
+
+def test_the_gateway_model_goes_to_the_env_file_masked_and_is_never_echoed(tmp_path):
+    out, cred = run_credential(tmp_path, key=GOOD_KEY)
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert cred.read_text() == f"SCORECARD_GATEWAY_TOKEN={GOOD_KEY}\nSCORECARD_GATEWAY_MODEL={GOOD_MODEL}\n" and cred.stat().st_mode & 0o077 == 0
+    assert f"::add-mask::{GOOD_MODEL}" in out.stdout
+    for line in (out.stdout + out.stderr).splitlines():
+        assert GOOD_MODEL not in line or line == f"::add-mask::{GOOD_MODEL}", "the value is only ever named in an add-mask command"
+
+
+@needs_jq
+@pytest.mark.parametrize("auth", ["key", "oidc"])
+def test_a_missing_gateway_model_is_not_assessed_and_writes_nothing(tmp_path, auth):
+    """In oidc mode the token is fetched first (a fake curl), so the model check is what stops the step in both modes."""
+    jwt = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJyZXBvIn0.c2lnbmF0dXJl"
+    extra = {"ACTIONS_ID_TOKEN_REQUEST_URL": "https://token.example/id?api-version=2.0", "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "request-token",
+             "OIDC_TOKEN": jwt, "HEADER_LOG": str(tmp_path / "header"), "URL_LOG": str(tmp_path / "url")}
+    out, cred = run_credential(tmp_path, auth=auth, key=GOOD_KEY, audience="scorecard-gateway", model="", extra=extra,
+                               bin_dir=fake_bin(tmp_path, curl=FAKE_CURL))
+    assert out.returncode == 1 and not cred.exists()
+    assert "::error::not assessed: the SCORECARD_GATEWAY_MODEL secret is not set" in out.stdout
+
+
+@pytest.mark.parametrize("bad", [".", "..", "a b", "a/b", "a%2fb", "{model}", "a?b", "abc\nSCORECARD_GATEWAY_TOKEN=x", "a=b", "ab\r", "t\u00f6k", "a" * 129])
+def test_a_gateway_model_with_unexpected_characters_is_not_assessed_and_not_echoed(tmp_path, bad):
+    out, cred = run_credential(tmp_path, key=GOOD_KEY, model=bad)
+    assert out.returncode == 1 and "::error::not assessed: SCORECARD_GATEWAY_MODEL has unexpected characters" in out.stdout and not cred.exists()
+    assert "SCORECARD_GATEWAY_TOKEN=x" not in out.stdout + out.stderr
+    if len(bad.strip()) > 2:
+        assert bad.strip() not in out.stdout + out.stderr
+
+
+def test_the_longest_gateway_model_is_accepted(tmp_path):
+    out, cred = run_credential(tmp_path, key=GOOD_KEY, model="a" * 128)
+    assert out.returncode == 0 and cred.exists()

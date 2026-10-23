@@ -42,14 +42,15 @@ def check_assessment(doc, tree_sha: str) -> dict:
 
 
 def check_approved(doc: dict, config: dict) -> None:
-    """O10: only an assessment made with the factory's approved model and prompt version is scored. Anything else is refused
-    (an InputError, so `scorecard run` exits 1 with no outputs), the same as an assessment for another tree."""
+    """O10: only an assessment made with the factory's approved model version and prompt version is scored. Anything else is
+    refused (an InputError, so `scorecard run` exits 1 with no outputs), the same as an assessment for another tree. The model
+    name is not compared: it is a secret (SCORECARD_GATEWAY_MODEL) the version labels."""
     agent = config["agent"]
-    approved = {"name": agent["model"]["name"], "version": agent["model"]["version"], "temperature": 0}
+    approved = {"version": agent["model"]["version"], "temperature": 0}
     if doc["prompt_version"] != agent["prompt_version"] or doc["model"] != approved:
-        raise InputError(f"the assessment was made with model {doc['model']['name']!r} version {doc['model']['version']!r} "
-                         f"(temperature {doc['model']['temperature']}) and prompt {doc['prompt_version']!r}; the factory config "
-                         f"approves {approved['name']!r} version {approved['version']!r} at temperature 0 with prompt {agent['prompt_version']!r}")
+        raise InputError(f"the assessment was made with model version {doc['model']['version']!r} (temperature {doc['model']['temperature']}) "
+                         f"and prompt {doc['prompt_version']!r}; the factory config approves model version {approved['version']!r} "
+                         f"at temperature 0 with prompt {agent['prompt_version']!r}")
 
 
 def _verified(evidence: list, repo_root, citable: set | None = None) -> bool:

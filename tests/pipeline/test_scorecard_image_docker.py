@@ -100,13 +100,15 @@ def test_the_agent_step_and_scorecard_run_in_the_image(builder_image, tmp_path):
     shutil.copytree(FIXTURE_FACTORY, factory)
     config = factory / "config/scorecard.yaml"
     retry = yaml.safe_load(config.read_text())["agent"]["gateway"]["retry_seconds"]
-    config.write_text(config.read_text().replace(f"retry_seconds: {retry}", "retry_seconds: 0"))
+    wire = "acme-sensitive-deploy-7"
+    config.write_text(config.read_text().replace(f"retry_seconds: {retry}", "retry_seconds: 0")
+                      .replace("https://gateway.example.invalid/v1/chat/completions", "https://gateway.example.invalid/openai/deployments/{model}/chat/completions"))
     event = tmp_path / "event.json"
     event.write_text(json.dumps({"pull_request": {"draft": False, "title": "t", "head": {"sha": head, "repo": {"full_name": "acme/notes"}},
                                                   "base": {"repo": {"full_name": "acme/notes"}}}}))
     temp = tmp_path / "runner-temp"
     temp.mkdir()
-    (temp / "scorecard-gateway.env").write_text("SCORECARD_GATEWAY_TOKEN=sk-scorecard-0123456789abcdef\n")
+    (temp / "scorecard-gateway.env").write_text(f"SCORECARD_GATEWAY_TOKEN=sk-scorecard-0123456789abcdef\nSCORECARD_GATEWAY_MODEL={wire}\n")
     # The image bakes platform/required-checks.json into its Gate 1 list, so a configured tree (one that lists the scans) needs them green too.
     baked = [{"name": c["name"], "state": "success"} for c in json.loads((ROOT / "platform/required-checks.json").read_text())["required"]]
     checks = json.dumps({**json.loads(CHECKS_DOC), "required_checks": [{"name": "golden-road / drift", "state": "success"},
@@ -134,3 +136,15 @@ def test_the_agent_step_and_scorecard_run_in_the_image(builder_image, tmp_path):
     card = json.loads((tmp_path / "out/scorecard.json").read_text())
     assert card["level"] == "elevated" and "T-14" in card["triggers_fired"]
     assert (tmp_path / "out/comment.md").read_text().startswith("<!-- golden-road:scorecard -->\n")
+    for text in (out.stdout, out.stderr, run.stdout, run.stderr,
+                 *((tmp_path / "out" / name).read_text() for name in ("assessment.json", "scorecard.json", "scorecard.md", "comment.md", "github.json"))):
+        assert wire not in text
+
+
+def test_the_image_s_scorecard_sends_its_own_user_agent(builder_image):
+    from builder import VERSION
+
+    code = "from scorecard.agent.gateway import USER_AGENT; print(USER_AGENT)"
+    out = subprocess.run(["docker", "run", "--rm", "--network", "none", "--read-only", "--tmpfs", "/tmp", builder_image, "python", "-c", code],
+                         capture_output=True, text=True)
+    assert out.returncode == 0 and out.stdout.strip() == f"golden-road-scorecard/{VERSION}", out.stderr

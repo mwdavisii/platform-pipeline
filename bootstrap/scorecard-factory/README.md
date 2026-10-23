@@ -41,6 +41,7 @@ A PR that was not assessed stays failed until the author pushes again or someone
 
 - **`oidc` (preferred).** The job asks GitHub for an OIDC token with the audience `GATEWAY_OIDC_AUDIENCE`. The gateway validates it, must accept only tokens whose `job_workflow_ref` is exactly `<org>/scorecard-factory/.github/workflows/scorecard.yml@refs/heads/main` (so `.../workflows/scorecard.yml@refs/heads/main` of this repository and no other workflow, branch or repository) with `event_name == pull_request`, and enforces a per-repo daily budget. No secret exists anywhere. Whether Dependabot-triggered runs get an OIDC token at all is a proof item.
 - **`key` (accepted fallback).** A scoped, budget-capped gateway key in the app repo's `SCORECARD_GATEWAY_KEY` secret. **Anyone with write access to the app repo can read it** (a workflow they write can print it), so the key must be limited to the reviewer model and capped in spend, and rotated when people leave.
+- **The model name, in both modes.** The `SCORECARD_GATEWAY_MODEL` secret holds the name the gateway expects (an APIM deployment name, for example). It is not in `config/scorecard.yaml` because it can be organization-sensitive; it is sent in the request and in a `{model}` in the gateway URL, masked in the logs, and never written to the assessment, the scorecard or the comment. Without it, or with characters outside `A-Z a-z 0-9 . _ -`, the PR is "not assessed".
 
 Either way the credential is written to a file only the next step reads, which passes it to the container with `--env-file` and deletes it. The `assess` job keeps `id-token: write` in key mode too (an expression can't set permissions), where it is unused in key mode.
 
@@ -50,7 +51,7 @@ Either way the credential is written to a file only the next step reads, which p
 
 - **Onboard an app:** the app's author (or their agent) opens an intake request from the form; security sets the tier and adds `intake/<owner>/<repo>.yaml` (security review), then requires the workflow on the repo. A request opened from the command line (`gh issue create`) by someone without triage access has no label, so look for the title `Intake request: <owner>/<repo>` as well as the `intake-request` label.
 - **Accept a finding:** add a suppression file; **confirm an N/A:** add an `na/` entry. Both need security review.
-- **Change thresholds, triggers, the model or the budget:** edit `config/scorecard.yaml`. `scorecard run` refuses an assessment whose model or prompt version isn't the one configured here.
+- **Change thresholds, triggers, the model or the budget:** edit `config/scorecard.yaml`. `scorecard run` refuses an assessment whose model version or prompt version isn't the one configured here. When `SCORECARD_GATEWAY_MODEL` changes, raise `agent.model.version` in the same change. `agent.model.version` must not contain the deployment name; the scorecard refuses it.
 - **Update the scorecard code:** release a new builder image and pin its digest in `BUILDER_IMAGE`.
 - Every edit takes effect for every app repo at its next pull request, because the workflow and the intake action are read from `main`.
 

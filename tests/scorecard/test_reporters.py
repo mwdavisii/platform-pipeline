@@ -41,7 +41,7 @@ def _card(findings=(), results=(), reasons=None, level="security_review"):
                  "chapters": [{"chapter": "v5.0.0-8", "name": "Authorization", "score": 100.0, "counts": counts}]},
         "signals": {"findings": [], "skipped_packages": [], "lookup_failures": [], "input_problems": [], "pr_text_hits": []},
         "assessment": {"present": True, "tree_sha": "c" * 40, "prompt_version": "fixture", "complete": True, "ignored_results": [],
-                       "model": {"name": "fake", "version": "1", "temperature": 0}, "findings": list(findings)},
+                       "model": {"version": "1", "temperature": 0}, "findings": list(findings)},
         "observations": {"checks": [{"name": "golden-road / drift", "state": "success", "observed_at": "2026-10-21T12:00:00Z"}], "findings": []},
         "suppressions_applied": [],
     }
@@ -199,3 +199,7 @@ def test_refs_shown_match_the_cap_the_summary_states():
 def test_pgp_private_key_blocks_are_redacted():
     text = "-----BEGIN PGP PRIVATE KEY BLOCK-----\nlQdGBF2abc\n=ab12\n-----END PGP PRIVATE KEY BLOCK-----\nafter"
     assert redact(text) == "[redacted: private-key]\nafter"
+
+
+def test_the_assessment_line_shows_the_model_version_only():
+    assert "Model version 1 at temperature 0, prompt fixture. Complete." in _render(_card())

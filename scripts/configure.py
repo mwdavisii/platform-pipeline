@@ -9,6 +9,7 @@ Usage: scripts/configure.py --org <org> --gateway-host <host> --edge-namespace N
 --scorecard-gateway-url is the chat-completions URL the scorecard's review agent calls from the CI runners. It
 defaults to https://<gateway host>/v1/chat/completions; pass it when the runners reach the gateway at another
 address (a public route to a gateway that the apps reach inside the cluster, or an API-management front end).
+An APIM deployment URL may write `{model}` where the deployment name goes; the scorecard fills it from the SCORECARD_GATEWAY_MODEL secret.
 
 --github-host and --cert-oidc-issuer name the GitHub host the platform lives on and the issuer of its Actions OIDC tokens. They are
 recorded in platform/platform.json (doctor reads them there) and written into the golden-road-agents kit (the stub trusts that
@@ -60,7 +61,7 @@ HOST_SITES = {
 SCORECARD_CONFIG = Path("scorecard-factory/config/scorecard.yaml")
 SCORECARD_URL_PLACEHOLDER = "https://llm.replace-me.invalid/v1/chat/completions"
 # The scorecard config schema's gateway URL rule, without query-string quotes or spaces so it can sit in quoted YAML.
-SCORECARD_URL = re.compile(r"https://([A-Za-z0-9.-]+)(:[0-9]{1,5})?/[A-Za-z0-9._~%/?&=+-]*")
+SCORECARD_URL = re.compile(r"https://([A-Za-z0-9.-]+)(:[0-9]{1,5})?/(?:[A-Za-z0-9._~%/?&=+-]|\{model\})*")  # {model}: see scorecard.config
 # Every file that holds a placeholder in the committed, unconfigured tree, and the text that proves it still does.
 # configure.py rewrites all of them. scripts/export-public-poc.sh reads this list (--print-placeholder-state) and
 # refuses to export a tree in which any of them has been configured; a test keeps it in step with the tree.

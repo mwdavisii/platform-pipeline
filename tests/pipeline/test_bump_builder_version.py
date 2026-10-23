@@ -36,7 +36,7 @@ def next_patch(version):
 def make_scratch(root, source=ROOT):
     """A scratch copy of `source` in the committed, unconfigured state, whatever `source` has been configured to: the same steps as
     test_configure.py's workspace fixture. Without them configure.py refuses a tree that is already configured (an exported one)."""
-    shutil.copytree(source, root, symlinks=True, ignore=shutil.ignore_patterns(".git", "__pycache__", ".pytest_cache", ".venv", ".claude", "node_modules"))
+    shutil.copytree(source, root, symlinks=True, ignore=shutil.ignore_patterns(".git", "__pycache__", ".pytest_cache", ".venv", ".claude", ".codegraph", "node_modules"))
     live = json.loads((source / "platform/platform.json").read_text())
     unconfigure_platform(root / "platform")
     unconfigure_hello_app(root / "bootstrap/hello-app")

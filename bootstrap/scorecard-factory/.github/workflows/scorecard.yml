@@ -16,6 +16,9 @@ on:
       SCORECARD_GATEWAY_KEY:
         description: The scoped, budget-capped gateway key, used when GATEWAY_AUTH is key. Anyone with write access to the app repo can read it.
         required: false
+      SCORECARD_GATEWAY_MODEL:
+        description: Required for an assessment (without it the PR is "not assessed"). The model name the gateway expects, such as an APIM deployment name, sent as the request's model and in a {model} in the gateway URL. A secret because it can be organization-sensitive; raise agent.model.version in the factory whenever it changes.
+        required: false
       SCORECARD_GATEWAY_ACCESS_ID:
         description: Optional. The Cloudflare Access service token's client id, sent as CF-Access-Client-Id when the gateway's public route is behind Access. Set both this and SCORECARD_GATEWAY_ACCESS_SECRET, or neither.
         required: false
@@ -214,10 +217,11 @@ jobs:
           echo "sha256=$digest" >> "$GITHUB_OUTPUT"
 
       # In its own step: the runner's OIDC request variables are in every step's environment, so the credential is made
-      # here and handed to the agent as a file that names only the gateway variable.
+      # here and handed to the agent as a file that names only the gateway variables (credential, model name, optional Access token).
       - name: Gateway credential
         env:
           KEY: ${{ secrets.SCORECARD_GATEWAY_KEY }}
+          MODEL: ${{ secrets.SCORECARD_GATEWAY_MODEL }}
           ACCESS_ID: ${{ secrets.SCORECARD_GATEWAY_ACCESS_ID }}
           ACCESS_SECRET: ${{ secrets.SCORECARD_GATEWAY_ACCESS_SECRET }}
         run: |
@@ -236,6 +240,11 @@ jobs:
               echo "::error::not assessed: GATEWAY_AUTH must be key or oidc"; exit 1 ;;
           esac
           [[ "$token" =~ ^[A-Za-z0-9._~+/=-]{16,8192}$ ]] || { echo "::error::not assessed: the gateway credential is empty or has unexpected characters"; exit 1; }
+          # The gateway's model name: required, path-safe (it can go into the URL's path; nothing in it can add a line or a
+          # variable to the env file), masked and never echoed. It is a secret because it can be organization-sensitive.
+          [ -n "$MODEL" ] || { echo "::error::not assessed: the SCORECARD_GATEWAY_MODEL secret is not set"; exit 1; }
+          [[ "$MODEL" =~ ^[A-Za-z0-9._-]{1,128}$ && "$MODEL" != . && "$MODEL" != .. ]] || { echo "::error::not assessed: SCORECARD_GATEWAY_MODEL has unexpected characters"; exit 1; }
+          echo "::add-mask::$MODEL"
           # Optional Cloudflare Access service token: both or neither, a plain charset (nothing that could add a line or a
           # variable to the env file), never echoed.
           if [ -n "$ACCESS_ID$ACCESS_SECRET" ]; then
@@ -246,6 +255,7 @@ jobs:
           fi
           echo "::add-mask::$token"
           printf 'SCORECARD_GATEWAY_TOKEN=%s\n' "$token" > "$RUNNER_TEMP/scorecard-gateway.env"
+          printf 'SCORECARD_GATEWAY_MODEL=%s\n' "$MODEL" >> "$RUNNER_TEMP/scorecard-gateway.env"
           if [ -n "$ACCESS_ID" ]; then
             printf 'SCORECARD_GATEWAY_ACCESS_ID=%s\nSCORECARD_GATEWAY_ACCESS_SECRET=%s\n' "$ACCESS_ID" "$ACCESS_SECRET" >> "$RUNNER_TEMP/scorecard-gateway.env"
           fi

@@ -336,9 +336,16 @@ def test_the_scorecard_gateway_url_can_differ_from_the_app_gateway(workspace):
     assert out.returncode != 0 and "already" in out.stderr and factory_url(workspace) == url
 
 
+def test_the_scorecard_gateway_url_may_carry_the_model_placeholder(workspace):
+    url = "https://apim.example.org/openai/deployments/{model}/chat/completions?api-version=2024-10-21"
+    assert configure(workspace, *GOOD, "--scorecard-gateway-url", url).returncode == 0
+    assert factory_url(workspace) == url
+
+
 @pytest.mark.parametrize("url", ["http://llm.example.org/v1/chat/completions", "https://user@llm.example.org/v1", "https://llm.example.org",
                                  "https://llm.example.org/v1#x", "https://llm.replace-me.invalid/v1/chat/completions",
-                                 'https://llm.example.org/v1"x', "https://api.openai.com/v1/chat/completions", "https://not_a_host/v1"])
+                                 'https://llm.example.org/v1"x', "https://api.openai.com/v1/chat/completions", "https://not_a_host/v1",
+                                 "https://llm.example.org/v1/chat/completions?deployment={model}", "https://llm.example.org/openai/{other}/chat/completions"])
 def test_a_bad_scorecard_gateway_url_changes_nothing(workspace, url):
     before = (workspace / FACTORY_CONFIG).read_text()
     assert configure(workspace, *GOOD, "--scorecard-gateway-url", url).returncode != 0

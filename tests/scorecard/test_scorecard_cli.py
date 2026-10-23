@@ -1,10 +1,14 @@
 """End-to-end: the `scorecard` CLI on a fixture app repo, a fake registry, and fixture assessment files."""
 
 import copy
+import email.message
+import functools
+import io
 import json
 import shutil
 import subprocess
 import tomllib
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -98,7 +102,7 @@ def full_assessment(app, run, *, repo="acme/notes", status="pass", bad=None, dro
         anchor = {**EVIDENCE, "start_line": 99} if bad and asvs_id in bad else EVIDENCE
         results.append({"asvs_id": asvs_id, "status": status, "confidence": "high", "justification": "owner filter", "evidence": [anchor]})
     return {"schema": "assessment/v1", "tree_sha": tree, "prompt_version": "review-1",
-            "model": {"name": "scorecard-reviewer", "version": "pinned-1", "temperature": 0}, "complete": True, "results": results, "findings": []}
+            "model": {"version": "pinned-1", "temperature": 0}, "complete": True, "results": results, "findings": []}
 
 
 def test_clean_pr_with_a_full_assessment(app, run):
@@ -430,22 +434,31 @@ def test_redacting_unverified_evidence_does_not_mutate_shared_anchors():
 
 @pytest.mark.parametrize("change", [
     {"prompt_version": "review-0"},
-    {"model": {"name": "other-model", "version": "pinned-1", "temperature": 0}},
-    {"model": {"name": "scorecard-reviewer", "version": "pinned-2", "temperature": 0}},
-    {"model": {"name": "scorecard-reviewer", "version": "pinned-1", "temperature": 0.7}},
+    {"model": {"version": "pinned-2", "temperature": 0}},
+    {"model": {"version": "pinned-1", "temperature": 0.7}},
 ])
 def test_an_assessment_from_an_unapproved_model_or_prompt_is_refused(app, run, capsys, change):
     """O10: the score job scores only the approved model and prompt; anything else exits 1 with no outputs."""
     app.commit({"app.py": APP + "\n# tidy\n"})
     code, card, out, _ = run(assessment={**full_assessment(app, run), **change})
     assert code == 1 and card is None and not (out / "scorecard.md").exists()
-    assert "the factory config approves 'scorecard-reviewer' version 'pinned-1'" in capsys.readouterr().err
+    assert "the factory config approves model version 'pinned-1'" in capsys.readouterr().err
+
+
+def test_an_assessment_that_still_records_a_model_name_is_refused_without_echoing_it(app, run, capsys):
+    app.commit({"app.py": APP + "\n# tidy\n"})
+    doc = full_assessment(app, run)
+    doc["model"] = {"name": "sentinel-old-name", "version": "pinned-1", "temperature": 0}
+    code, card, out, _ = run(assessment=doc)
+    err = capsys.readouterr().err
+    assert code == 1 and card is None and not (out / "comment.md").exists()
+    assert "'name' was unexpected" in err and "sentinel-old-name" not in err
 
 
 # scorecard assess: the agent, through the CLI, with a fake model client.
 
 from scorecard.agent.fake import OracleModel  # noqa: E402
-from scorecard.agent.gateway import GatewayError  # noqa: E402
+from scorecard.agent.gateway import GatewayClient, GatewayError  # noqa: E402
 from scorecard.config import runner_env  # noqa: E402
 
 PASS = {"status": "pass", "evidence": [EVIDENCE]}
@@ -569,28 +582,30 @@ def test_assess_builds_the_gateway_client_from_the_config_and_the_named_variable
     app.commit({"app.py": APP + "\n# tidy\n"})
     monkeypatch.setenv("SCORECARD_GATEWAY_TOKEN", "gw-token-123")
     monkeypatch.setenv("OTHER_TOKEN", "not-this-one")
+    monkeypatch.setenv("SCORECARD_GATEWAY_MODEL", "acme-sensitive-deploy-7")
     made = []
 
     class Recorder(OracleModel):
-        def __init__(self, config, token, access=None):
-            made.append((config["agent"]["gateway"]["url"], token))
+        def __init__(self, config, token, *, model, access=None):
+            made.append((config["agent"]["gateway"]["url"], token, model))
             super().__init__(default=PASS)
 
     monkeypatch.setattr("scorecard.cli.GatewayClient", Recorder)
     code, doc, _, _ = run(command="assess")
     assert code == 0 and doc["complete"] is True
-    assert made == [("https://gateway.example.invalid/v1/chat/completions", "gw-token-123")]
+    assert made == [("https://gateway.example.invalid/v1/chat/completions", "gw-token-123", "acme-sensitive-deploy-7")]
 
 
 def test_assess_passes_the_access_token_headers_to_the_gateway_client(app, run, monkeypatch):
     app.commit({"app.py": APP + "\n# tidy\n"})
     monkeypatch.setenv("SCORECARD_GATEWAY_TOKEN", "gw-token-123")
+    monkeypatch.setenv("SCORECARD_GATEWAY_MODEL", "acme-sensitive-deploy-7")
     monkeypatch.setenv("SCORECARD_GATEWAY_ACCESS_ID", "abc123def456abcd.access")
     monkeypatch.setenv("SCORECARD_GATEWAY_ACCESS_SECRET", "def456def456def456")
     seen = []
 
     class Recorder(OracleModel):
-        def __init__(self, config, token, access=None):
+        def __init__(self, config, token, *, model, access=None):
             seen.append(dict(access))
             super().__init__(default=PASS)
 
@@ -602,6 +617,7 @@ def test_assess_passes_the_access_token_headers_to_the_gateway_client(app, run, 
 def test_assess_with_only_one_access_value_is_a_tool_error_that_does_not_echo_it(app, run, monkeypatch, capsys):
     app.commit({"app.py": APP + "\n# tidy\n"})
     monkeypatch.setenv("SCORECARD_GATEWAY_TOKEN", "gw-token-123")
+    monkeypatch.setenv("SCORECARD_GATEWAY_MODEL", "acme-sensitive-deploy-7")
     monkeypatch.setenv("SCORECARD_GATEWAY_ACCESS_ID", "sentinel-id.access")
     monkeypatch.delenv("SCORECARD_GATEWAY_ACCESS_SECRET", raising=False)
     code, doc, _, _ = run(command="assess")
@@ -613,6 +629,93 @@ def test_the_access_variables_are_not_runner_variables(app, run, monkeypatch):
     from scorecard.config import runner_env
 
     assert runner_env({"SCORECARD_GATEWAY_ACCESS_ID": "x", "SCORECARD_GATEWAY_ACCESS_SECRET": "y"}) == []
+
+
+WIRE = "acme-sensitive-deploy-7"
+
+
+class _Reply(io.BytesIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class EchoingGateway:
+    """A fake gateway behind the real HTTP client (it is the opener). It answers with the oracle's messages and echoes the
+    deployment in every reply, as APIM does; with `fail` it answers 404 with an error body that names the deployment."""
+
+    def __init__(self, fail=False):
+        self.oracle, self.fail, self.requests = OracleModel(default=PASS), fail, []
+
+    def __call__(self, request, timeout):
+        self.requests.append(request)
+        body = json.loads(request.data)
+        if self.fail:
+            error = json.dumps({"error": {"message": f"The API deployment {WIRE} does not exist"}}).encode()
+            raise urllib.error.HTTPError(request.full_url, 404, f"deployment {WIRE}", {}, io.BytesIO(error))
+        done = self.oracle.complete(body["messages"], body["tools"], max_tokens=body["max_tokens"])
+        return _Reply(json.dumps({"model": WIRE, "choices": [{"message": done.message}], "usage": {"total_tokens": 10}}).encode())
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_the_gateway_model_reaches_the_gateway_and_nothing_else(app, run, factory, monkeypatch, capsys, fail):
+    app.commit({"app.py": APP + "\n# tidy\n"})
+    cfg = factory / "config/scorecard.yaml"
+    cfg.write_text(cfg.read_text().replace("https://gateway.example.invalid/v1/chat/completions",
+                                           "https://gateway.example.invalid/openai/deployments/{model}/chat/completions"))
+    monkeypatch.setenv("SCORECARD_GATEWAY_TOKEN", "gw-token-123")
+    monkeypatch.setenv("SCORECARD_GATEWAY_MODEL", WIRE)
+    gateway = EchoingGateway(fail)
+    monkeypatch.setattr("scorecard.cli.GatewayClient", functools.partial(GatewayClient, opener=gateway, sleep=lambda s: None))
+    code, doc, _, _ = run(command="assess")
+    assert code == 0 and doc["complete"] is (not fail)
+    assert gateway.requests and all(f"/deployments/{WIRE}/" in r.full_url and json.loads(r.data)["model"] == WIRE for r in gateway.requests)
+    code, card, out, _ = run(assessment=doc)
+    assert code == 0 and ("T-14" in card["triggers_fired"]) is fail
+    seen = capsys.readouterr()
+    texts = [seen.out, seen.err, json.dumps(doc), *((out / name).read_text() for name in ("scorecard.json", "scorecard.md", "comment.md", "github.json"))]
+    for text in texts:
+        assert WIRE not in text
+
+
+def test_a_cloudflare_access_refusal_is_named_in_failed_batches(app, run, monkeypatch, capsys):
+    app.commit({"app.py": APP + "\n# tidy\n"})
+    monkeypatch.setenv("SCORECARD_GATEWAY_TOKEN", "gw-token-123")
+    monkeypatch.setenv("SCORECARD_GATEWAY_MODEL", WIRE)
+    headers = email.message.Message()
+    headers["cf-access-domain"] = "acme.cloudflareaccess.com"
+
+    def refuse(request, timeout):
+        raise urllib.error.HTTPError(request.full_url, 403, "Forbidden", headers, io.BytesIO(b"error code: 1010"))
+
+    monkeypatch.setattr("scorecard.cli.GatewayClient", functools.partial(GatewayClient, opener=refuse, sleep=lambda s: None))
+    code, doc, _, _ = run(command="assess")
+    stats = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert code == 0 and doc["complete"] is False and stats["failed_batches"]
+    assert {b["reason"] for b in stats["failed_batches"]} == {"the gateway returned HTTP 403 (Cloudflare Access)"}
+
+
+def test_assess_without_the_gateway_model_is_a_tool_error(app, run, monkeypatch, capsys):
+    app.commit({"app.py": APP + "\n# tidy\n"})
+    monkeypatch.setenv("SCORECARD_GATEWAY_TOKEN", "gw-token-123")
+    monkeypatch.delenv("SCORECARD_GATEWAY_MODEL", raising=False)
+    code, doc, _, _ = run(command="assess")
+    assert code == 1 and doc is None and "SCORECARD_GATEWAY_MODEL is not set" in capsys.readouterr().err
+
+
+def test_assess_with_a_malformed_gateway_model_is_a_tool_error_that_does_not_echo_it(app, run, monkeypatch, capsys):
+    app.commit({"app.py": APP + "\n# tidy\n"})
+    monkeypatch.setenv("SCORECARD_GATEWAY_TOKEN", "gw-token-123")
+    monkeypatch.setenv("SCORECARD_GATEWAY_MODEL", "sentinel/../x")
+    code, doc, _, _ = run(command="assess")
+    err = capsys.readouterr().err
+    assert code == 1 and doc is None and "not a valid model name" in err and "sentinel" not in err
+
+
+def test_the_gateway_model_variable_is_not_a_runner_variable():
+    assert runner_env({"SCORECARD_GATEWAY_MODEL": "x"}) == []
 
 
 def test_a_gateway_failure_still_writes_an_incomplete_assessment(app, run):

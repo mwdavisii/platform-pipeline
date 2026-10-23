@@ -415,7 +415,7 @@ What reaches the model: the review agent reads `hello-app`'s files through three
 ### Decide these before you start (each is a placeholder in the commands below)
 Nothing here has a safe default, so the steps use these placeholders and you fill them in by hand. Write your answers down first.
 - `<scorecard gateway host>`: the **public** hostname for the scorecard's route to LiteLLM (for example `llm-ci.<your domain>`). It is published in the factory config. `configure.py` takes it as `--scorecard-gateway-url https://<scorecard gateway host>/v1/chat/completions`; without that option it falls back to your app gateway host, which GitHub's runners cannot reach.
-- `<reviewer model>` and `<model version string>`: the model behind the LiteLLM alias `scorecard-reviewer`, and the exact version string you want recorded in every assessment (`agent.model.version`; the committed `pinned-1` is a stand-in). `scorecard run` refuses an assessment from any other name or version, so whenever you repoint the alias, change the version in the factory config.
+- `<reviewer model>`, `<gateway model name>` and `<model version string>`: the model you want as reviewer, the exact model name your gateway serves it under (the `SCORECARD_GATEWAY_MODEL` secret holds it), and the exact version string you want recorded in every assessment (`agent.model.version`; the committed `pinned-1` is a stand-in). The factory config has no model name: the name goes only in the secret, which keeps it out of every file, assessment, comment and log (on an organization's gateway it can be a sensitive deployment name). `scorecard run` refuses an assessment from any other version, so whenever you change the model behind that name, or the name itself, raise `agent.model.version` by a factory PR. `agent.model.version` must not contain the deployment name; the scorecard refuses it.
 - `<litellm internal host>`: the address of your LiteLLM proxy that is reachable only from inside your network (13.1 creates the key through it, never through the public route).
 - `<daily budget>`: the key's `max_budget` per day, in your LiteLLM cost units. Start low; 13.3 and 13.6 measure what an assessment costs.
 - **Factory approval mode:** add `--single-approver` to the `configure.py` command in 13.2 only if you used it in step 1 (a different setting is refused). With a deputy, the factory ruleset requires one approval and code-owner review, so the deputy also reviews every change to the factory's intake and suppressions; in single-approver mode a PR is still required, with no approval.
@@ -425,23 +425,28 @@ GitHub's runners can't reach a gateway inside your cluster. Give the LiteLLM pro
 
 1. **Firewall rule first, then the route.** Make the WAF rule before the hostname exists (and the Access application of step 4, if you use it), so the admin API is never reachable on it, even briefly. In the Cloudflare dashboard for the zone, add a WAF custom rule that blocks everything on that host except the one call the agent makes: expression `(http.host eq "<scorecard gateway host>" and not (http.request.method eq "POST" and http.request.uri.path eq "/v1/chat/completions"))`, action **Block**. The LiteLLM admin API (`/key/*`, `/user/*`, the UI) then stays reachable only from inside your network. Only then add the public hostname to the tunnel: `<scorecard gateway host>` to the LiteLLM service (for a locally managed tunnel, an `ingress:` rule above the catch-all, such as `- hostname: <scorecard gateway host>` with `service: http://<litellm service>.<namespace>.svc:4000`; for a remotely managed one, Zero Trust -> Networks -> Tunnels -> your tunnel -> Public Hostname).
    **Check:** `curl -sS -o /dev/null -w '%{http_code}\n' -X POST https://<scorecard gateway host>/v1/chat/completions -H 'Content-Type: application/json' -d '{}'` prints `401` (the route works and LiteLLM wants a key), and `curl -sS -o /dev/null -w '%{http_code}\n' https://<scorecard gateway host>/key/info` prints `403` (the WAF rule); a `GET` of the chat-completions path should print `403` too (only `POST` is let through).
-2. **Model.** In LiteLLM's `model_list`, add a model named `scorecard-reviewer` that points at `<reviewer model>`, the exact model version you chose (not a moving alias), and deploy it the way you deploy LiteLLM's config. **Decide this:** which model, and its version string (13.2 writes `<model version string>` into the factory config's `agent.model.version`).
+2. **Model.** In LiteLLM's `model_list`, serve `<reviewer model>`, the exact model version you chose (not a moving alias), under the name `<gateway model name>`, and deploy it the way you deploy LiteLLM's config. **Decide this:** which model, its name, and its version string (13.2 writes `<model version string>` into the factory config's `agent.model.version`).
+   Put the name in a shell variable for 13.1 step 3 and 13.5 (type the name your gateway serves; it is not printed):
+   ```bash
+   printf 'Gateway model name: '; read -rs SCORECARD_GATEWAY_MODEL; echo
+   export SCORECARD_GATEWAY_MODEL
+   ```
 3. **Key.** From inside your network (never through the public route), create a virtual key limited to that model, with a budget. The key goes into a shell variable and is never printed:
    ```bash
    printf 'LiteLLM master key: '; read -rs LITELLM_MASTER_KEY; echo
-   SCORECARD_GATEWAY_TOKEN=$(jq -n '{key_alias: "scorecard-hello-app", models: ["scorecard-reviewer"], max_budget: <daily budget>, budget_duration: "1d", rpm_limit: 60}' \
+   SCORECARD_GATEWAY_TOKEN=$(jq -n 'env.SCORECARD_GATEWAY_MODEL as $m | {key_alias: "scorecard-hello-app", models: [$m], max_budget: <daily budget>, budget_duration: "1d", rpm_limit: 60}' \
      | curl -sSf https://<litellm internal host>/key/generate -H @<(printf 'Authorization: Bearer %s\n' "$LITELLM_MASTER_KEY") \
          -H 'Content-Type: application/json' -d @- | jq -r .key)
    unset LITELLM_MASTER_KEY
    export SCORECARD_GATEWAY_TOKEN
    ```
    If your LiteLLM version supports restricting a key to LLM routes (a key-level `allowed_routes` setting, for example `["llm_api_routes"]`), add it to the JSON above, so the key can't reach LiteLLM's management routes even through a misconfigured rule; the model list and the WAF rule already limit what it can do. Replace `<daily budget>` with the number you decided (a bare number, no quotes). `max_budget` is in your LiteLLM cost units per `budget_duration`; one full assessment of `hello-app` is tens of agent calls, so measure it in 13.3 and 13.6 and adjust.
-   **Check:** the key works for the reviewer model through the public route and for nothing else:
+   **Check:** the key works for the reviewer model (the name in `SCORECARD_GATEWAY_MODEL`) through the public route and for nothing else:
    ```bash
-   ask() { jq -n --arg m "$1" '{model: $m, messages: [{role: "user", content: "Reply with OK"}], max_tokens: 5}' \
+   ask() { M="$1" jq -n '{model: env.M, messages: [{role: "user", content: "Reply with OK"}], max_tokens: 5}' \
      | curl -sS -o /dev/null -w '%{http_code}\n' https://<scorecard gateway host>/v1/chat/completions \
          -H @<(printf 'Authorization: Bearer %s\n' "$SCORECARD_GATEWAY_TOKEN") -H 'Content-Type: application/json' -d @-; }
-   ask scorecard-reviewer   # 200
+   ask "$SCORECARD_GATEWAY_MODEL"   # 200
    ask <any other model>    # 401 or 403
    ```
 4. **Optional second layer: a Cloudflare Access service token.** With it, Cloudflare itself rejects any request that lacks the two headers `CF-Access-Client-Id` and `CF-Access-Client-Secret`, before it reaches LiteLLM; the LiteLLM key stays as the second layer, and the WAF rule stays. Both the Access application and the WAF rule can be created before the tunnel hostname exists, so do them first: if you want this layer, do this step before step 1 adds the public hostname. In Zero Trust -> Access -> Service credentials, create a service token (name it `scorecard-hello-app`) and copy the client id (`<hex>.access`) and the client secret now; the secret is shown once. Then Access -> Applications -> Add an application -> **Self-hosted**: hostname `<scorecard gateway host>` with an empty path, so the whole hostname is covered (the WAF rule still limits it to `POST /v1/chat/completions`), and a policy with action **Service Auth** that includes that service token (no other rule). In the application's settings turn on **Return 401 response for service auth policies**, so a request without a valid token gets a `401` and not a `302` to a login page. Put the values in shell variables and never print them:
@@ -486,7 +491,7 @@ sed -i '/name: "golden-road \/ preview"/r ../gate1-extra.txt' bootstrap/scorecar
 printf '%s\n' '* @<you> @<deputy>' '/intake/ @<you> @<deputy>' '/suppressions/ @<you> @<deputy>' '/na/ @<you> @<deputy>' > bootstrap/scorecard-factory/.github/CODEOWNERS
 # Single-approver mode: printf '%s\n' '* @<you>' '/intake/ @<you>' '/suppressions/ @<you>' '/na/ @<you>' > bootstrap/scorecard-factory/.github/CODEOWNERS
 ```
-**Check:** `grep -n 'gate1_checks:' -A8 bootstrap/scorecard-factory/config/scorecard.yaml` lists drift, preview and then every entry of `platform/required-checks.json`; `grep -n 'model:' bootstrap/scorecard-factory/config/scorecard.yaml` prints `model: {name: scorecard-reviewer, version: "<your version string>"}` (no `pinned-1`); `PYTHONPATH=src <src>/.venv/bin/pytest -q tests/pipeline/test_scorecard_factory.py tests/kit` passes (the factory test accepts a changed model version and the extra Gate 1 entries, and checks that `gate1_checks` covers every required check; the kit tests run against the configured kit); and `grep -rn 'replace-me\|ORG_PLACEHOLDER' platform bootstrap` prints nothing. (The factory's `BUILDER_IMAGE` still has the all-zero digest; it is pinned below.)
+**Check:** `grep -n 'gate1_checks:' -A8 bootstrap/scorecard-factory/config/scorecard.yaml` lists drift, preview and then every entry of `platform/required-checks.json`; `grep -n 'model:' bootstrap/scorecard-factory/config/scorecard.yaml` prints `model: {version: "<your version string>"}` (no `pinned-1`); `PYTHONPATH=src <src>/.venv/bin/pytest -q tests/pipeline/test_scorecard_factory.py tests/kit` passes (the factory test accepts a changed model version and the extra Gate 1 entries, and checks that `gate1_checks` covers every required check; the kit tests run against the configured kit); and `grep -rn 'replace-me\|ORG_PLACEHOLDER' platform bootstrap` prints nothing. (The factory's `BUILDER_IMAGE` still has the all-zero digest; it is pinned below.)
 
 Copy it over the published tree, keeping the published tree's history and its current builder pins, so `main` keeps working until the new image exists:
 ```bash
@@ -533,7 +538,7 @@ GOLDEN_ROAD_SCORECARD_LIVE=1 GOLDEN_ROAD_SCORECARD_FACTORY=bootstrap/scorecard-f
   PYTHONPATH=src <src>/.venv/bin/pytest -q -s tests/scorecard/test_scorecard_golden_live.py
 jq '{model, prompt_version, tokens_used, relative: .baseline_relative.totals}' ~/poc/golden-live.json
 ```
-It uses only the `agent` block of the factory config (gateway URL, model, budget) and `SCORECARD_GATEWAY_TOKEN` from 13.1. **Check:** `1 passed` (the eval reports accuracy; it does not assert it), and the report file exists. Record `tokens_used`, and the false positives and false negatives in `baseline_relative`; then set the LiteLLM key's `max_budget` and the config's `agent.budget.max_total_tokens` from the per-case cost, with room to spare. A live accuracy target is not set yet: these first numbers are what it will be calibrated from.
+It uses only the `agent` block of the factory config (gateway URL, model version, budget) and `SCORECARD_GATEWAY_TOKEN` and `SCORECARD_GATEWAY_MODEL` from 13.1. **Check:** `1 passed` (the eval reports accuracy; it does not assert it), and the report file exists. Record `tokens_used`, and the false positives and false negatives in `baseline_relative`; then set the LiteLLM key's `max_budget` and the config's `agent.budget.max_total_tokens` from the per-case cost, with room to spare. A live accuracy target is not set yet: these first numbers are what it will be calibrated from.
 
 ### 13.4 Create `scorecard-factory` (public)
 ```bash
@@ -546,8 +551,8 @@ gh api -X POST repos/<you>/scorecard-factory/rulesets --input bootstrap/scorecar
 The script refuses until the factory's `BUILDER_IMAGE` is pinned (it refuses an all-zero digest). Everything in this repo is public, including `hello-app`'s tier and purpose. The scorecard workflow skips the factory's own PRs: they change the inputs, not an app. The factory's own check, `factory-check`, runs on them instead and the ruleset requires it. In single-approver mode `configure.py` already relaxed this ruleset (a PR is still required, with no approval); there is nothing to edit here.
 **Check:** the second command prints `PUBLIC`; `gh api repos/<you>/scorecard-factory/contents/intake/<you>/hello-app.yaml --jq .path` prints `intake/<you>/hello-app.yaml`; `gh api repos/<you>/scorecard-factory/rulesets --jq '.[] | {name, enforcement}'` prints `main` with `"enforcement": "active"`. From now on, change the factory by PR.
 
-### 13.5 Give `hello-app` the key
-Run this in the shell where you made the key in 13.1 (`$SCORECARD_GATEWAY_TOKEN` must still be set). The first command is the Actions secret. Dependabot's runs read only Dependabot secrets, so the second stores the same key there, or Dependabot PRs are not assessed. The `if` catches an empty or failed key (LiteLLM answers `null` when `/key/generate` fails) without closing your shell:
+### 13.5 Give `hello-app` the key and the model name
+Run this in the shell where you made the key in 13.1 (`$SCORECARD_GATEWAY_TOKEN` and `$SCORECARD_GATEWAY_MODEL` must still be set). The first command is the Actions secret. Dependabot's runs read only Dependabot secrets, so the second stores the same key there, or Dependabot PRs are not assessed. The `if` catches an empty or failed key (LiteLLM answers `null` when `/key/generate` fails) without closing your shell:
 ```bash
 if [ -n "${SCORECARD_GATEWAY_TOKEN:-}" ] && [ "$SCORECARD_GATEWAY_TOKEN" != null ]; then
   printf '%s' "$SCORECARD_GATEWAY_TOKEN" | gh secret set SCORECARD_GATEWAY_KEY --repo <you>/hello-app
@@ -555,6 +560,16 @@ if [ -n "${SCORECARD_GATEWAY_TOKEN:-}" ] && [ "$SCORECARD_GATEWAY_TOKEN" != null
   unset SCORECARD_GATEWAY_TOKEN
 else
   echo "SCORECARD_GATEWAY_TOKEN is empty: redo 13.1 step 3 before setting the secrets"
+fi
+```
+Then the model name, the same way (both copies; the `if` refuses an empty value or one with characters the scorecard would refuse):
+```bash
+if [[ "${SCORECARD_GATEWAY_MODEL:-}" =~ ^[A-Za-z0-9._-]{1,128}$ && "$SCORECARD_GATEWAY_MODEL" != . && "$SCORECARD_GATEWAY_MODEL" != .. ]]; then
+  printf '%s' "$SCORECARD_GATEWAY_MODEL" | gh secret set SCORECARD_GATEWAY_MODEL --repo <you>/hello-app
+  printf '%s' "$SCORECARD_GATEWAY_MODEL" | gh secret set SCORECARD_GATEWAY_MODEL --repo <you>/hello-app --app dependabot
+  unset SCORECARD_GATEWAY_MODEL
+else
+  echo "SCORECARD_GATEWAY_MODEL is empty or has characters other than A-Z a-z 0-9 . _ -: redo 13.1 step 2"
 fi
 ```
 If you did 13.1 step 4, set the two Access secrets too, from the shell where you exported them (both or neither; the same pattern, with the Dependabot copies):
@@ -569,9 +584,9 @@ else
   echo "the Access client id or secret is empty: redo 13.1 step 4, or skip these secrets"
 fi
 ```
-**Check:** `gh secret list --repo <you>/hello-app` lists `SCORECARD_GATEWAY_KEY` (and, if you set them, `SCORECARD_GATEWAY_ACCESS_ID` and `SCORECARD_GATEWAY_ACCESS_SECRET`), and so does `gh secret list --repo <you>/hello-app --app dependabot`. Fork PRs never get it (and are "not assessed").
+**Check:** `gh secret list --repo <you>/hello-app` lists `SCORECARD_GATEWAY_KEY` and `SCORECARD_GATEWAY_MODEL` (and, if you set them, `SCORECARD_GATEWAY_ACCESS_ID` and `SCORECARD_GATEWAY_ACCESS_SECRET`), and so does `gh secret list --repo <you>/hello-app --app dependabot`. Fork PRs never get it (and are "not assessed").
 
-**Known limit.** Dependabot-triggered runs can read the Dependabot copy of the key, which is the same exposure as the Actions secret (anyone with write access to `hello-app` can already read both). Rotating the key means setting both secrets again: generate a new key (13.1), run the two commands, and delete the old key with LiteLLM's `/key/delete` from inside your network; do that whenever someone loses write access to `hello-app`. Whether a Dependabot-triggered run really reads the Dependabot copy, and whether `report` can then label and comment, is proof item 10 in 13.7.
+**Known limit.** Dependabot-triggered runs can read the Dependabot copy of the key, which is the same exposure as the Actions secret (anyone with write access to `hello-app` can already read both). Changing the model name means setting both `SCORECARD_GATEWAY_MODEL` copies again and, in the same sitting, raising `agent.model.version` by a factory PR: nothing checks that the two match, so the version is only as honest as that habit. Without the secret every run is "not assessed". Rotating the key means setting both secrets again: generate a new key (13.1), run the two commands, and delete the old key with LiteLLM's `/key/delete` from inside your network; do that whenever someone loses write access to `hello-app`. Whether a Dependabot-triggered run really reads the Dependabot copy, and whether `report` can then label and comment, is proof item 10 in 13.7.
 
 ### 13.6 Wire `hello-app` (the first live run)
 The wiring is a PR on `hello-app`: the caller workflow, the files the new builder regenerates (`AGENTS.md`, `CLAUDE.md`, `Dockerfile`, `.builder.lock`, `README.md`), and the new ruleset file. The PR runs the scorecard on itself.

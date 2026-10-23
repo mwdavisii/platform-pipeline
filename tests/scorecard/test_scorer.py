@@ -34,7 +34,7 @@ def _apply(reqs, assessment, root):
 
 
 def _assessment(*results, findings=(), complete=True):
-    return {"schema": "assessment/v1", "tree_sha": TREE, "prompt_version": "fixture", "model": {"name": "fake", "version": "1", "temperature": 0},
+    return {"schema": "assessment/v1", "tree_sha": TREE, "prompt_version": "fixture", "model": {"version": "1", "temperature": 0},
             "complete": complete, "results": list(results), "findings": list(findings)}
 
 

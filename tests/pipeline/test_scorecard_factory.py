@@ -343,7 +343,7 @@ def test_hello_app_calls_the_factory_workflow_on_pull_requests_only():
     assert name == "scorecard" and "name" not in job, "the checks are `scorecard / <job>`"
     assert CALLER_USES.match(job["uses"]) or job["uses"].startswith("ORG_PLACEHOLDER/scorecard-factory/")
     assert job["secrets"] == {name: "${{ secrets.%s }}" % name for name in (
-        "SCORECARD_GATEWAY_KEY", "SCORECARD_GATEWAY_ACCESS_ID", "SCORECARD_GATEWAY_ACCESS_SECRET")}, "never `secrets: inherit`"
+        "SCORECARD_GATEWAY_KEY", "SCORECARD_GATEWAY_MODEL", "SCORECARD_GATEWAY_ACCESS_ID", "SCORECARD_GATEWAY_ACCESS_SECRET")}, "never `secrets: inherit`"
     assert "with" not in job and "concurrency" not in doc, "the called workflow sets the concurrency group; the same group here would deadlock"
 
 
@@ -385,11 +385,11 @@ def poc_step_13():
 def test_the_personal_poc_doc_sets_up_the_scorecard_in_order():
     text = (ROOT / "docs/setup/personal-poc.md").read_text()
     for needle in ("## 13. Risk scorecard", "--scorecard-gateway-url https://<scorecard gateway host>/v1/chat/completions",
-                   'http.request.method eq "POST" and http.request.uri.path eq "/v1/chat/completions"', "/key/generate", "scorecard-reviewer", "max_budget",
+                   'http.request.method eq "POST" and http.request.uri.path eq "/v1/chat/completions"', "/key/generate", "SCORECARD_GATEWAY_MODEL", "max_budget",
                    "anyone with write access to `hello-app` can read", "prefer GitHub OIDC", "builder-v$version",
                    "grep -rlE '^  BUILDER_IMAGE: '", "GOLDEN_ROAD_SCORECARD_LIVE=1",
                    "GOLDEN_ROAD_SCORECARD_FACTORY=bootstrap/scorecard-factory", "baseline_relative", "scripts/push-bootstrap.sh <you> scorecard-factory --public",
-                   "gh secret set SCORECARD_GATEWAY_KEY --repo <you>/hello-app", "gh secret set SCORECARD_GATEWAY_ACCESS_ID --repo <you>/hello-app",
+                   "gh secret set SCORECARD_GATEWAY_KEY --repo <you>/hello-app", "gh secret set SCORECARD_GATEWAY_MODEL --repo <you>/hello-app", "gh secret set SCORECARD_GATEWAY_ACCESS_ID --repo <you>/hello-app",
                    "gh secret set SCORECARD_GATEWAY_ACCESS_SECRET --repo <you>/hello-app", "Service Auth", "CF-Access-Client-Id", "scorecard / level: security_review", "scorecard / assessed",
                    "gh pr ready", "T-2", "T-15", "T-16", 'select(.context != "scorecard / assessed")'):
         assert needle in text, needle
@@ -412,12 +412,36 @@ def test_the_personal_poc_doc_names_every_value_the_owner_must_decide():
 def test_the_dependabot_secret_step_and_its_limit_are_documented_in_the_poc_doc():
     step = poc_step_13()
     assert "gh secret set SCORECARD_GATEWAY_KEY --repo <you>/hello-app --app dependabot" in step
+    assert "gh secret set SCORECARD_GATEWAY_MODEL --repo <you>/hello-app --app dependabot" in step
     assert "gh secret set SCORECARD_GATEWAY_ACCESS_ID --repo <you>/hello-app --app dependabot" in step
     assert "gh secret set SCORECARD_GATEWAY_ACCESS_SECRET --repo <you>/hello-app --app dependabot" in step
     assert "gh secret list --repo <you>/hello-app --app dependabot" in step
     assert "Dependabot-triggered runs can read" in step and "proof item 10" in step
     assert step.index("--app dependabot") < step.index("  unset SCORECARD_GATEWAY_TOKEN\nelse"), "the key is still set when the second command runs"
     assert 'if [ -n "${SCORECARD_GATEWAY_TOKEN:-}" ]' in step and "redo 13.1 step 3" in step and "exit" not in step[step.index("### 13.5"):step.index("### 13.6")].split("```bash")[1].split("```")[0]
+
+
+def test_the_poc_doc_sets_the_gateway_model_secret_guarded_and_never_prints_it():
+    step = poc_step_13()
+    assert "printf 'Gateway model name: '; read -rs SCORECARD_GATEWAY_MODEL; echo" in step and "export SCORECARD_GATEWAY_MODEL" in step
+    block = block_with(step, "gh secret set SCORECARD_GATEWAY_MODEL")
+    assert block.startswith('if [[ "${SCORECARD_GATEWAY_MODEL:-}" =~ ^[A-Za-z0-9._-]{1,128}$ && "$SCORECARD_GATEWAY_MODEL" != . && "$SCORECARD_GATEWAY_MODEL" != .. ]]; then\n')
+    for extra in ("", " --app dependabot"):
+        assert f"printf '%s' \"$SCORECARD_GATEWAY_MODEL\" | gh secret set SCORECARD_GATEWAY_MODEL --repo <you>/hello-app{extra}\n" in block
+    assert "unset SCORECARD_GATEWAY_MODEL" in block
+    assert not re.search(r"(echo|cat|curl)[^\n|]*\$SCORECARD_GATEWAY_MODEL", step), "the value is only ever piped to gh"
+    checks = step[step.index("**Check:** `gh secret list --repo <you>/hello-app` lists"):]
+    assert checks.index("SCORECARD_GATEWAY_MODEL") < checks.index("Fork PRs")
+    for needle in ("`SCORECARD_GATEWAY_TOKEN` and `SCORECARD_GATEWAY_MODEL` from 13.1", "raise `agent.model.version`", "by a factory PR", "must not contain the deployment name",
+                   "model: {version: \"<your version string>\"}"):
+        assert needle in step, needle
+    assert "scorecard-reviewer" not in step, "the docs name no gateway alias: the secret holds the exact name the user's gateway serves"
+
+
+def test_the_factory_readme_names_the_model_secret_and_the_version_rule():
+    text = " ".join((FACTORY / "README.md").read_text().split())
+    for needle in ("`SCORECARD_GATEWAY_MODEL`", "organization-sensitive", "raise `agent.model.version`", "\"not assessed\"", "must not contain the deployment name"):
+        assert needle in text, needle
 
 
 def test_the_poc_doc_has_no_heredoc_and_no_bash_only_read_prompt_in_the_scorecard_steps():
@@ -509,7 +533,7 @@ def test_the_documented_factory_edits_pass_the_factory_tests(tmp_path):
     assert out.returncode == 0, out.stderr
     factory = work / "bootstrap/scorecard-factory"
     config = load_config(factory)
-    assert config["agent"]["model"] == {"name": "scorecard-reviewer", "version": "vendor/model-4&1"}
+    assert config["agent"]["model"] == {"version": "vendor/model-4&1"}
     assert [c for c in config["gate1_checks"] if c in REQUIRED_SAMPLE] == REQUIRED_SAMPLE
     assert_factory_config_matches_sample(factory, REQUIRED_SAMPLE)
     assert_codeowners_protect_the_records(factory)

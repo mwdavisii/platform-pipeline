@@ -33,7 +33,7 @@ def test_a_good_batch_becomes_assessment_results_and_v2_findings():
     assert findings[0]["id"] == fid and findings[0]["source"] == {"layer": "agentic", "tool": "scorecard-agent", "tool_version": "0.1.0"}
     assert findings[0]["evidence_verified"] is False and findings[0]["first_seen"] == NOW and validate("finding.v2", findings[0]) == []
     doc = {"schema": "assessment/v1", "tree_sha": "d" * 40, "prompt_version": "review-1",
-           "model": {"name": "m", "version": "1", "temperature": 0}, "complete": True, "results": results, "findings": findings}
+           "model": {"version": "1", "temperature": 0}, "complete": True, "results": results, "findings": findings}
     assert validate("assessment.v1", doc) == []
 
 

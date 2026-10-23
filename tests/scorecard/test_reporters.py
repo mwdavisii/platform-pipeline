@@ -201,5 +201,11 @@ def test_pgp_private_key_blocks_are_redacted():
     assert redact(text) == "[redacted: private-key]\nafter"
 
 
+def test_the_assessment_line_for_a_model_with_no_temperature():
+    card = _card()
+    card["assessment"]["model"]["temperature"] = None
+    assert "Model version 1 at the provider's default temperature, prompt fixture. Complete." in _render(card)
+
+
 def test_the_assessment_line_shows_the_model_version_only():
     assert "Model version 1 at temperature 0, prompt fixture. Complete." in _render(_card())

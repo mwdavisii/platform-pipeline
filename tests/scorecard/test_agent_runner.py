@@ -187,6 +187,14 @@ def prepared(pr_checkout, factory):
     return _make
 
 
+@pytest.mark.parametrize("configured, recorded", [(None, None), (0.5, 0.5)])
+def test_the_assessment_records_the_configured_temperature(prepared, configured, recorded):
+    p = prepared()
+    p.config["agent"]["model"]["temperature"] = configured
+    doc, _ = assess(p, OracleModel(default=PASS))
+    assert doc["model"]["temperature"] == recorded and validate("assessment.v1", doc) == []
+
+
 def test_assess_answers_every_requirement_and_scores_standard(prepared):
     p = prepared()
     model = OracleModel(default=PASS)

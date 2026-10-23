@@ -16,7 +16,7 @@
       "required": ["version", "temperature"],
       "properties": {
         "version": {"type": "string", "minLength": 1, "not": {"pattern": "[\\r\\n]"}},
-        "temperature": {"type": "number", "minimum": 0, "maximum": 2}
+        "temperature": {"type": ["number", "null"], "minimum": 0, "maximum": 2}
       }
     },
     "complete": {"type": "boolean"},

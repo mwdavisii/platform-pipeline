@@ -175,7 +175,7 @@ evidence:
 # The gateway credential (an OIDC-derived token or a scoped key) comes only from the named environment variable.
 agent:
   prompt_version: review-1
-  model: {version: "opus-5-pinned-1"}
+  model: {version: "opus-5-pinned-1", temperature: null}
   gateway:
     url: "https://llm.mwdavisii.com/v1/chat/completions"
     auth: {scheme: bearer}

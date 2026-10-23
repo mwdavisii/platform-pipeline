@@ -93,6 +93,8 @@ def test_requirement_result_accepts_computed_sources(patch):
         lambda a: a["results"][0].update(evidence_verified=True),
         lambda a: a["model"].pop("temperature"),
         lambda a: a["model"].update(name="fixture-model"),
+        lambda a: a["model"].update(temperature=3),
+        lambda a: a["model"].update(temperature="0"),
         lambda a: a.update(findings=[{"id": HEX}]),
     ],
 )
@@ -134,3 +136,10 @@ def test_na_v1_rejects(mutate):
     assert validate("na.v1", {"schema": "na/v1", "repo": "acme/notes", "entries": [entry]}) == []
     mutate(entry)
     assert validate("na.v1", {"schema": "na/v1", "repo": "acme/notes", "entries": [entry]})
+
+
+@pytest.mark.parametrize("temperature", [0, 1.5, 2, None])
+def test_assessment_accepts_a_number_or_null_temperature(temperature):
+    doc = copy.deepcopy(ASSESSMENT)
+    doc["model"]["temperature"] = temperature
+    assert validate("assessment.v1", doc) == []

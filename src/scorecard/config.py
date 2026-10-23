@@ -4,6 +4,7 @@ They come from the platform-owned factory repo, never from the app repo. Anythin
 InputError: the scorecard fails closed rather than scoring with a guessed config.
 """
 
+import math
 import os
 import re
 import urllib.parse
@@ -24,6 +25,16 @@ RUNNER_TOKENS = ("GITHUB_TOKEN", "GH_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTE
 RUNNER_PREFIXES = ("GITHUB_", "ACTIONS_", "RUNNER_")
 # Prefixes of GitHub-issued tokens (installation, personal, OAuth, user-to-server, refresh, fine-grained): never a gateway credential.
 GITHUB_TOKEN_PREFIXES = ("ghs_", "ghp_", "gho_", "ghu_", "ghr_", "github_pat_")
+
+
+def model_temperature(config: dict):
+    """The configured sampling temperature: absent is 0, None means the parameter is not sent."""
+    return config["agent"]["model"].get("temperature", 0)
+
+
+def temperature_phrase(value) -> str:
+    """How a configured or recorded temperature reads in the report and in refusals."""
+    return "the provider's default temperature" if value is None else f"temperature {value:g}"
 
 
 def runner_env(environ) -> list[str]:
@@ -145,6 +156,9 @@ def load_config(factory) -> dict:
     for text in _strings(agent):
         if "\n" in text or "\r" in text:  # the schema's "$" accepts a trailing newline, so refuse line breaks outright
             raise InputError(f"{path} agent values can't contain line breaks")
+    temperature = agent["model"].get("temperature")
+    if temperature is not None and not math.isfinite(temperature):  # NaN fails every schema comparison
+        raise InputError(f"{path} agent.model.temperature must be a finite number from 0 to 2, or null")
     credential = agent["gateway"]["credential_env"]
     if credential in RUNNER_TOKENS or credential.startswith(RUNNER_PREFIXES):
         raise InputError(f"{path} agent.gateway.credential_env can't be a runner token")

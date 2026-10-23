@@ -30,7 +30,7 @@ from builder import VERSION as BUILDER_VERSION
 from golden_road.checks import _open
 from golden_road.io import InputError
 
-from ..config import GITHUB_TOKEN_PREFIXES, MODEL_PLACEHOLDER
+from ..config import GITHUB_TOKEN_PREFIXES, MODEL_PLACEHOLDER, model_temperature
 
 
 CHUNK_BYTES = 65536
@@ -130,7 +130,7 @@ def gateway_model(environ=None) -> Secret:
 class GatewayClient:
     def __init__(self, config: dict, token: str, *, model: str, access: AccessHeaders | None = None, opener=_open, sleep=time.sleep,
                  clock=time.monotonic):
-        self.gateway, self.model = config["agent"]["gateway"], wire_model(model)
+        self.gateway, self.model, self.temperature = config["agent"]["gateway"], wire_model(model), model_temperature(config)
         self.url = Secret(self.gateway["url"].replace(MODEL_PLACEHOLDER, self.model))  # the model name is path-safe (wire_model)
         self.token, self.opener, self.sleep, self.clock = Secret(token), opener, sleep, clock
         # The name must come only from the secret. The match is on word boundaries (not inside a longer alphanumeric run) and case-sensitive;
@@ -184,8 +184,10 @@ class GatewayClient:
         return headers
 
     def complete(self, messages: list[dict], tools: list[dict], *, max_tokens: int) -> Completion:
-        body = json.dumps({"model": self.model, "messages": messages, "tools": tools, "tool_choice": "auto",
-                           "temperature": 0, "max_tokens": max_tokens}).encode("utf-8")
+        request = {"model": self.model, "messages": messages, "tools": tools, "tool_choice": "auto", "max_tokens": max_tokens}
+        if self.temperature is not None:  # a model that rejects the parameter is configured with null
+            request["temperature"] = self.temperature
+        body = json.dumps(request, allow_nan=False).encode("utf-8")
         try:
             return self._post(body)
         except GatewayError as exc:

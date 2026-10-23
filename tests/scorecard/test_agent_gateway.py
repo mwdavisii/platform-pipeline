@@ -63,6 +63,24 @@ def test_request_shape_and_bearer_auth(config):
     assert done.tokens == 100 and done.message["tool_calls"][0]["function"]["name"] == "read_file"
 
 
+def test_temperature_is_configurable_and_null_omits_it(config):
+    for configured in (0.7, 0):
+        config["agent"]["model"]["temperature"] = configured
+        opener = Opener(REPLY)
+        client(config, opener).complete([], [], max_tokens=300)
+        assert json.loads(opener.requests[0][0].data)["temperature"] == configured
+    config["agent"]["model"]["temperature"] = None
+    opener = Opener(REPLY)
+    client(config, opener).complete([], [], max_tokens=300)
+    assert "temperature" not in json.loads(opener.requests[0][0].data)
+
+
+def test_a_non_finite_temperature_is_never_sent(config):
+    config["agent"]["model"]["temperature"] = float("nan")
+    with pytest.raises(ValueError):
+        client(config, Opener(REPLY)).complete([], [], max_tokens=300)
+
+
 def test_api_key_header(config):
     config["agent"]["gateway"]["auth"] = {"scheme": "header", "header": "api-key"}
     opener = Opener(REPLY)

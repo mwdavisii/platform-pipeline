@@ -15,6 +15,7 @@ from golden_road.io import InputError
 from .. import git
 from ..asvs import chapter_names
 from ..build import Prepared, agent_scope
+from ..config import model_temperature
 from ..scorer import check_assessment
 from .gateway import GatewayError, ModelClient
 from .output import InvalidOutput, parse_batch
@@ -141,7 +142,7 @@ def assess(prepared: Prepared, client: ModelClient, *, clock=time.monotonic) -> 
     if len(kept) > MAX_FINDINGS:
         kept, failed = kept[:MAX_FINDINGS], [*failed, {"batch": "all", "reason": f"more than {MAX_FINDINGS} findings"}]
     doc = {"schema": "assessment/v1", "tree_sha": scope["tree_sha"], "prompt_version": agent["prompt_version"],
-           "model": {"version": agent["model"]["version"], "temperature": 0},
+           "model": {"version": agent["model"]["version"], "temperature": model_temperature(prepared.config)},
            "complete": not failed, "results": results, "findings": kept}
     try:
         check_assessment(doc, prepared.tree_sha)

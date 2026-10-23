@@ -196,6 +196,26 @@ def test_a_misplaced_placeholder_message_names_the_rule(factory):
         load_config(factory)
 
 
+def test_model_temperature_defaults_to_zero_and_may_be_null_or_a_number(factory):
+    from scorecard.config import model_temperature
+    assert model_temperature(load_config(factory)) == 0
+    for value in (None, 0, 1.5, 2):
+        _agent(factory, **{"model.temperature": value})
+        assert model_temperature(load_config(factory)) == value
+
+
+def test_a_nan_temperature_is_refused(factory):
+    _agent(factory, **{"model.temperature": float("nan")})
+    with pytest.raises(InputError, match="agent.model.temperature must be a finite number"):
+        load_config(factory)
+
+
+def test_an_empty_temperature_means_null(factory):
+    path = factory / "config" / "scorecard.yaml"
+    path.write_text(path.read_text().replace("model: {version: pinned-1}", "model: {version: pinned-1, temperature: }"))
+    assert load_config(factory)["agent"]["model"]["temperature"] is None
+
+
 def test_sample_agent_config(config):
     agent = config["agent"]
     assert agent["prompt_version"] == "review-1" and agent["model"] == {"version": "pinned-1"}
@@ -234,6 +254,10 @@ def test_sample_agent_config(config):
     {"batching.max_turns": 1},
     {"tools.max_read_lines": 100000},
     {"model.extra": "x"},
+    {"model.temperature": 3},
+    {"model.temperature": -0.1},
+    {"model.temperature": "0"},
+    {"model.temperature": True},
 ])
 def test_bad_agent_config_is_an_input_error(factory, changes):
     _agent(factory, **changes)

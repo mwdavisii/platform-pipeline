@@ -110,7 +110,10 @@
         "model": {
           "type": "object", "additionalProperties": false, "required": ["version"],
           "description": "The approved model's version label. The gateway's model name is the SCORECARD_GATEWAY_MODEL secret, never config.",
-          "properties": {"version": {"$ref": "#/$defs/text"}}
+          "properties": {
+            "version": {"$ref": "#/$defs/text"},
+            "temperature": {"type": ["number", "null"], "minimum": 0, "maximum": 2, "description": "Absent is 0; null sends no temperature (for a model that rejects it)."}
+          }
         },
         "gateway": {
           "type": "object", "additionalProperties": false,

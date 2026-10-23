@@ -165,6 +165,7 @@ def blank_setup_doc_edits(config, required=()):
         for key in parents:
             node = node[key]
         node[leaf] = None
+    config["agent"]["model"].pop("temperature", None)  # optional: a deployment whose model rejects a temperature sets it to null
     return config
 
 

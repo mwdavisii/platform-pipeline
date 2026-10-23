@@ -51,7 +51,7 @@ Either way the credential is written to a file only the next step reads, which p
 
 - **Onboard an app:** the app's author (or their agent) opens an intake request from the form; security sets the tier and adds `intake/<owner>/<repo>.yaml` (security review), then requires the workflow on the repo. A request opened from the command line (`gh issue create`) by someone without triage access has no label, so look for the title `Intake request: <owner>/<repo>` as well as the `intake-request` label.
 - **Accept a finding:** add a suppression file; **confirm an N/A:** add an `na/` entry. Both need security review.
-- **Change thresholds, triggers, the model or the budget:** edit `config/scorecard.yaml`. `scorecard run` refuses an assessment whose model version or prompt version isn't the one configured here. When `SCORECARD_GATEWAY_MODEL` changes, raise `agent.model.version` in the same change. `agent.model.version` must not contain the deployment name; the scorecard refuses it.
+- **Change thresholds, triggers, the model or the budget:** edit `config/scorecard.yaml`. `scorecard run` refuses an assessment whose model version or prompt version isn't the one configured here. When `SCORECARD_GATEWAY_MODEL` changes, raise `agent.model.version` in the same change. `agent.model.version` must not contain the deployment name; the scorecard refuses it. Set `agent.model.temperature: null` if the model rejects a temperature (the gateway returns HTTP 400); an empty `temperature:` also means null; the default is 0.
 - **Update the scorecard code:** release a new builder image and pin its digest in `BUILDER_IMAGE`.
 - Every edit takes effect for every app repo at its next pull request, because the workflow and the intake action are read from `main`.
 

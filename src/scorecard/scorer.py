@@ -7,12 +7,15 @@
 - Every agent citation is re-verified here; the agent's own `evidence_verified` is never trusted.
 """
 
+import math
+
 from contracts.evidence import anchor_ok, verify_evidence
 from contracts.findings import finding_id, normalize_snippet
 from contracts.schema import validate
 from golden_road.io import InputError, error_detail
 
 from .agent.tools import citable_paths
+from .config import model_temperature, temperature_phrase
 from .level import TRIGGER_FOR_VC
 from .scoping import make_result
 from .signals.changes import path_matches
@@ -24,6 +27,9 @@ def check_assessment(doc, tree_sha: str) -> dict:
     errors = validate("assessment.v1", doc)
     if errors:
         raise InputError(f"the assessment is not a valid assessment/v1: {errors[0]}")
+    temperature = doc["model"]["temperature"]
+    if temperature is not None and not math.isfinite(temperature):  # NaN passes the schema's range check
+        raise InputError("the assessment's model temperature is not finite")
     if doc["tree_sha"] != tree_sha:
         raise InputError(f"the assessment is for tree {doc['tree_sha']}, not {tree_sha}")
     ids = [r["asvs_id"] for r in doc["results"]]
@@ -46,11 +52,11 @@ def check_approved(doc: dict, config: dict) -> None:
     refused (an InputError, so `scorecard run` exits 1 with no outputs), the same as an assessment for another tree. The model
     name is not compared: it is a secret (SCORECARD_GATEWAY_MODEL) the version labels."""
     agent = config["agent"]
-    approved = {"version": agent["model"]["version"], "temperature": 0}
+    approved = {"version": agent["model"]["version"], "temperature": model_temperature(config)}
     if doc["prompt_version"] != agent["prompt_version"] or doc["model"] != approved:
-        raise InputError(f"the assessment was made with model version {doc['model']['version']!r} (temperature {doc['model']['temperature']}) "
+        raise InputError(f"the assessment was made with model version {doc['model']['version']!r} ({temperature_phrase(doc['model']['temperature'])}) "
                          f"and prompt {doc['prompt_version']!r}; the factory config approves model version {approved['version']!r} "
-                         f"at temperature 0 with prompt {agent['prompt_version']!r}")
+                         f"at {temperature_phrase(approved['temperature'])} with prompt {agent['prompt_version']!r}")
 
 
 def _verified(evidence: list, repo_root, citable: set | None = None) -> bool:

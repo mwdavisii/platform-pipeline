@@ -953,3 +953,17 @@ def test_check_factory_refuses_a_symlinked_kind_directory_without_following_it(f
     (factory / "intake").symlink_to(tmp_path / "elsewhere/intake")
     code, _, err = check_factory(factory, capsys)
     assert code == 1 and any(p.endswith("intake is a symlink") for p in err["problems"])
+
+
+def test_a_run_with_a_null_temperature_end_to_end(app, run, factory, capsys):
+    path = factory / "config" / "scorecard.yaml"
+    path.write_text(path.read_text().replace("model: {version: pinned-1}", "model: {version: pinned-1, temperature: null}"))
+    app.commit({"app.py": APP + "\n# tidy\n"})
+    doc = full_assessment(app, run)
+    code, card, out, _ = run(assessment={**doc, "model": {"version": "pinned-1", "temperature": None}})
+    assert code == 0 and card["assessment"]["model"] == {"version": "pinned-1", "temperature": None}
+    assert validate("scorecard.v1", card) == []
+    assert "at the provider's default temperature" in (out / "scorecard.md").read_text()
+    assert "provider's default temperature" in (out / "comment.md").read_text()
+    code, card, out, _ = run(assessment=doc)  # temperature 0 against a null config
+    assert code == 1 and card is None and "provider's default temperature" in capsys.readouterr().err

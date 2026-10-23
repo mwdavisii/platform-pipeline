@@ -8,7 +8,7 @@ from pathlib import Path
 
 from scorecard.asvs import load_asvs
 from scorecard.config import load_config
-from scorecard.scorer import apply_assessment, check_assessment
+from scorecard.scorer import apply_assessment, check_approved, check_assessment
 from scorecard.scores import chapters, counts, coverage, coverage_counts, score
 
 CONFIG = load_config(Path(__file__).parent / "fixtures" / "factory")
@@ -44,6 +44,34 @@ def _r(asvs_id, status, evidence=(), confidence="high"):
 
 def _by_id(results):
     return {r["asvs_id"]: r for r in results}
+
+
+@pytest.mark.parametrize("configured, recorded", [(None, 0), (0, None), (0.3, 0), (None, 0.3)])
+def test_a_temperature_other_than_the_configured_one_is_refused(configured, recorded):
+    config = {"agent": {"prompt_version": "fixture", "model": {"version": "1", "temperature": configured}}}
+    doc = _assessment()
+    doc["model"]["temperature"] = recorded
+    with pytest.raises(InputError, match="provider's default" if configured is None else f"at temperature {configured}"):
+        check_approved(doc, config)
+
+
+def test_a_nan_temperature_in_an_assessment_is_refused():
+    doc = _assessment()
+    doc["model"]["temperature"] = float("nan")
+    with pytest.raises(InputError, match="not finite"):
+        check_assessment(doc, TREE)
+
+
+def test_an_assessment_with_no_temperature_is_refused_when_the_config_has_none_set():
+    doc = {**_assessment(), "model": {"version": "1", "temperature": None}}
+    with pytest.raises(InputError, match="at temperature 0"):
+        check_approved(doc, {"agent": {"prompt_version": "fixture", "model": {"version": "1"}}})
+
+
+def test_the_default_temperature_is_zero_and_is_approved():
+    config = {"agent": {"prompt_version": "fixture", "model": {"version": "1"}}}
+    check_approved(_assessment(), config)
+    check_approved({**_assessment(), "model": {"version": "1", "temperature": None}}, {"agent": {"prompt_version": "fixture", "model": {"version": "1", "temperature": None}}})
 
 
 def test_verified_pass_and_fail_stand(root, reqs):

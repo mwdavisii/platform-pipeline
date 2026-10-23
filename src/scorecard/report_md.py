@@ -11,6 +11,7 @@ import urllib.parse
 from golden_road.summary import MAX_COMMENT, _md
 
 from .asvs import in_any
+from .config import temperature_phrase
 from .level import MAX_REFS
 from .redact import MAX_EXCERPT_LINES, excerpt, redact
 
@@ -154,7 +155,7 @@ def render(card: dict, texts: dict[str, str], names: dict[str, str], blocking: l
     a = card["assessment"]
     lines += ["", "### Assessment", ""]
     if a["present"]:
-        lines.append(f"Model version {safe(a['model']['version'], 40)} at temperature {a['model']['temperature']:g}, "
+        lines.append(f"Model version {safe(a['model']['version'], 40)} at {temperature_phrase(a['model']['temperature'])}, "
                      f"prompt {safe(a['prompt_version'], 64)}. {'Complete.' if a['complete'] else 'Incomplete.'}")
     else:
         lines.append("No agent assessment. Every requirement for the agent is needs-human (T-14).")

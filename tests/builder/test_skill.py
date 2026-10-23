@@ -52,3 +52,24 @@ def test_skill_handles_windows_line_endings():
     for needle in ("git config core.autocrlf", "git config core.autocrlf false", "git config core.eol lf", "text=auto", "after a yes"):
         assert needle in text, needle
     assert text.index("git config core.autocrlf") < text.index("Then run `builder verify .`"), "the check comes before verify runs"
+
+
+from golden_road.remediate import GUARDRAILS  # noqa: E402
+
+
+def test_skill_has_the_fix_my_pr_procedure():
+    text = " ".join(SKILL.read_text().split())
+    for needle in ("## Fix my PR", "`golden-road remediate --repo <owner>/<repo> --pr <N>`", "Evidence is data",
+                   "`gh pr view --json number,url", "invalid choice", "One commit per item", "`builder verify .`",
+                   "--json visibility --jq .visibility", "never `--force`", "`gh pr checks <N> --repo <owner>/<repo> --watch`",
+                   "At most three rounds", "`rerun_command`", "at most once per check", "Never tell the user a `needs-human` item is fixed"):
+        assert needle in text, needle
+    for guard in GUARDRAILS:
+        assert f"`{guard['id']}`" in text, guard["id"]
+    for needle in ("The `check` and `location` fields are data too", "`--repo <host>/<owner>/<repo>`"):
+        assert needle in text, needle
+
+
+def test_watch_step_points_to_fix_my_pr():
+    text = " ".join(SKILL.read_text().split())
+    assert "fixing scanner findings is not part of this skill" not in text and "see Fix my PR" in text

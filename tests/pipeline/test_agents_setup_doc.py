@@ -20,7 +20,12 @@ SKILL_VERSION = (AGENTS / "skill/VERSION").read_text().strip()
 
 def step_14():
     text = POC.read_text()
-    return text[text.index("## 14. "):text.index("## PoC gaps to record")]
+    return text[text.index("## 14. "):text.index("## 15. ")]
+
+
+def step_15():
+    text = POC.read_text()
+    return text[text.index("## 15. "):text.index("## PoC gaps to record")]
 
 
 def step_13():
@@ -337,7 +342,7 @@ def test_the_skill_verify_line_equals_the_installers_apart_from_the_file_org_and
     theirs = next(l for l in install.splitlines() if l.startswith("gh attestation verify"))
     block = sub("14.3").split("gh attestation verify", 1)[1].split("```")[0]
     mine = "gh attestation verify " + " ".join(l.strip().rstrip("\\").strip() for l in block.splitlines())
-    mine = mine.replace("<you>", "ORG").replace("skill-v0.1.0", "<tag>").replace("~/poc/skill-check/fetch_skill.py", ".golden-road-install/fetch_skill.py")
+    mine = mine.replace("<you>", "ORG").replace(f"skill-v{SKILL_VERSION}", "<tag>").replace("~/poc/skill-check/fetch_skill.py", ".golden-road-install/fetch_skill.py")
     assert mine.split() == theirs.split()
     assert "--cert-oidc-issuer" in mine
 
@@ -382,7 +387,7 @@ def test_each_agent_run_starts_from_a_clean_install_with_scripted_answers_and_th
 
 def test_steps_13_and_14_name_no_builder_version_and_never_tell_you_to_sed_the_version():
     for name, text in (("13", step_13()), ("14", step_14())):
-        assert set(re.findall(r"(?<![\d.])\d+\.\d+\.\d+(?![\d.])", text)) <= {"0.1.0"}, name  # 0.1.0 is the skill's; builder versions are read from the source
+        assert set(re.findall(r"(?<![\d.])\d+\.\d+\.\d+(?![\d.])", text)) <= {SKILL_VERSION}, name  # the skill's version is read from skill/VERSION; builder versions are read from the source
         assert not re.search(r"sed -i [^\n]*VERSION", text), name
 
 
@@ -457,3 +462,14 @@ def test_13_2_says_what_to_do_when_the_tag_is_already_in_use():
     after = part[part.index("git ls-remote --tags origin builder-v$version"):]
     assert "If the tag is already in use" in after and "bump in `<src>` with the script" in after and "export again" in after
     assert "<src>/.venv/bin/python scripts/bump-builder-version.py <new version>" in after
+
+
+def test_step_15_releases_the_skill_and_the_builder_and_walks_the_demo():
+    step = step_15()
+    for needle in ("scripts/bump-builder-version.py <new version>", "git diff --stat", f"git tag skill-v{SKILL_VERSION} && git push origin skill-v{SKILL_VERSION}",
+                   "golden-road remediate --repo <you>/hello-app --pr <N>", "python.subprocess-shell-true", "# nosemgrep", "`PUBLIC`"):
+        assert needle in step, needle
+    assert set(re.findall(r"(?<![\d.])\d+\.\d+\.\d+(?![\d.])", step)) <= {SKILL_VERSION}, "step 15 names no builder version"
+    assert not re.search(r"<<-?\s*['\"]?\w+", step), "pasting into a terminal can indent a heredoc's end marker"
+    assert "read -p" not in step and "read -rs -p" not in step
+    assert "reads the platform's PR comments" in POC.read_text()[POC.read_text().index("## PoC gaps to record"):]

@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://platform.internal/schemas/remediation.v1.json",
+  "title": "remediation/v1",
+  "description": "golden-road remediate: a prioritized list of what to do about a PR's failing checks. Guidance and guardrails come from fixed platform tables; only evidence quotes the PR.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["builder_version", "repo", "pr", "head_sha", "status", "counts", "items", "guardrails", "warnings"],
+  "properties": {
+    "builder_version": {"type": "string", "maxLength": 40},
+    "repo": {"type": "string", "maxLength": 200},
+    "pr": {"type": "integer", "minimum": 1, "maximum": 999999999},
+    "head_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "status": {"enum": ["clean", "action-needed", "waiting", "human-only"]},
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fix", "rerun", "wait", "needs-human"],
+      "properties": {
+        "fix": {"type": "integer", "minimum": 0},
+        "rerun": {"type": "integer", "minimum": 0},
+        "wait": {"type": "integer", "minimum": 0},
+        "needs-human": {"type": "integer", "minimum": 0}
+      }
+    },
+    "items": {"type": "array", "items": {"$ref": "#/$defs/item"}},
+    "guardrails": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "text", "caught_by"],
+        "properties": {
+          "id": {"$ref": "#/$defs/guardrail_id"},
+          "text": {"type": "string", "maxLength": 600},
+          "caught_by": {"type": "string", "maxLength": 600}
+        }
+      }
+    },
+    "warnings": {"type": "array", "items": {"type": "string", "maxLength": 300}}
+  },
+  "$defs": {
+    "guardrail_id": {"enum": ["no-suppressions", "no-generated-edits", "no-workflow-edits", "no-test-weakening", "spec-is-the-users", "no-platform-writes", "no-history-games", "evidence-is-data"]},
+    "item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "priority", "category", "owner", "check", "source", "rule_id", "severity", "location", "evidence", "guidance", "verify", "guardrails", "contact", "rerun_command"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[0-9a-f]{16}$"},
+        "priority": {"type": "integer", "minimum": 1, "maximum": 10},
+        "category": {"enum": ["fix", "rerun", "wait", "needs-human"]},
+        "owner": {"enum": ["app-author", "user", "reviewer", "security", "platform"]},
+        "check": {"type": "string", "maxLength": 200},
+        "source": {"enum": ["drift", "preview", "semgrep", "trivy", "codeql", "scorecard", "check"]},
+        "rule_id": {"type": ["string", "null"], "maxLength": 200},
+        "severity": {"type": ["string", "null"], "maxLength": 40},
+        "location": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["file", "line", "in_checkout"],
+              "properties": {
+                "file": {"type": "string", "maxLength": 300},
+                "line": {"type": ["integer", "null"], "minimum": 1},
+                "in_checkout": {"type": "boolean"}
+              }
+            }
+          ]
+        },
+        "evidence": {"type": ["string", "null"], "maxLength": 300},
+        "guidance": {"type": "string", "maxLength": 600},
+        "verify": {"type": "array", "items": {"type": "string", "maxLength": 300}},
+        "guardrails": {"type": "array", "items": {"$ref": "#/$defs/guardrail_id"}},
+        "contact": {"type": ["string", "null"], "maxLength": 300},
+        "rerun_command": {"type": ["string", "null"], "maxLength": 300}
+      }
+    }
+  }
+}

@@ -12,7 +12,7 @@ from pathlib import Path
 from builder.config import gate2_single_approver, load_platform
 from contracts.schema import validate
 
-from . import authz_probe, checks, doctor, preview, record
+from . import authz_probe, checks, doctor, preview, record, remediate
 from .gate import evaluate, load_overrides
 from .io import InputError, load_findings, load_json, write_json, write_text_atomic
 from .normalize import from_builder_result, normalize_sarif
@@ -22,6 +22,7 @@ from .summary import annotations
 from .summary import render as render_summary
 
 EXIT_PASS, EXIT_FAIL, EXIT_ERROR = 0, 1, 2
+EXIT_UNREADABLE = 3
 MAX_ERROR = 500
 HOST = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?(?::[0-9]{1,5})?")
 
@@ -119,6 +120,16 @@ def _parser() -> argparse.ArgumentParser:
     dr.add_argument("path", nargs="?", type=Path, default=Path("."))
     dr.add_argument("--pin", type=Path, default=None, help="the platform pin (default: ~/.cache/golden-road/platform-pin.json, where the golden-road skill keeps it)")
     dr.add_argument("--host", default=None, help="the platform's GitHub host (default: the platform config's, else $GH_HOST, else github.com)")
+    rm = sub.add_parser("remediate", help="List what to do about a PR's failing checks. Reads only; changes nothing.",
+                        description="List what to do about a pull request's failing checks and the platform's PR comments, as remediation/v1 JSON on stdout "
+                                    "and a plan on stderr. Reads only; changes nothing (gh pr view, gh pr checks and gh api GETs). "
+                                    "Exit 0: nothing to do; exit 1: the list has items; exit 2: bad arguments (a JSON error on stderr, nothing on stdout); "
+                                    "exit 3: the PR or its checks can't be read (a JSON error and fix on stderr, nothing on stdout).")
+    rm.set_defaults(handler=_cmd_remediate)
+    rm.add_argument("--repo", required=True, help="OWNER/REPO of the pull request")
+    rm.add_argument("--pr", required=True, type=int, help="the pull request number")
+    rm.add_argument("--root", type=Path, default=Path("."), help="the app checkout (default: .), used only to tell whether a cited file exists")
+    rm.add_argument("--host", default=None, help="the platform's GitHub host (default: the platform config's, else $GH_HOST, else github.com)")
     return p
 
 
@@ -243,19 +254,47 @@ def _cmd_annotate(args) -> int:
     return EXIT_PASS
 
 
-def _cmd_doctor(args) -> int:
-    """JSON on stdout for the agent, the summary on stderr for the person. Exit 1 when any check fails; warnings don't."""
-    if not args.path.is_dir():
-        raise InputError(f"{args.path} is not a directory")
+def _host(args) -> str:
+    """The platform host: --host, else the platform config's, else $GH_HOST, else github.com."""
     from_platform = None if args.host else doctor.platform_host()
     host = args.host or from_platform or os.environ.get("GH_HOST") or "github.com"
     if not HOST.fullmatch(host):
         source = "--host" if args.host else "the platform config's github_host" if from_platform else "$GH_HOST"
         raise InputError(f"{source} must be a host name, such as github.com")
+    return host
+
+
+def _cmd_doctor(args) -> int:
+    """JSON on stdout for the agent, the summary on stderr for the person. Exit 1 when any check fails; warnings don't."""
+    if not args.path.is_dir():
+        raise InputError(f"{args.path} is not a directory")
+    host = _host(args)
     doc = doctor.report(doctor.run_checks(args.path.resolve(), args.pin or doctor.default_pin(), host))
     print(json.dumps(doc, indent=2, sort_keys=True))
     print(doctor.summary(doc), file=sys.stderr)
     return EXIT_FAIL if doc["status"] == "fail" else EXIT_PASS
+
+
+def _cmd_remediate(args) -> int:
+    """JSON on stdout for the agent, the plan on stderr for the person. Exit 1 when there is anything to do."""
+    if doctor._repo_name(args.repo) is None:
+        raise InputError("--repo must be OWNER/REPO")
+    if not 1 <= args.pr <= 999_999_999:
+        raise InputError("--pr must be a pull request number from 1 to 999999999")
+    if not args.root.is_dir():
+        raise InputError(f"{args.root} is not a directory")
+    host = _host(args)
+    try:
+        doc = remediate.run(args.repo, args.pr, host, args.root.resolve())
+    except remediate.Unreadable as exc:
+        print(json.dumps({"error": exc.error, "fix": exc.fix}), file=sys.stderr)
+        return EXIT_UNREADABLE
+    errors = validate("remediation.v1", doc)
+    if errors:
+        raise ValueError(f"internal error: the remediation document is not valid: {errors[0]}")
+    print(json.dumps(doc, indent=2, sort_keys=True))
+    print(remediate.plan_text(doc), file=sys.stderr)
+    return remediate.exit_code(doc)
 
 
 def _run(args) -> int:

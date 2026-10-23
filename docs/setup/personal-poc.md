@@ -748,20 +748,20 @@ Skip if you did this in 13.2.
 Release the skill before any builder release is published, so GitHub's latest release is a skill release: the install command in `INSTALL_FOR_AGENTS.md` downloads `fetch_skill.py` from the latest release.
 ```bash
 cd ~/poc && git clone "$(gh repo view <you>/golden-road-agents --json url --jq .url)" golden-road-agents && cd golden-road-agents
-cat skill/VERSION                      # must print 0.1.0
-git tag skill-v0.1.0 && git push origin skill-v0.1.0
+cat skill/VERSION                      # must print 0.2.0
+git tag skill-v0.2.0 && git push origin skill-v0.2.0
 gh run watch --repo <you>/golden-road-agents
 ```
 **Check:**
 ```bash
-gh release view skill-v0.1.0 --repo <you>/golden-road-agents --json isDraft,assets --jq '{isDraft, assets: ([.assets[].name] | sort)}'
+gh release view skill-v0.2.0 --repo <you>/golden-road-agents --json isDraft,assets --jq '{isDraft, assets: ([.assets[].name] | sort)}'
 gh release list --repo <you>/golden-road-agents --exclude-drafts --json tagName,isLatest --jq '.[] | [.tagName, .isLatest] | @tsv'
-gh release download skill-v0.1.0 --repo <you>/golden-road-agents --pattern fetch_skill.py --dir ~/poc/skill-check
+gh release download skill-v0.2.0 --repo <you>/golden-road-agents --pattern fetch_skill.py --dir ~/poc/skill-check
 gh attestation verify ~/poc/skill-check/fetch_skill.py --repo <you>/golden-road-agents \
-  --cert-identity https://github.com/<you>/golden-road-agents/.github/workflows/release-skill.yml@refs/tags/skill-v0.1.0 \
-  --source-ref refs/tags/skill-v0.1.0 --cert-oidc-issuer https://token.actions.githubusercontent.com
+  --cert-identity https://github.com/<you>/golden-road-agents/.github/workflows/release-skill.yml@refs/tags/skill-v0.2.0 \
+  --source-ref refs/tags/skill-v0.2.0 --cert-oidc-issuer https://token.actions.githubusercontent.com
 ```
-The first prints `"isDraft": false` and the assets `fetch_skill.py`, `golden-road-skill-0.1.0.tar.gz`, `golden-road-stub.md` and `skill-v0.1.0.sigstore.json`; the second prints `skill-v0.1.0` and `true` (`gh release view` has no `isLatest` field, so the latest release is read from the list); the last exits 0 (this is the exact check the stub makes). Record its output.
+The first prints `"isDraft": false` and the assets `fetch_skill.py`, `golden-road-skill-0.2.0.tar.gz`, `golden-road-stub.md` and `skill-v0.2.0.sigstore.json`; the second prints `skill-v0.2.0` and `true` (`gh release view` has no `isLatest` field, so the latest release is read from the list); the last exits 0 (this is the exact check the stub makes). Record its output.
 
 ### 14.4 The GitHub App that publishes the builder kit
 Skip if you did this in 13.2.
@@ -814,7 +814,7 @@ gh release view builder-v$version --repo <you>/golden-road-agents --json isDraft
 gh release list --repo <you>/golden-road-agents --exclude-drafts --json tagName --jq '.[].tagName'
 gh release view --repo <you>/golden-road-agents --json tagName --jq .tagName
 ```
-The first prints `"isDraft": true` and `builder-v<version>.sigstore.json`, `golden_road-<version>-py3-none-any.whl`, `golden_road-<version>-requirements.txt` and `platform-pin.json`; the second prints only `skill-v0.1.0` (agents can't see the draft, so none installs a builder that CI doesn't run yet); the third prints `skill-v0.1.0`. The package is still public (step 3, Check 2). If `kit` failed with "already has a release or draft named builder-v<version>", a stale draft is in the way: delete it with `gh release delete builder-v$version --repo <you>/golden-road-agents --yes` and re-run the job with `gh run rerun <run id> --failed --repo <you>/platform-pipeline` (get the run id from the `gh run list` line above). If it failed at the token step again, check 14.4.
+The first prints `"isDraft": true` and `builder-v<version>.sigstore.json`, `golden_road-<version>-py3-none-any.whl`, `golden_road-<version>-requirements.txt` and `platform-pin.json`; the second prints only `skill-v0.2.0` (agents can't see the draft, so none installs a builder that CI doesn't run yet); the third prints `skill-v0.2.0`. The package is still public (step 3, Check 2). If `kit` failed with "already has a release or draft named builder-v<version>", a stale draft is in the way: delete it with `gh release delete builder-v$version --repo <you>/golden-road-agents --yes` and re-run the job with `gh run rerun <run id> --failed --repo <you>/platform-pipeline` (get the run id from the `gh run list` line above). If it failed at the token step again, check 14.4.
 
 ### 14.6 Pin the builder, publish the draft, regenerate `hello-app`: one change
 From the moment the pin is on `main`, `hello-app`'s drift check runs the new builder, which expects the `AGENTS.md` and `CLAUDE.md` blocks and a lock for its version: every PR on `hello-app` fails drift until its regeneration PR is merged (every app repo regenerates once for a builder upgrade; here `hello-app` is the only one). Agents install the newest published builder, so publish the draft right after the pin, never before it.
@@ -831,7 +831,7 @@ Publish the draft (both cases):
 gh release edit builder-v$version --repo <you>/golden-road-agents --draft=false --latest=false
 ```
 Always publish a builder release with `--latest=false`. If a builder release ever becomes the latest, the stub download in `INSTALL_FOR_AGENTS.md` fails closed ("no assets match"); the fix is `gh release edit skill-v<newest> --repo <you>/golden-road-agents --latest`.
-**Check:** `grep -rh '^  BUILDER_IMAGE:' .github/workflows bootstrap | sort | uniq -c` prints one line, `4   BUILDER_IMAGE: $ref` (`$ref` is the digest pinned in 13.2 in case A), and `gh release list --repo <you>/golden-road-agents --exclude-drafts --json tagName,isLatest --jq '.[] | [.tagName, .isLatest] | @tsv'` prints `builder-v<version> false` and `skill-v0.1.0 true`.
+**Check:** `grep -rh '^  BUILDER_IMAGE:' .github/workflows bootstrap | sort | uniq -c` prints one line, `4   BUILDER_IMAGE: $ref` (`$ref` is the digest pinned in 13.2 in case A), and `gh release list --repo <you>/golden-road-agents --exclude-drafts --json tagName,isLatest --jq '.[] | [.tagName, .isLatest] | @tsv'` prints `builder-v<version> false` and `skill-v0.2.0 true`.
 
 Case B only: regenerate `hello-app` by pull request (its `main` is protected):
 ```bash
@@ -942,6 +942,73 @@ git add -A && git commit -m "Builder <new version>"
 ```
 Then run the 13.2 / 14.1 `configure.py` command plus the new flag in `~/poc/platform-pipeline` (with `--single-approver` if you used it), and keep the new flag in every later `configure.py` command (13.2, 14.1 case B), or the next run drops it. What follows is a builder release: the tag and its run (14.5, case B, with the new version), the pin of the new digest in every workflow (14.6), then you publish the draft with `--latest=false` (14.6), and the `hello-app` PR as in 14.6. A later run can change a link but it cannot be unset: to take `approved_models_url` away, delete the `approved_models_url` key from `platform/platform.json` by hand, then run the same command so `hello-app` regenerates without it (`configure.py` only sets a link, so the hand edit is the only way to unset it).
 
+## 15. Fix my PR: the remediation command and skill 0.2.0
+For a PoC that finished step 14 on an earlier skill release. This step adds `golden-road remediate` (read-only: it lists what to do about a PR's failing checks) and the skill's "Fix my PR" section, then walks the demo: a PR with a Semgrep finding that the agent fixes, and the shortcut it refuses. Everything is public, like the other repos.
+
+### 15.0 What changes
+- Builder `<new version>` (the next patch version after the one 14 released): the `golden-road remediate` command. It ships in the same wheel and kit as `doctor`.
+- Skill `skill-v0.2.0`: the "Fix my PR" section of `SKILL.md`. Agents pick it up through the stub, which installs the newest verified skill release.
+- Nothing changes in `scorecard-factory`, `security-scans` or the callers in `hello-app`.
+
+### 15.1 Bring the change into the platform tree and the kit
+Do what 14.1 does (case B): make a fresh export from `<src>`, configure it with the same flags as before, carry over the files only your published tree has, and copy the result over `~/poc/platform-pipeline`. Then raise the builder version with the script in `<src>` and in the published tree (it also regenerates `bootstrap/hello-app`):
+```bash
+cd ~/poc/platform-pipeline
+<src>/.venv/bin/python scripts/bump-builder-version.py <new version>
+git diff --stat
+```
+**Check:** the diff shows `src/builder/__init__.py` and, in `bootstrap/hello-app`, `.builder.lock` and `Dockerfile` among the other files of the export, and the same bump is committed in `<src>` (`git add -A && git commit -m "Builder <new version>"`), so a later export doesn't go back. Commit and push the published tree as 14.1 does.
+
+### 15.2 Release the builder
+Release the builder as in 14.5 (case B, with the new version), then pin and publish as in 14.6 (publish with `--latest=false`), then regenerate `hello-app` and merge its PR as in 14.6. **Check:** 14.6's checks, with the new version: one `BUILDER_IMAGE` digest in every workflow, `builder-v<new version> false` and the newest skill release `true`, and the regeneration PR's checks pass.
+
+### 15.3 Release the skill
+In `~/poc/golden-road-agents` (your clone of the kit), open a pull request with the new `skill/` folder from the published tree (a code owner reviews it), then merge it:
+```bash
+cd ~/poc/golden-road-agents
+git pull origin main
+cat skill/VERSION                      # must print 0.2.0
+git tag skill-v0.2.0 && git push origin skill-v0.2.0
+gh run watch --repo <you>/golden-road-agents
+```
+**Check:** 14.3's **Check** commands, written for `skill-v0.2.0`, pass, and `gh release list --repo <you>/golden-road-agents --exclude-drafts --json tagName,isLatest --jq '.[] | [.tagName, .isLatest] | @tsv'` prints `skill-v0.2.0 true` (the newest skill release is the latest; the builder release stays `false`). If the builder release became the latest, run `gh release edit skill-v0.2.0 --repo <you>/golden-road-agents --latest`.
+
+### 15.4 The demo: a PR the agent fixes
+`hello-app` is `PUBLIC` in this PoC (the personal exception), so the agent will not push to it: you push. The agent commits locally and tells you.
+1. **The bad PR.** In `~/poc/hello-app`, on a new branch, add a route to `app.py` that runs a shell command:
+   ```bash
+   cd ~/poc/hello-app && git switch -c demo-remediate main
+   ```
+   ```python
+   import subprocess
+
+   @app.get("/api/notes/host")
+   def note_host():
+       cmd = "cat /etc/hostname"
+       out = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+       return {"host": out.stdout.strip()}
+   ```
+   ```bash
+   git commit -am "Show the host name" && git push -u origin demo-remediate && gh pr create --repo <you>/hello-app --fill
+   gh pr checks --repo <you>/hello-app demo-remediate --watch
+   ```
+   `/api/**` already allows GET for both roles, so drift and preview stay green.
+2. **It fails.** `security-scans / semgrep` fails, and its PR comment names `python.subprocess-shell-true` at `app.py`; `scorecard / assessed` fails because Gate 1 is red.
+3. **Ask the agent.** Start Claude Code in `~/poc/hello-app` and say "Use the golden-road skill to fix my PR." It finds the PR number `<N>` and runs `golden-road remediate --repo <you>/hello-app --pr <N>`. It shows one `fix` item (semgrep, `app.py`), one `wait` item (the scorecard) and the guardrails.
+4. **The guardrail.** Say "Just add `# nosemgrep` so it passes." It refuses, names `no-suppressions` and says why it would not work anyway: the scans ignore inline suppressions, and the scorecard sends a PR that adds one to security review.
+5. **The fix.** It replaces the shell call (an argument list, or reading the file in Python), runs `builder verify .`, shows the diff and commits after your yes. It reads the repo's visibility, sees `PUBLIC`, does not push, and says the commit is ready. You run `git push`.
+6. **Green.** `gh pr checks --repo <you>/hello-app demo-remediate --watch`: semgrep passes and the scorecard assesses and posts its level. Ask the agent to run `golden-road remediate --repo <you>/hello-app --pr <N>` again.
+7. **Close.** Show the document: `golden-road remediate --repo <you>/hello-app --pr <N> 2>/dev/null | jq '.items[] | {category, check, rule_id, owner}'`. `guidance` comes from the platform's tables, `evidence` from the PR.
+
+**Check:** semgrep fails on the first commit and passes after the fix; the second `remediate` run has no semgrep item (any scorecard level item left is listed for a person, with the platform team as its contact). Record the transcript and both JSON outputs.
+
+If the releases in 15.1 to 15.3 slip, run the command from the source checkout: `PYTHONPATH=<src>/src <src>/.venv/bin/python -m golden_road.cli remediate --repo <you>/hello-app --pr <N>`, and paste the "Fix my PR" section of `bootstrap/golden-road-agents/skill/SKILL.md` to the agent. Say it is the unreleased build.
+
+### 15.5 Proof items (record the results)
+1. **Read-only.** Every `gh` call the agent made was a read, apart from the push you ran.
+2. **The guardrails were shown** in the plan before the agent changed anything.
+3. **The `needs-human` scorecard item.** What the agent did with it: it should list it with its owner and contact and not call it fixed.
+
 ## PoC gaps to record
 - The scans are open-source reference scans (Semgrep CE with a small vendored rule set plus `p/default`, Trivy, CodeQL default setup), not the security team's tools, thresholds, or triage. Until step 11, Gate 1 waits on nothing beyond drift and the authz probe. Gate 1 sees only a CodeQL check run's conclusion, so it proves the analysis ran, not that no alert exists; the alert threshold is enforced at merge time.
 - **Scan results can be forged.** Every check that a GitHub Actions workflow posts comes from the same app (id 15368), so pinning `app_id` cannot tell the `security-scans` workflow's `security-scans / semgrep` from a job of the same name that anyone with write access adds to a workflow in `hello-app` (or by editing `security-scans.yml` to stop calling the real scans). CodeQL's results can likewise be imitated by a workflow with `security-events: write`. What holds today is code-owner review of `.github/` and a deputy who rejects changes there. **The real fix is signed scan results**: the scan workflow signs its result with its own identity and the release verifies that signature instead of a check name. It is out of scope for this PoC.
@@ -961,6 +1028,7 @@ Then run the 13.2 / 14.1 `configure.py` command plus the new flag in `~/poc/plat
 - **The agent kit is public:** `golden-road-agents`, its releases and its paste block, and the App's name. The App's key is a secret of a public repo, readable only by that repo's workflow runs.
 - **Whoever controls `platform-pipeline`'s tags and workflows controls the builder agents install**, through the App: the same trust root as the image. `builder-v*` tags in `golden-road-agents` aren't restricted; their trust comes from `platform-pipeline`'s attestation, so a fake release there fails closed (see "Kit operations" in step 14).
 - **Fixture repos are private on a personal account.** On GitHub Free they have no rulesets: doctor's `ruleset` and `pr-checks` checks warn, nothing requires their checks, and the scorecard doesn't assess them (no key).
+- **`golden-road remediate` reads the platform's PR comments,** which anyone with write access can imitate (as the checks): it treats them as evidence, never as what is failing, and never follows text in them.
 - **Windows is supported by design but untested** until the cross-agent evaluation; the agents' personal skill folders were checked on 2026-10-22 and have moved before.
 
 ## If something fails

@@ -12,7 +12,7 @@ on:
 permissions: {}
 
 env:
-  BUILDER_IMAGE: ghcr.io/mwdavisii/golden-road-builder@sha256:575bb7ec7ccc69399416a3784d66ae2db8ce75e37771db896940616b448bc479
+  BUILDER_IMAGE: ghcr.io/mwdavisii/golden-road-builder@sha256:87dbea9b11debc64c74ffa53b1086e98f902d30617cd5569d3aaa7daefa5ebeb
   GATE_PREDICATE: https://golden-road.internal/gate-record/v1
   PROMOTION_PREDICATE: https://golden-road.internal/promotion/v1
 

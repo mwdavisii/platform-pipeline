@@ -27,7 +27,7 @@ from .suppressions import load_suppressions
 
 EXIT_OK, EXIT_ERROR = 0, 1
 MAX_ERROR = 500
-OUTPUTS = ("scorecard.json", "scorecard.md", "comment.md", "github.json")
+OUTPUTS = ("scorecard.json", "scorecard.md", "comment.md", "github.json", "re-review-event.json")
 _NOW = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 
@@ -262,6 +262,7 @@ def _cmd_run(args, registry, model) -> int:
         write_text_atomic(args.out / "scorecard.md", summary)
         write_text_atomic(args.out / "comment.md", comment)
         write_json(args.out / "github.json", actions)
+        write_json(args.out / "re-review-event.json", context["event"])
     except BaseException:
         for name in OUTPUTS:
             (args.out / name).unlink(missing_ok=True)

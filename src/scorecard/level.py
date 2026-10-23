@@ -26,6 +26,9 @@ SUMMARIES = {
     "T-14": "Assessment incomplete, or an input could not be read or looked up",
     "T-15": "Scanner suppression added or widened",
     "T-16": "Workflow, CODEOWNERS, or harness-shadowing change",
+    "T-17": "Resource tier raised",
+    "T-18": "App type changed: new base image and runtime",
+    "T-19": "Large change",
 }
 MAX_REFS = 20
 
@@ -55,11 +58,13 @@ def _finding_ref(finding: dict) -> dict:
 
 def decide(*, config: dict, intake: dict | None, spec_classification: str | None, results: list[dict], findings: list[dict],
            covered: int, total: int, flags: dict, lookup_failures: list[dict], pr_text_hits: list[dict],
-           problems: list[dict] = ()) -> tuple[str, str, list[dict]]:
+           problems: list[dict] = (), change_size: dict | None = None) -> tuple[str, str, list[dict]]:
     """Return (level, floor, reasons). `findings` are already suppression-filtered; agent findings carry re-verified evidence.
 
     `covered` and `total` are the raw coverage counts over the agent's set; T-11 compares them unrounded, and no agent set to
     judge (total 0) fires it. The data classification is the more sensitive of the intake's and the builder-spec's.
+    `change_size` is `{lines, files}` from the base and head diff, or None when it couldn't be measured (that is a T-14 problem,
+    and T-19 doesn't fire).
     """
     fired: dict[str, list[dict]] = {}
 
@@ -101,6 +106,10 @@ def decide(*, config: dict, intake: dict | None, spec_classification: str | None
     for failure in [*lookup_failures, *problems]:
         fire("T-14", {"source": failure["source"]})
 
+    limits = config["large_change"]
+    if change_size and (change_size["lines"] > limits["lines"] or change_size["files"] > limits["files"]):
+        fire("T-19", {"source": "the base and head diff"})
+
     reasons = []
     for trigger in sorted(fired, key=lambda t: int(t[2:])):
         level = config["triggers"][trigger]
@@ -111,12 +120,15 @@ def decide(*, config: dict, intake: dict | None, spec_classification: str | None
             if ref not in refs:
                 refs.append(ref)
         summary = SUMMARIES[trigger]
+        if trigger == "T-19":
+            lines, files = change_size["lines"], change_size["files"]
+            summary += f": {lines} line{'s' * (lines != 1)} in {files} file{'s' * (files != 1)}"
         if trigger == "T-12" and flags["ignored"]:
             summary += "; the agent answered requirements it was not asked about"
         if len(refs) > MAX_REFS:
             summary += f" (showing {MAX_REFS} of {len(refs)})"
         elif len(refs) > 1:
             summary += f" ({len(refs)} items)"
-        reasons.append({"trigger": trigger, "level": level, "summary": summary, "refs": refs[:MAX_REFS]})
+        reasons.append({"trigger": trigger, "level": level, "summary": summary, "refs": refs[:MAX_REFS], "total": len(refs)})
     base = intake_floor(config, intake)
     return highest([base] + [r["level"] for r in reasons]), base, reasons

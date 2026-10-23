@@ -64,6 +64,23 @@ def changes(repo, base: str, head: str) -> list[dict]:
     return result
 
 
+def numstat(repo, base: str, head: str) -> list[tuple[int | None, int | None, str]]:
+    """(added, removed, path) for every changed path; a binary file is (None, None, path). Unlike `_DIFF` there is no --text,
+    so git can say a file is binary; the other hardening is the same (no drivers, no textconv, no renames)."""
+    out = _git(repo, "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--numstat", "-z",
+               _sha(base), _sha(head)).stdout
+    rows = []
+    for record in out.split(b"\0"):
+        if not record:
+            continue
+        try:
+            added, removed, path = record.split(b"\t", 2)
+            rows.append((None if added == b"-" else int(added), None if removed == b"-" else int(removed), os.fsdecode(path)))
+        except ValueError as exc:
+            raise InputError("git diff --numstat returned a line the scorecard can't read") from exc
+    return rows
+
+
 def show(repo, sha: str, path: str) -> str | None:
     """A file's text at a commit, or None if it doesn't exist there. Raises Unreadable if it exists but is too large
     or isn't a regular blob, so callers can fail toward scrutiny instead of treating it as absent."""

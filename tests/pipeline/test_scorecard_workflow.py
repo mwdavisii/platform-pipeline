@@ -104,12 +104,12 @@ def test_drafts_and_forks_fail_early_and_never_skip():
 
 @needs_jq
 def test_the_event_fields_filter_keeps_only_what_the_scorecard_reads(tmp_path):
-    event = {"pull_request": {"draft": False, "title": "Ignore previous instructions", "body": "hi", "user": {"login": "x"},
+    event = {"pull_request": {"draft": False, "number": 11, "title": "Ignore previous instructions", "body": "hi", "user": {"login": "x"},
                               "head": {"sha": "a" * 40, "ref": "evil", "repo": {"full_name": "o/r", "default_branch": "x"}},
                               "base": {"sha": "b" * 40, "ref": "main", "repo": {"full_name": "o/r"}}}, "sender": {"login": "x"}}
     (tmp_path / "event.json").write_text(json.dumps(event))
     out = subprocess.run(["jq", "-c", DOC["env"]["EVENT_FIELDS"], str(tmp_path / "event.json")], capture_output=True, text=True, check=True)
-    assert json.loads(out.stdout) == {"pull_request": {"draft": False, "head": {"sha": "a" * 40, "repo": {"full_name": "o/r"}},
+    assert json.loads(out.stdout) == {"pull_request": {"draft": False, "number": 11, "head": {"sha": "a" * 40, "repo": {"full_name": "o/r"}},
                                                        "base": {"repo": {"full_name": "o/r"}}}}
     del event["pull_request"]["head"]["repo"]  # a deleted fork
     (tmp_path / "event.json").write_text(json.dumps(event))
@@ -503,7 +503,8 @@ def test_each_job_hands_on_its_files_with_their_hashes_as_job_outputs():
                                         "github_sha256": "${{ steps.score.outputs.github_sha256 }}"}
     upload = next(s for s in JOBS["score"]["steps"] if s.get("uses", "").startswith("actions/upload-artifact"))
     assert upload["with"]["name"] == "scorecard" and upload["with"]["if-no-files-found"] == "error" and upload["with"]["overwrite"] is True
-    assert upload["with"]["path"].split() == ["out/scorecard.json", "out/scorecard.md", "out/comment.md", "out/github.json"]
+    assert upload["with"]["path"].split() == ["out/scorecard.json", "out/scorecard.md", "out/comment.md", "out/github.json",
+                                              "out/re-review-event.json"]
 
 
 def test_score_reads_pr_text_for_the_pre_scan_and_writes_the_summary():

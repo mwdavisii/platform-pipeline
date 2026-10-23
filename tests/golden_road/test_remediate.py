@@ -195,6 +195,15 @@ def test_scorecard_levels():
     assert run([check("scorecard / level: standard", "pass", "SUCCESS")], {"scorecard": scorecard_comment(("T-15",), "security_review")})["items"] == []
 
 
+def test_the_re_review_triggers_are_reviewer_items_with_nothing_to_fix():
+    doc = run([check("scorecard / level: elevated", "pass", "SUCCESS")], {"scorecard": scorecard_comment(("T-17", "T-18", "T-19"))})
+    for trigger in ("T-17", "T-18", "T-19"):
+        item = only(doc, rule_id=trigger)
+        assert item["owner"] == "reviewer" and item["category"] == "needs-human"
+        assert item["guidance"].endswith(remediate.TRIGGER_NOTES[trigger])
+        assert "nothing to fix" in item["guidance"] and "undo it" not in item["guidance"]
+
+
 def test_unknown_failing_check_is_needs_human_for_the_user():
     item = only(run([check("lint")]), category="needs-human")
     assert item["owner"] == "user" and item["priority"] == 10 and "not a golden-road check" in item["guidance"].lower() and "never the workflow file" in item["guidance"]

@@ -169,6 +169,7 @@ def blank_setup_doc_edits(config, required=()):
     config["agent"]["budget"]["max_run_seconds"] = None  # a deployment may set its own deadline, or 0 for none
     config["agent"]["batching"]["max_turns"] = None  # a deployment may give the model more calls per batch
     config["agent"]["budget"]["max_tokens_per_call"] = None  # a deployment may allow longer replies (a cut-off submission is invalid)
+    config["large_change"] = None  # a deployment may set its own large-change limits (T-19)
     return config
 
 

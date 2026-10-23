@@ -130,6 +130,14 @@ def test_scorecard_comment_round_trip():
     assert empty["reasons"] == []
 
 
+def test_scorecard_comment_parses_the_re_review_triggers():
+    reasons = [{"trigger": "T-17", "level": "elevated", "summary": "Resource tier raised", "refs": []},
+               {"trigger": "T-19", "level": "elevated", "summary": "Large change: 1200 lines in 3 files", "refs": []}]
+    text = report_md.render(reporters._card(reasons=reasons, level="elevated"), reporters.TEXTS, reporters.NAMES, reporters.BLOCKING)
+    assert [(r["trigger"], r["summary"]) for r in pc.parse_scorecard(text)["reasons"]] == [
+        ("T-17", "Resource tier raised"), ("T-19", "Large change: 1200 lines in 3 files")]
+
+
 def test_scorecard_comment_truncated_still_parses_what_fits():
     reasons = [{"trigger": f"T-{i % 16 + 1}", "level": "elevated", "summary": "s" * 250, "refs": []} for i in range(400)]
     text = report_md.render(reporters._card(reasons=reasons, level="elevated"), reporters.TEXTS, reporters.NAMES, reporters.BLOCKING, limit=report_md.MAX_COMMENT)

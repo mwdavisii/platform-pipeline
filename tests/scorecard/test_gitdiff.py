@@ -86,3 +86,23 @@ def test_diff_capped_stops_streaming_at_the_cap(git_repo):
     assert cut is True and len(text.encode()) == 5000
     whole, cut = git.diff_capped(git_repo.root, base, head)
     assert cut is False and len(whole) > 100_000 and git.diff_capped(git_repo.root, base, head, 10**7) == (whole, False)
+
+
+def test_numstat_counts_lines_and_marks_binary_files(git_repo):
+    base = git_repo.commit({"a.py": "one\ntwo\n", "gone.py": "x\ny\n"})
+    head = git_repo.commit({"a.py": "one\nTWO\nthree\n", "gone.py": None, "blob.bin": "\x00\x01\x02\n", "new dir/b.py": "b\n"})
+    assert sorted(git.numstat(git_repo.root, base, head), key=lambda row: row[2]) == [
+        (2, 1, "a.py"), (None, None, "blob.bin"), (0, 2, "gone.py"), (1, 0, "new dir/b.py")]
+
+
+def test_numstat_reads_paths_with_a_tab_and_a_newline(git_repo):
+    base = git_repo.commit({"a.py": "one\n"})
+    head = git_repo.commit({"tab\tname.py": "x\ny\n", "new\nline.py": "z\n", "a.py": "one\ntwo\n"})
+    assert sorted(git.numstat(git_repo.root, base, head), key=lambda row: row[2]) == [
+        (1, 0, "a.py"), (1, 0, "new\nline.py"), (2, 0, "tab\tname.py")]
+
+
+def test_numstat_refuses_refs_that_are_not_shas(git_repo):
+    git_repo.commit({"a": "a\n"})
+    with pytest.raises(InputError):
+        git.numstat(git_repo.root, "HEAD", "HEAD")

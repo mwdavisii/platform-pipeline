@@ -13,7 +13,9 @@ from pathlib import Path
 
 import pytest
 
+from builder import VERSION as BUILDER_VERSION
 from contracts.schema import validate
+from scorecard import cli
 from scorecard.asvs import for_level, load_asvs
 from scorecard.cli import main
 from scorecard.registry import LookupFailed
@@ -27,8 +29,9 @@ GREEN = {"passed": True, "required_checks": [{"name": "golden-road / drift", "st
 AWS = "AKIA" + "ABCDEFGHIJKLMNOP"
 
 
-def pr_event(repo="acme/notes", *, draft=False, head_repo=None, sha="f" * 40):
-    return {"pull_request": {"draft": draft, "head": {"sha": sha, "repo": {"full_name": head_repo or repo}}, "base": {"repo": {"full_name": repo}}}}
+def pr_event(repo="acme/notes", *, draft=False, head_repo=None, sha="f" * 40, number=11):
+    return {"pull_request": {"draft": draft, "number": number, "head": {"sha": sha, "repo": {"full_name": head_repo or repo}},
+                             "base": {"repo": {"full_name": repo}}}}
 
 
 @pytest.fixture
@@ -173,7 +176,7 @@ def test_gate1_not_green_is_not_assessed(app, run, tmp_path, capsys):
     code, card, out, registry = run(checks=failing)
     assert code == 1 and card is None and registry.calls == []
     assert "not assessed" in capsys.readouterr().err
-    assert not any((out / name).exists() for name in ("scorecard.json", "scorecard.md", "comment.md", "github.json"))
+    assert not any((out / name).exists() for name in cli.OUTPUTS)
 
 
 @pytest.mark.parametrize("what, kwargs, message", [
@@ -967,3 +970,89 @@ def test_a_run_with_a_null_temperature_end_to_end(app, run, factory, capsys):
     assert "provider's default temperature" in (out / "comment.md").read_text()
     code, card, out, _ = run(assessment=doc)  # temperature 0 against a null config
     assert code == 1 and card is None and "provider's default temperature" in capsys.readouterr().err
+
+
+def test_the_re_review_event_is_written_with_the_scorecard(app, run):
+    app.commit({"app.py": APP + "\n# tidy\n"})
+    code, card, out, _ = run(assessment=full_assessment(app, run))
+    event = json.loads((out / "re-review-event.json").read_text())
+    assert code == 0 and validate("re-review-event.v1", event) == []
+    assert event["repo"] == "acme/notes" and event["pr"] == 11 and event["head_sha"] == app.git("rev-parse", "pr")
+    assert event["tree_sha"] == card["app"]["tree_sha"] and event["level"] == card["level"] == "standard" and event["signals"] == []
+    assert event["scorecard_version"] == BUILDER_VERSION and event["created"] == NOW and event["complete"] is True
+
+
+def test_a_failed_write_leaves_none_of_the_outputs(app, run, monkeypatch):
+    app.commit({"app.py": APP + "\n# tidy\n"})
+    real = cli.write_json
+
+    def failing(path, doc):
+        if path.name == "re-review-event.json":
+            raise OSError("disk full")
+        real(path, doc)
+
+    monkeypatch.setattr(cli, "write_json", failing)
+    code, card, out, _ = run()
+    assert code == 1 and card is None
+    assert "re-review-event.json" in cli.OUTPUTS and not any((out / name).exists() for name in cli.OUTPUTS)
+
+
+def test_a_pr_that_is_not_assessed_has_no_re_review_event(app, run, tmp_path):
+    app.commit({"app.py": APP + "\n# tidy\n"})
+    (tmp_path / "out").mkdir()
+    (tmp_path / "out" / "re-review-event.json").write_text("{}")  # left over from an earlier run
+    failing = {"passed": False, "required_checks": [{"name": "golden-road / drift", "state": "failure"}, GREEN["required_checks"][1]]}
+    code, card, out, _ = run(checks=failing)
+    assert code == 1 and card is None and not (out / "re-review-event.json").exists()
+
+
+def test_the_re_review_event_never_carries_model_text(app, run):
+    from contracts.findings import make_finding_v2
+
+    marker = "MODELTEXT-5f2c9"
+    app.commit({"app.py": APP + "\n# tidy\n"})
+    assessment = full_assessment(app, run)
+    for result in assessment["results"]:
+        result["justification"] = f"owner filter {marker}"
+    asked = {r["asvs_id"] for r in assessment["results"]}
+    outside = next(r["id"] for r in load_asvs() if r["id"] not in asked)  # an answer for a requirement the agent was not asked about
+    assessment["results"].append({"asvs_id": outside, "status": "pass", "confidence": "high", "justification": f"unasked {marker}", "evidence": [EVIDENCE]})
+    # The evidence is a real line, so the scorecard re-verifies it and the finding reaches the T-6 trigger as a verified one.
+    assessment["findings"] = [make_finding_v2(
+        first_seen=NOW, layer="agentic", tool="fixture-agent", rule_id="VC-4/debug-endpoint", category="authz", severity="high",
+        location={"kind": "line", "file": "app.py", "start_line": 8}, evidence=[EVIDENCE], evidence_verified=False,
+        title=f"Debug route {marker}", rationale=f"because {marker}", fix={"summary": f"Remove it {marker}.", "steps": [f"step {marker}"]},
+        standards=[{"framework": "golden-road-vc", "id": "VC-4"}])]
+    code, card, out, _ = run(assessment=assessment)
+    assert code == 0 and marker in (out / "scorecard.json").read_text()
+    assert card["assessment"]["findings"][0]["evidence_verified"] is True
+    assert {"T-6", "T-12"} <= set(card["triggers_fired"]) and card["assessment"]["ignored_results"] == [outside]
+    text = (out / "re-review-event.json").read_text()
+    assert marker not in text and {s["id"] for s in json.loads(text)["signals"]} >= {"T-6", "T-12"}
+
+
+def test_a_change_over_the_large_change_limit_fires_t19(app, run, factory):
+    path = factory / "config" / "scorecard.yaml"
+    text = path.read_text()
+    assert "large_change: {lines: 1000, files: 40}" in text
+    path.write_text(text.replace("large_change: {lines: 1000, files: 40}", "large_change: {lines: 3, files: 40}"))
+    app.commit({"app.py": APP + "# one\n# two\n# three\n# four\n"})
+    _, card, out, _ = run(assessment=full_assessment(app, run))
+    assert card["triggers_fired"] == ["T-19"] and card["level"] == "elevated"
+    assert json.loads((out / "re-review-event.json").read_text())["signals"] == [
+        {"id": "T-19", "kind": "trigger", "level": "elevated", "summary": "Large change: 4 lines in 1 file", "count": 1}]
+
+
+def test_a_builder_lock_bump_is_recorded_and_raises_nothing(app, run):
+    def lock(version):
+        return json.dumps({"builder_version": version}) + "\n"
+
+    app.git("checkout", "-q", "main")
+    app.commit({".builder.lock": lock("0.3.7")}, message="lock")
+    app.git("checkout", "-q", "pr")
+    app.git("merge", "-q", "--ff-only", "main")
+    app.commit({".builder.lock": lock("0.3.8")})
+    _, card, out, _ = run(assessment=full_assessment(app, run))
+    assert card["triggers_fired"] == []
+    assert json.loads((out / "re-review-event.json").read_text())["signals"] == [
+        {"id": "builder-bumped", "kind": "recorded", "summary": "builder 0.3.7 -> 0.3.8"}]

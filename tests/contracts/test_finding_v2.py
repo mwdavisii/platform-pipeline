@@ -65,7 +65,7 @@ def test_new_categories(category):
         (lambda f: f.update(category="injection", standards=[{"framework": "golden-road-vc", "id": "VC-INJ"}, {"framework": "cwe", "id": "CWE-77"}]), "standards"),
         (lambda f: f.update(standards=[{"framework": "asvs-5.0", "id": "v5.0.0-8.2.2"}]), "standards"),
         (lambda f: f.update(standards=[{"framework": "golden-road-vc", "id": "VC-9"}]), "standards/0/id"),
-        (lambda f: f.update(standards=[{"framework": "golden-road-trigger", "id": "T-17"}]), "standards/0/id"),
+        (lambda f: f.update(standards=[{"framework": "golden-road-trigger", "id": "T-20"}]), "standards/0/id"),  # T-20 is the portal's runtime trigger; its own change adds it
         (lambda f: f.update(image_digest="sha256:short"), "image_digest"),
         (lambda f: f.update(category="made-up"), "category"),
     ],
@@ -125,3 +125,9 @@ def test_schemas_resolve_each_other_by_id():
     from contracts.schema import _registry
 
     assert "https://platform.internal/schemas/finding.v2.json" in {uri for uri in _registry()}
+
+
+@pytest.mark.parametrize("trigger", ["T-17", "T-18", "T-19"])
+def test_the_re_review_triggers_are_valid_trigger_standards(trigger):
+    finding = vc_finding(rule_id=f"{trigger}/x", category="iac", standards=[{"framework": "golden-road-trigger", "id": trigger}])
+    assert validate("finding.v2", finding) == []

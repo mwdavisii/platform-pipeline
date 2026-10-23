@@ -55,6 +55,9 @@ def test_example_is_valid():
         lambda s: s["app"].update(commit="HEAD"),
         lambda s: s.update(triggers_fired=["T-13"]),  # T-13 is reserved
         lambda s: s["reasons"][0].update(trigger="T-13"),
+        lambda s: s.update(triggers_fired=["T-20"]),
+        lambda s: s["reasons"][0].update(total=0),
+        lambda s: s["reasons"][0].update(total="3"),
         lambda s: s["assessment"].update(prompt_version="bad version"),
         lambda s: s["suppressions_applied"].append({"id": "-bad", "finding_id": "a" * 64}),
         lambda s: s["reasons"][0].update(refs=[{"asvs_id": "v5.0.0-8"}]),
@@ -86,4 +89,18 @@ def test_no_intake_may_still_carry_the_classification_from_the_builder_spec():
 def test_optional_sections_may_be_absent_or_null():
     doc = copy.deepcopy(SCORECARD)
     doc.update(openssf=None, quality=None, llm_top10=None)
+    assert validate("scorecard.v1", doc) == []
+
+
+@pytest.mark.parametrize("trigger", ["T-17", "T-18", "T-19"])
+def test_the_re_review_triggers_are_valid_trigger_ids(trigger):
+    doc = copy.deepcopy(SCORECARD)
+    doc["reasons"][0]["trigger"] = trigger
+    doc["triggers_fired"] = [trigger]
+    assert validate("scorecard.v1", doc) == []
+
+
+def test_a_reason_may_carry_the_true_item_count():
+    doc = copy.deepcopy(SCORECARD)
+    doc["reasons"][0]["total"] = 35
     assert validate("scorecard.v1", doc) == []

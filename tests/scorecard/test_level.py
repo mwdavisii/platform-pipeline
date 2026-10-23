@@ -2,7 +2,7 @@ import pytest
 
 from contracts.findings import make_finding_v2
 from golden_road.io import InputError
-from scorecard.level import decide, triggers_of
+from scorecard.level import SUMMARIES, decide, triggers_of
 
 NOTES = {"tier": "moderate", "data_classification": "internal"}
 FLAGS = {"incomplete": False, "unverified": [], "ignored": []}
@@ -74,6 +74,8 @@ def test_unverified_citation_raises_to_elevated(config):
         ([{"framework": "golden-road-trigger", "id": "T-9"}], "T-9", "elevated"),
         ([{"framework": "golden-road-trigger", "id": "T-15"}], "T-15", "security_review"),
         ([{"framework": "golden-road-trigger", "id": "T-16"}], "T-16", "security_review"),
+        ([{"framework": "golden-road-trigger", "id": "T-17"}], "T-17", "elevated"),
+        ([{"framework": "golden-road-trigger", "id": "T-18"}], "T-18", "elevated"),
     ],
 )
 def test_findings_fire_their_triggers(config, standards, trigger, level):
@@ -204,6 +206,13 @@ def test_t12_refs_are_deduped_ordered_and_capped(config):
     many = {**FLAGS, "unverified": [{"finding_id": f"{i:064x}"} for i in range(30)]}
     _, _, reasons = _decide(config, flags=many, results=results)
     assert reasons[0]["refs"][0] == {"finding_id": f"{0:064x}"} and reasons[0]["summary"].endswith("(showing 20 of 32)")
+    assert len(reasons[0]["refs"]) == 20 and reasons[0]["total"] == 32
+
+
+def test_every_reason_carries_the_deduplicated_ref_count_before_the_cap(config):
+    flags = {**FLAGS, "unverified": [{"asvs_id": "v5.0.0-8.2.2"}, {"asvs_id": "v5.0.0-8.2.2"}]}
+    _, _, reasons = _decide(config, flags=flags, results=[_result("v5.0.0-8.2.2", "needs_human", "downgraded")])
+    assert [(r["refs"], r["total"]) for r in reasons] == [([{"asvs_id": "v5.0.0-8.2.2"}], 1)]
 
 
 def test_answers_outside_the_agents_set_are_suspicious(config):
@@ -216,3 +225,45 @@ def test_answers_outside_the_agents_set_are_suspicious(config):
 def test_unknown_tier_is_an_input_error(config):
     with pytest.raises(InputError):
         _decide(config, intake={"tier": "critical", "data_classification": "internal"})
+
+
+@pytest.mark.parametrize("size, fires", [
+    ({"lines": 1000, "files": 40}, False),
+    ({"lines": 1001, "files": 1}, True),
+    ({"lines": 0, "files": 41}, True),
+    ({"lines": 999, "files": 39}, False),
+])
+def test_t19_fires_only_above_the_large_change_limits(config, size, fires):
+    level, _, reasons = _decide(config, change_size=size)
+    assert _triggers(reasons) == (["T-19"] if fires else [])
+    if fires:
+        assert level == "elevated"
+        lines, files = size["lines"], size["files"]
+        assert reasons[0]["summary"] == f"Large change: {lines} line{'s' * (lines != 1)} in {files} file{'s' * (files != 1)}"
+        assert reasons[0]["refs"] == [{"source": "the base and head diff"}]
+
+
+def test_no_change_size_never_fires_t19(config):
+    assert _decide(config, change_size=None) == ("standard", "standard", [])
+
+
+def test_the_re_review_triggers_take_their_level_from_the_config(config):
+    config["triggers"].update({"T-17": "security_review", "T-19": "security_review"})
+    finding = _finding([{"framework": "golden-road-trigger", "id": "T-17"}])
+    level, _, reasons = _decide(config, findings=[finding], change_size={"lines": 5000, "files": 1})
+    assert level == "security_review"
+    assert [(r["trigger"], r["level"]) for r in reasons] == [("T-17", "security_review"), ("T-19", "security_review")]
+
+
+def test_every_configurable_trigger_has_a_summary(config):
+    assert set(SUMMARIES) == set(config["triggers"])
+
+
+@pytest.mark.parametrize("size, text", [
+    ({"lines": 1, "files": 41}, "Large change: 1 line in 41 files"),
+    ({"lines": 1001, "files": 1}, "Large change: 1001 lines in 1 file"),
+    ({"lines": 5000, "files": 50}, "Large change: 5000 lines in 50 files"),
+])
+def test_t19_summary_pluralizes(config, size, text):
+    _, _, reasons = _decide(config, change_size=size)
+    assert reasons[0]["summary"] == text

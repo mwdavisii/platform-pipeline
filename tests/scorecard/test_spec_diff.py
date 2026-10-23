@@ -1,7 +1,10 @@
 import copy
 import json
+from importlib import resources
 
-from scorecard.signals.spec_diff import spec_changes
+import pytest
+
+from scorecard.signals.spec_diff import TIER_ORDER, recorded_spec_signals, spec_changes, tier_lowered, tier_raised
 
 NOW = "2026-10-21T12:00:00Z"
 
@@ -88,3 +91,85 @@ def test_health_path_change_is_an_authz_exemption(notes_spec):
 def test_unreadable_base_spec_fires_instead_of_comparing_with_nothing(notes_spec):
     assert _rules(spec_changes("{not json", json.dumps(notes_spec), now=NOW)) == ["T-2/spec-unreadable"]
     assert _rules(spec_changes("{not json", None, now=NOW)) == ["T-2/spec-removed-or-invalid"]
+
+
+def test_raising_the_resource_tier_fires_t17(notes_spec):
+    head = copy.deepcopy(notes_spec)
+    head["resources_tier"] = "medium"
+    findings = _diff(notes_spec, head)
+    assert _rules(findings) == ["T-17/resources-raised"]
+    assert findings[0]["severity"] == "medium" and {"framework": "golden-road-trigger", "id": "T-17"} in findings[0]["standards"]
+    assert findings[0]["evidence"][0]["snippet"] == "resources_tier raised from default to medium"
+
+
+def test_a_new_spec_above_the_default_tier_fires_t17(notes_spec):
+    head = copy.deepcopy(notes_spec)
+    head["resources_tier"] = "medium"
+    assert "T-17/resources-raised" in _rules(_diff(None, head))
+    assert "T-17/resources-raised" not in _rules(_diff(None, notes_spec))
+
+
+def test_the_same_or_a_lower_tier_does_not_fire_t17(notes_spec):
+    base = copy.deepcopy(notes_spec)
+    base["resources_tier"] = "medium"
+    assert _diff(base, base) == [] and _diff(base, notes_spec) == []
+
+
+def test_changing_the_app_type_fires_t18(notes_spec):
+    head = copy.deepcopy(notes_spec)
+    head["app_type"] = "node"
+    findings = _diff(notes_spec, head)
+    assert _rules(findings) == ["T-18/app-type-changed"]
+    assert findings[0]["severity"] == "medium" and {"framework": "golden-road-trigger", "id": "T-18"} in findings[0]["standards"]
+    assert findings[0]["evidence"][0]["snippet"] == "app_type changed from python to node"
+
+
+def test_a_first_spec_is_not_an_app_type_change(notes_spec):
+    assert "T-18/app-type-changed" not in _rules(_diff(None, notes_spec))
+
+
+def test_an_invalid_head_spec_is_t2_not_t17_or_t18(notes_spec):
+    assert _rules(spec_changes(json.dumps(notes_spec), "{bad", now=NOW)) == ["T-2/spec-removed-or-invalid"]
+
+
+def test_the_tier_order_is_the_builder_spec_enum():
+    schema = json.loads((resources.files("contracts") / "schemas" / "builder-spec.v1.json").read_text(encoding="utf-8"))
+    assert list(TIER_ORDER) == schema["properties"]["resources_tier"]["enum"]
+
+
+@pytest.mark.parametrize("before, after, raised", [
+    (None, "default", False), (None, "medium", True), ("default", "medium", True), ("medium", "medium", False),
+    ("medium", "default", False), ("default", "large", True), ("large", "default", True), ("large", "large", True),
+])
+def test_tier_raised_fails_closed_on_an_unknown_tier(before, after, raised):
+    assert tier_raised(before, after) is raised
+
+
+@pytest.mark.parametrize("before, after, lowered", [
+    ("medium", "default", True), ("default", "medium", False), ("default", "default", False), ("large", "default", False), ("medium", "large", False),
+])
+def test_tier_lowered_only_between_known_tiers(before, after, lowered):
+    assert tier_lowered(before, after) is lowered
+
+
+def test_removed_egress_is_recorded_and_raises_no_trigger(notes_spec):
+    head = copy.deepcopy(notes_spec)
+    head["egress"] = []
+    assert _diff(notes_spec, head) == []
+    assert recorded_spec_signals(json.dumps(notes_spec), json.dumps(head)) == [
+        {"id": "egress-removed", "kind": "recorded", "summary": "egress removed: litellm.internal:443"}]
+
+
+def test_a_lower_tier_is_recorded_and_raises_no_trigger(notes_spec):
+    base = copy.deepcopy(notes_spec)
+    base["resources_tier"] = "medium"
+    assert _diff(base, notes_spec) == []
+    assert recorded_spec_signals(json.dumps(base), json.dumps(notes_spec)) == [
+        {"id": "resources-lowered", "kind": "recorded", "summary": "resources_tier lowered from medium to default"}]
+
+
+def test_nothing_is_recorded_without_two_readable_specs_or_without_a_change(notes_spec):
+    text = json.dumps(notes_spec)
+    assert recorded_spec_signals(text, text) == []
+    assert recorded_spec_signals(None, text) == [] and recorded_spec_signals(text, None) == []
+    assert recorded_spec_signals("{bad", text) == [] and recorded_spec_signals(text, "{bad") == []

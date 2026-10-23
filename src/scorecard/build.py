@@ -13,6 +13,7 @@ from golden_road.io import InputError
 from . import VERSION, git
 from .asvs import ASVS_SHA256, chapter_names, check_ids, for_level, load_asvs
 from .config import gate1_list, load_config, load_confirmed_na, load_intake
+from .event import re_review_event
 from .level import decide
 from .levels import asvs_level, effective_classification
 from .lockfiles import read_packages
@@ -26,7 +27,9 @@ from .scoping import scope
 from .signals.changes import change_signals
 from .signals.dependencies import dependency_signals
 from .signals.injection import text_hits, tree_signals
-from .signals.spec_diff import SPEC, head_spec, spec_changes
+from .signals.lock_diff import LOCK, builder_bumped
+from .signals.size import change_size
+from .signals.spec_diff import SPEC, head_spec, recorded_spec_signals, spec_changes
 from .suppressions import apply_suppressions, expired, load_suppressions
 
 
@@ -55,6 +58,12 @@ def _pr_head_sha(event) -> str | None:
     return sha if isinstance(sha, str) and sha else None
 
 
+def _pr_number(event) -> int | None:
+    pr = event.get("pull_request") if isinstance(event, dict) else None
+    number = pr.get("number") if isinstance(pr, dict) else None
+    return number if isinstance(number, int) and not isinstance(number, bool) and 1 <= number <= 999_999_999 else None
+
+
 def _redact_unverified(results: list[dict], findings: list[dict]) -> None:
     """Unverified agent evidence is arbitrary text, so its snippets are redacted in the JSON too. Verified anchors quote the repo and stay raw."""
     for item in [*results, *findings]:
@@ -69,6 +78,14 @@ def _spec_text(repo_root, sha: str) -> str | None:
         return git.show(repo_root, sha, SPEC)
     except git.Unreadable:
         return ""
+
+
+def _lock_text(repo_root, sha: str) -> str | None:
+    """.builder.lock at a commit, or None when it is absent or unreadable: it feeds only the recorded-only builder-bumped signal."""
+    try:
+        return git.show(repo_root, sha, LOCK)
+    except git.Unreadable:
+        return None
 
 
 @dataclasses.dataclass
@@ -97,6 +114,8 @@ class Prepared:
     problems: list
     decided: list
     agent_reqs: list
+    pr_number: int | None
+    pr_head: str | None
 
 
 def prepare(*, repo_root, repo: str, base_ref: str, factory, checks_doc, event, now: str) -> Prepared:
@@ -139,7 +158,7 @@ def prepare(*, repo_root, repo: str, base_ref: str, factory, checks_doc, event, 
                     suppressions=suppressions, requirements=requirements, level_n=level_n, classification=classification,
                     spec_classification=spec_classification, head=head, base=base, tree_sha=tree_sha, changed=changed,
                     base_spec=base_spec, head_spec_text=head_spec_text, head_packages=head_packages, base_packages=base_packages,
-                    problems=problems, decided=decided, agent_reqs=agent_reqs)
+                    problems=problems, decided=decided, agent_reqs=agent_reqs, pr_number=_pr_number(event), pr_head=pr_head)
 
 
 def agent_scope(prepared: Prepared) -> dict:
@@ -154,7 +173,7 @@ def agent_scope(prepared: Prepared) -> dict:
 
 
 def finish(p: Prepared, assessment_doc=None, *, pr_text=None, registry=None) -> tuple[dict, dict]:
-    """Return (scorecard, render context): the deterministic signals, the agent's assessment applied, and the level."""
+    """Return (scorecard, render context): the deterministic signals, the agent's assessment applied, the level, and the re-review event (context["event"])."""
     config, intake, requirements, decided, agent_reqs = p.config, p.intake, p.requirements, p.decided, p.agent_reqs
     now, today = p.now, p.today
     problems = list(p.problems)  # finish may run more than once on the same Prepared; never grow its list
@@ -170,6 +189,7 @@ def finish(p: Prepared, assessment_doc=None, *, pr_text=None, registry=None) -> 
     signals = spec_changes(p.base_spec, p.head_spec_text, now=now)
     signals += change_signals(repo_root, base, head, p.changed, config, now=now, problems=problems)
     signals += tree_signals(repo_root, config, now=now, problems=problems)
+    size = change_size(repo_root, base, head, problems)
     reg = config["registry"]
     client = registry or RegistryClient(timeout=reg["timeout_seconds"], deadline_seconds=reg["max_total_seconds"])
     dep_findings, skipped, failures = dependency_signals(p.base_packages, p.head_packages, client, reg, today=today, now=now)
@@ -184,7 +204,7 @@ def finish(p: Prepared, assessment_doc=None, *, pr_text=None, registry=None) -> 
     covered, total_agent = coverage_counts(agent_results)
     level, floor, reasons = decide(config=config, intake=intake, spec_classification=p.spec_classification, results=results, findings=kept,
                                    covered=covered, total=total_agent, flags=flags, lookup_failures=failures, pr_text_hits=pr_hits,
-                                   problems=problems)
+                                   problems=problems, change_size=size)
     names = chapter_names(requirements)
     total = counts(results)
     level_n = p.level_n
@@ -215,7 +235,9 @@ def finish(p: Prepared, assessment_doc=None, *, pr_text=None, registry=None) -> 
     errors = validate("scorecard.v1", card)
     if errors:
         raise InputError(f"the scorecard is not a valid scorecard/v1: {errors[0]}")
-    context = {"texts": {r["id"]: r["text"] for r in requirements}, "names": names, "blocking": config["blocking"], "config": config,
+    recorded = recorded_spec_signals(p.base_spec, p.head_spec_text) + builder_bumped(_lock_text(repo_root, base), _lock_text(repo_root, head))
+    event = re_review_event(card, pr=p.pr_number, head_sha=p.pr_head or head, recorded=recorded)
+    context = {"event": event, "texts": {r["id"]: r["text"] for r in requirements}, "names": names, "blocking": config["blocking"], "config": config,
                "expired_suppressions": expired(p.suppressions, repo=p.repo, today=today)}
     return card, context
 

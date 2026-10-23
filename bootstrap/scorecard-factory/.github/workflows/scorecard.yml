@@ -44,7 +44,7 @@ env:
   # How long to wait for Gate 1 to finish on the PR head before the PR is "not assessed".
   GATE1_TIMEOUT_SECONDS: "2700"
   # The only event fields the scorecard reads. The PR title and body go to the injection pre-scan separately, never to the agent.
-  EVENT_FIELDS: '{pull_request: (.pull_request | {draft, head: (.head | {sha, repo: {full_name: .repo.full_name}}), base: (.base | {repo: {full_name: .repo.full_name}})})}'
+  EVENT_FIELDS: '{pull_request: (.pull_request | {draft, number, head: (.head | {sha, repo: {full_name: .repo.full_name}}), base: (.base | {repo: {full_name: .repo.full_name}})})}'
 
 jobs:
   # Not assessed (a failure, never a skip) for anything but a ready, same-repo PR whose Gate 1 is green on its head commit.
@@ -400,6 +400,7 @@ jobs:
             out/scorecard.md
             out/comment.md
             out/github.json
+            out/re-review-event.json
           if-no-files-found: error
           overwrite: true
 

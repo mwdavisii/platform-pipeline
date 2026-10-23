@@ -144,6 +144,9 @@ TRIGGER_NOTES = {
     "T-14": "The assessment is incomplete: the gateway, budget or configuration needs the platform team.",
     "T-15": "A suppression was added.",
     "T-16": "A protected path (.github/, CODEOWNERS and similar) changed.",
+    "T-17": "The resource tier went up. A person reviews this at the level shown; nothing to fix.",
+    "T-18": "The app type changed, so the base image and runtime changed. A person reviews this at the level shown; nothing to fix.",
+    "T-19": "The change is large. A person reviews this at the level shown; nothing to fix.",
 }
 UNDO_TRIGGERS = ("T-2", "T-3", "T-15", "T-16")
 UNDO = " If this change was not intended, undo it; if it was, the reviewer decides. Never undo a fix to lower the level."

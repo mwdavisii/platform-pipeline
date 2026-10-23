@@ -132,7 +132,7 @@
   "$defs": {
     "sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
     "level": {"enum": ["standard", "elevated", "security_review"]},
-    "trigger": {"type": "string", "pattern": "^T-(1[0-2]|1[4-6]|[1-9])$"},
+    "trigger": {"type": "string", "pattern": "^T-(1[0-2]|1[4-9]|[1-9])$"},
     "count": {"type": "integer", "minimum": 0},
     "percent": {"anyOf": [{"type": "number", "minimum": 0, "maximum": 100}, {"type": "null"}]},
     "counts": {
@@ -145,6 +145,7 @@
         "trigger": {"$ref": "#/$defs/trigger"},
         "level": {"$ref": "#/$defs/level"},
         "summary": {"type": "string", "minLength": 1},
+        "total": {"type": "integer", "minimum": 1, "description": "the true number of distinct items behind this reason; refs lists at most 20 of them"},
         "refs": {
           "type": "array", "maxItems": 20,
           "items": {

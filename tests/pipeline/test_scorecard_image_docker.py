@@ -137,7 +137,7 @@ def test_the_agent_step_and_scorecard_run_in_the_image(builder_image, tmp_path):
     assert card["level"] == "elevated" and "T-14" in card["triggers_fired"]
     assert (tmp_path / "out/comment.md").read_text().startswith("<!-- golden-road:scorecard -->\n")
     for text in (out.stdout, out.stderr, run.stdout, run.stderr,
-                 *((tmp_path / "out" / name).read_text() for name in ("assessment.json", "scorecard.json", "scorecard.md", "comment.md", "github.json"))):
+                 *((tmp_path / "out" / name).read_text() for name in ("assessment.json", "scorecard.json", "scorecard.md", "comment.md", "github.json", "re-review-event.json"))):
         assert wire not in text
 
 

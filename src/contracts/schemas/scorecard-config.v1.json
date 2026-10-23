@@ -6,7 +6,7 @@
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "tier_asvs_level", "classification_asvs_level", "missing_intake_asvs_level", "tier_floor", "blocking",
-               "coverage_threshold", "triggers", "sensitive_classifications", "gate1_checks", "drift_check", "platform_provided",
+               "coverage_threshold", "triggers", "large_change", "sensitive_classifications", "gate1_checks", "drift_check", "platform_provided",
                "tool_covered", "na_rules", "reviewers", "paths", "patterns", "max_comment_block_lines", "registry", "suppressions", "evidence", "agent"],
   "properties": {
     "schema": {"const": "scorecard-config/v1"},
@@ -28,8 +28,13 @@
     "coverage_threshold": {"type": "number", "minimum": 0, "maximum": 100},
     "triggers": {
       "type": "object", "additionalProperties": false,
-      "required": ["T-1", "T-2", "T-3", "T-4", "T-5", "T-6", "T-7", "T-8", "T-9", "T-10", "T-11", "T-12", "T-14", "T-15", "T-16"],
-      "patternProperties": {"^T-(1[0-2]|1[4-6]|[1-9])$": {"$ref": "#/$defs/trigger_level"}}
+      "required": ["T-1", "T-2", "T-3", "T-4", "T-5", "T-6", "T-7", "T-8", "T-9", "T-10", "T-11", "T-12", "T-14", "T-15", "T-16", "T-17", "T-18", "T-19"],
+      "patternProperties": {"^T-(1[0-2]|1[4-9]|[1-9])$": {"$ref": "#/$defs/trigger_level"}}
+    },
+    "large_change": {
+      "type": "object", "additionalProperties": false, "required": ["lines", "files"],
+      "description": "T-19 fires when the change has more changed lines (added plus removed) or more changed files than this.",
+      "properties": {"lines": {"type": "integer", "minimum": 1}, "files": {"type": "integer", "minimum": 1}}
     },
     "sensitive_classifications": {"type": "array", "uniqueItems": true, "items": {"enum": ["public", "internal", "restricted", "phi"]}},
     "gate1_checks": {"type": "array", "minItems": 1, "items": {"type": "object"}},

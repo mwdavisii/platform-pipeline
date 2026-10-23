@@ -25,13 +25,13 @@ def test_sample_config_loads(config):
         {"blocking": ["V8"]},
         {"coverage_threshold": 170},
         {"triggers": {"T-1": "security_review"}},
-        {"triggers": {**{f"T-{n}": "elevated" for n in (1,2,3,4,5,6,7,8,9,10,11,12,14,15,16)}, "T-9": "standard"}},  # a trigger that fires can't leave the level at standard
+        {"triggers": {**{f"T-{n}": "elevated" for n in (1,2,3,4,5,6,7,8,9,10,11,12,14,15,16,17,18,19)}, "T-9": "standard"}},  # a trigger that fires can't leave the level at standard
         {"gate1_checks": [{"name": "drift"}]},
         {"patterns": {"skip_markers": ["("], "suppression_markers": [], "injection": [], "platform_import": [], "test_function": []}},
         {"unknown_key": 1},
         {"evidence": {}},
         {"evidence": {"excluded_paths": "docs/*"}},
-        {"triggers": {**{f"T-{n}": "elevated" for n in range(1, 17)}}},  # T-13 is reserved
+        {"triggers": {**{f"T-{n}": "elevated" for n in range(1, 20)}}},  # T-13 is reserved
         {"drift_check": "golden-road / not-a-gate1-check"},
     ],
 )
@@ -282,3 +282,29 @@ def test_an_api_key_header_is_accepted(factory):
     _agent(factory, **{"gateway.auth": {"scheme": "header", "header": "api-key"},
                        "gateway.url": "https://gateway.example.invalid/openai/deployments/reviewer/chat/completions?api-version=2024-10-21"})
     assert load_config(factory)["agent"]["gateway"]["auth"]["header"] == "api-key"
+
+
+def test_sample_config_has_the_re_review_settings(config):
+    assert config["large_change"] == {"lines": 1000, "files": 40}
+    assert {config["triggers"][t] for t in ("T-17", "T-18", "T-19")} == {"elevated"}
+
+
+@pytest.mark.parametrize("edit", [
+    lambda d: d.pop("large_change"),
+    lambda d: d["large_change"].pop("files"),
+    lambda d: d["large_change"].update(lines=0),
+    lambda d: d["large_change"].update(files=0),
+    lambda d: d["large_change"].update(lines="1000"),
+    lambda d: d["large_change"].update(extra=1),
+    lambda d: d["triggers"].pop("T-17"),
+    lambda d: d["triggers"].pop("T-18"),
+    lambda d: d["triggers"].pop("T-19"),
+    lambda d: d["triggers"].update({"T-20": "elevated"}),
+])
+def test_the_re_review_settings_are_required_and_checked(factory, edit):
+    path = factory / "config" / "scorecard.yaml"
+    doc = yaml.safe_load(path.read_text())
+    edit(doc)
+    path.write_text(yaml.safe_dump(doc))
+    with pytest.raises(InputError):
+        load_config(factory)

@@ -72,7 +72,7 @@
           {"if": {"properties": {"framework": {"const": "golden-road-vc"}}, "required": ["framework"]},
            "then": {"properties": {"id": {"enum": ["VC-1", "VC-2", "VC-3", "VC-4", "VC-5", "VC-6", "VC-INJ"]}}}},
           {"if": {"properties": {"framework": {"const": "golden-road-trigger"}}, "required": ["framework"]},
-           "then": {"properties": {"id": {"pattern": "^T-(1[0-2]|1[4-6]|[1-9])$"}}}}
+           "then": {"properties": {"id": {"pattern": "^T-(1[0-2]|1[4-9]|[1-9])$"}}}}
         ]
       },
       "anyOf": [

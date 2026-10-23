@@ -36,7 +36,7 @@ concurrency:
 
 env:
   # The platform's builder image, which carries the pinned scorecard code. Pin the digest from the builder release.
-  BUILDER_IMAGE: ghcr.io/mwdavisii/golden-road-builder@sha256:1a0bb5a4462479c4c6ee506d34bdf85be2a6fe51ed56a56763765092ed68bfd9
+  BUILDER_IMAGE: ghcr.io/mwdavisii/golden-road-builder@sha256:bb1da7b767d1906b2463236689663d86c8318fb1ec971412f5cd944080f2ce85
   # How the review agent gets its gateway credential. key: the SCORECARD_GATEWAY_KEY secret. oidc: a GitHub OIDC token
   # for GATEWAY_OIDC_AUDIENCE, which the gateway validates and binds to this workflow (job_workflow_ref, event_name).
   GATEWAY_AUTH: key

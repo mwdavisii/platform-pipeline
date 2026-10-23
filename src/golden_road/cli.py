@@ -12,7 +12,7 @@ from pathlib import Path
 from builder.config import gate2_single_approver, load_platform
 from contracts.schema import validate
 
-from . import authz_probe, checks, doctor, preview, record, remediate
+from . import authz_probe, checks, doctor, preview, record, register, remediate
 from .gate import evaluate, load_overrides
 from .io import InputError, load_findings, load_json, write_json, write_text_atomic
 from .normalize import from_builder_result, normalize_sarif
@@ -120,6 +120,16 @@ def _parser() -> argparse.ArgumentParser:
     dr.add_argument("path", nargs="?", type=Path, default=Path("."))
     dr.add_argument("--pin", type=Path, default=None, help="the platform pin (default: ~/.cache/golden-road/platform-pin.json, where the golden-road skill keeps it)")
     dr.add_argument("--host", default=None, help="the platform's GitHub host (default: the platform config's, else $GH_HOST, else github.com)")
+    rg = sub.add_parser("register", help="Print the portal link that carries a registration draft. Reads only; sends nothing.",
+                        description="Build a registration-draft/v1 and print the golden road portal link that carries it in the URL fragment. "
+                                    "Exit 0: the link and draft as JSON on stdout. Exit 2: bad arguments. Exit 3: no portal is configured "
+                                    "(a JSON error and fix on stderr).")
+    rg.set_defaults(handler=_cmd_register)
+    rg.add_argument("--repo", required=True, help="OWNER/REPO")
+    rg.add_argument("--purpose-file", type=Path, default=None, help="a file with what the app does and does not do, in the user's words")
+    rg.add_argument("--classification", choices=register.CLASSIFICATIONS, default=None, help="default: builder-spec.json's")
+    rg.add_argument("--tier", choices=register.TIERS, default=None, help="the user's proposed tier")
+    rg.add_argument("--root", type=Path, default=Path("."), help="the app checkout (default: .)")
     rm = sub.add_parser("remediate", help="List what to do about a PR's failing checks. Reads only; changes nothing.",
                         description="List what to do about a pull request's failing checks and the platform's PR comments, as remediation/v1 JSON on stdout "
                                     "and a plan on stderr. Reads only; changes nothing (gh pr view, gh pr checks and gh api GETs). "
@@ -273,6 +283,22 @@ def _cmd_doctor(args) -> int:
     print(json.dumps(doc, indent=2, sort_keys=True))
     print(doctor.summary(doc), file=sys.stderr)
     return EXIT_FAIL if doc["status"] == "fail" else EXIT_PASS
+
+
+def _cmd_register(args) -> int:
+    """The link on stdout as JSON for the agent, and what to tell the person on stderr. Exit 3 when no portal is configured."""
+    if doctor._repo_name(args.repo) is None:
+        raise InputError("--repo must be OWNER/REPO")
+    try:
+        base = register.portal_url()
+    except register.NoPortal as exc:
+        print(json.dumps({"error": exc.error, "fix": exc.fix}), file=sys.stderr)
+        return EXIT_UNREADABLE
+    doc = register.draft(args.repo, register.read_purpose(args.purpose_file), args.classification or register.spec_classification(args.root), args.tier)
+    url = register.link(base, doc)
+    print(json.dumps({"url": url, "draft": doc}, indent=2, sort_keys=True))
+    print(f"Open this link, sign in, check every field and submit it:\n{url}\nAn admin approves the registration in the portal.", file=sys.stderr)
+    return EXIT_PASS
 
 
 def _cmd_remediate(args) -> int:

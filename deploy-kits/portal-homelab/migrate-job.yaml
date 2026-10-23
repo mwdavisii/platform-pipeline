@@ -1,0 +1,56 @@
+# Applies portal/migrations as portal_owner. The image is copied from the web Deployment (kustomization.yaml, replacements).
+# A Job's pod template can't change, so before each upgrade delete the finished Job (README, "Upgrade").
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: golden-road-portal-migrate
+  labels:
+    app.kubernetes.io/name: golden-road-portal-migrate
+spec:
+  backoffLimit: 12
+  activeDeadlineSeconds: 1800
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: golden-road-portal-migrate
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: migrate
+        image: replaced-from-the-web-deployment
+        imagePullPolicy: IfNotPresent
+        command: ["python", "-m", "portal.migrate"]
+        env:
+        - name: PORTAL_MIGRATE_DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: golden-road-portal-migrate
+              key: PORTAL_MIGRATE_DATABASE_URL
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 250m
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: tmp
+        emptyDir:
+          sizeLimit: 64Mi

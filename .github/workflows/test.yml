@@ -20,5 +20,6 @@ jobs:
           set -euo pipefail
           python3 -m venv .venv
           .venv/bin/pip install -q -e '.[dev]'
+          .venv/bin/pip install -q --require-hashes -r bootstrap/golden-road-portal/requirements-test.txt
           .venv/bin/pytest -q
-          .venv/bin/pytest -q -m docker tests/pipeline/test_workflows.py tests/pipeline/test_builder_image_docker.py tests/pipeline/test_authz_probe_docker.py tests/pipeline/test_scorecard_image_docker.py
+          .venv/bin/pytest -q -m docker tests/pipeline/test_workflows.py tests/pipeline/test_builder_image_docker.py tests/pipeline/test_authz_probe_docker.py tests/pipeline/test_scorecard_image_docker.py tests/pipeline/test_portal_semgrep_docker.py bootstrap/golden-road-portal/tests/test_portal_store_contract.py bootstrap/golden-road-portal/tests/test_portal_postgres_docker.py bootstrap/golden-road-portal/tests/test_portal_postgres_flow_docker.py

@@ -1,0 +1,86 @@
+# The collector: records the repo admins every five minutes with the read App. It holds only the read App's key.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: golden-road-portal-collector
+  labels:
+    app.kubernetes.io/name: golden-road-portal-collector
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: golden-road-portal-collector
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: golden-road-portal-collector
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: collector
+        image: replaced-from-the-web-deployment
+        imagePullPolicy: IfNotPresent
+        command: ["python", "-m", "portal.collectors"]
+        env:
+        - name: PORTAL_GITHUB_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: golden-road-portal-config
+              key: PORTAL_GITHUB_HOST
+        - name: PORTAL_READ_APP_ID
+          valueFrom:
+            configMapKeyRef:
+              name: golden-road-portal-config
+              key: PORTAL_READ_APP_ID
+        - name: PORTAL_READ_INSTALLATION_ID
+          valueFrom:
+            configMapKeyRef:
+              name: golden-road-portal-config
+              key: PORTAL_READ_INSTALLATION_ID
+        - name: PORTAL_READ_APP_KEY_FILE
+          value: /secrets/read-app/read-app.pem
+        - name: PORTAL_DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: golden-road-portal-collector
+              key: PORTAL_DATABASE_URL
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 250m
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: read-app-key
+          mountPath: /secrets/read-app
+          readOnly: true
+      volumes:
+      - name: tmp
+        emptyDir:
+          sizeLimit: 64Mi
+      - name: read-app-key
+        secret:
+          secretName: golden-road-portal-collector
+          defaultMode: 288  # octal 0440: the group (fsGroup 10001) reads the key, nobody else
+          items:
+          - key: read-app.pem
+            path: read-app.pem

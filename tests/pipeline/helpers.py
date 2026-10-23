@@ -20,7 +20,7 @@ COMMITTED_CODEOWNERS = """\
 
 DEFAULT_HOST = "github.com"
 DEFAULT_ISSUER = "https://token.actions.githubusercontent.com"
-CONFIGURE_KEYS = ("org", "github_host", "actions_oidc_issuer", "landing_page_url", "approved_models_url")
+CONFIGURE_KEYS = ("org", "github_host", "actions_oidc_issuer", "landing_page_url", "approved_models_url", "portal_url")
 # The committed text itself, not read from the file: in a configured tree the file holds the org or personal logins.
 COMMITTED_AGENTS_CODEOWNERS = """\
 # Everything here is what agents download and run, and what the stub trusts: every change needs a platform owner's review.
@@ -41,9 +41,9 @@ def unconfigure_platform(platform_dir):
     path.write_text(json.dumps(doc, indent=2) + "\n")
 
 
-def _restore_default_approval(app, with_env=True):
+def _restore_default_approval(app, with_env=True, ruleset_name="main.json"):
     """Put the two-person approval settings back. A file already at the defaults is left byte-for-byte alone."""
-    ruleset_path = app / ".github/rulesets/main.json"
+    ruleset_path = app / ".github/rulesets" / ruleset_name
     ruleset = json.loads(ruleset_path.read_text())
     pr = next(r for r in ruleset["rules"] if r["type"] == "pull_request")["parameters"]
     defaults = {"required_approving_review_count": 1, "require_code_owner_review": True, "require_last_push_approval": True}
@@ -124,7 +124,7 @@ def unconfigure_factory(factory_dir, org):
     (factory / ".github/CODEOWNERS").write_text(COMMITTED_FACTORY_CODEOWNERS)
     config = factory / "config/scorecard.yaml"
     config.write_text(re.sub(r'(?m)^(    url: )".*"$', rf'\1"{SCORECARD_URL_PLACEHOLDER}"', config.read_text()))
-    _restore_default_approval(factory, with_env=False)
+    _restore_default_approval(factory, with_env=False, ruleset_name="main-review.json")
     check = factory / ".github/workflows/factory-check.yml"
     if check.exists():
         check.write_text(re.sub(r"(?m)^(  BUILDER_IMAGE: ).*$", rf"\1{ZERO_IMAGE}", check.read_text()))
@@ -135,6 +135,27 @@ def unconfigure_factory(factory_dir, org):
                 directory.rename(factory / kind / "ORG_PLACEHOLDER")
         for path in (factory / "intake/ORG_PLACEHOLDER").glob("*.yaml"):
             path.write_text(path.read_text().replace(f"repo: {org}/", "repo: ORG_PLACEHOLDER/"))
+
+
+def unconfigure_portal(app_dir):
+    """Reset bootstrap/golden-road-portal to the committed placeholder state: caller org placeholders, the committed CODEOWNERS,
+    the default approval settings, github.com egress, and the generated files against the unconfigured platform file."""
+    app = Path(app_dir)
+    if not app.is_dir():
+        return
+    for rel in (".github/workflows/ci.yml", ".github/workflows/promote.yml", ".github/workflows/security-scans.yml", ".github/workflows/scorecard.yml"):
+        path = app / rel
+        path.write_text(re.sub(r"uses: [A-Za-z0-9-]+/(platform-pipeline|security-scans|scorecard-factory)/", r"uses: ORG_PLACEHOLDER/\1/", path.read_text()))
+    (app / ".github/CODEOWNERS").write_text(COMMITTED_CODEOWNERS)
+    _restore_default_approval(app)
+    spec_path = app / "builder-spec.json"
+    spec = json.loads(spec_path.read_text())
+    spec["egress"] = [{"host": "api.github.com", "port": 443, "reason": "GitHub API: identity linking"},
+                      {"host": "github.com", "port": 443, "reason": "GitHub OAuth: identity linking"}]
+    spec_path.write_text(json.dumps(spec, indent=2) + "\n")
+    platform_path = app.parent.parent / "platform/platform.json"
+    out = subprocess.run([*builder_cmd(), "generate", str(app)], capture_output=True, text=True, env=builder_env(BUILDER_PLATFORM_CONFIG=str(platform_path)))
+    assert out.returncode == 0, out.stdout + out.stderr
 
 
 def builder_cmd():

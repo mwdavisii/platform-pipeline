@@ -1,0 +1,249 @@
+# Network policies added around the release's own (the builder's web policies in manifests.yaml are not touched; policies add up).
+# Plain NetworkPolicies cover the pod-to-pod rules; CiliumNetworkPolicies cover the host names, the way the builder renders egress.
+#
+# Postgres: reachable only from the portal's own pods, and it may start no connection.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: golden-road-portal-postgres
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: golden-road-portal-postgres
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector:
+        matchExpressions:
+        - key: app.kubernetes.io/name
+          operator: In
+          values:
+          - golden-road-portal
+          - golden-road-portal-writer
+          - golden-road-portal-collector
+          - golden-road-portal-migrate
+    ports:
+    - protocol: TCP
+      port: 5432
+  egress: []
+---
+# The web pods may reach Postgres (the builder's web policy has no egress at all).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: golden-road-portal-web-to-postgres
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: golden-road-portal
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: golden-road-portal-postgres
+    ports:
+    - protocol: TCP
+      port: 5432
+---
+# The edge. This assumes the homelab edge: cloudflared pods in namespace cloudflared labelled app=cloudflared. The cloudflared pods may reach the web pods' port. This is the same rule the builder's baseline policy holds once the
+# release was rendered for this cluster (edge namespace cloudflared, label app=cloudflared); if the release still names replace-me
+# as its edge, this one is what lets the tunnel in. It opens nothing else.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: golden-road-portal-web-from-cloudflared
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: golden-road-portal
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: cloudflared
+      podSelector:
+        matchLabels:
+          app: cloudflared
+    ports:
+    - protocol: TCP
+      port: http
+---
+# The writer, the collector and the migration job: nothing in, and out only to Postgres.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: golden-road-portal-writer
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: golden-road-portal-writer
+  policyTypes:
+  - Ingress
+  - Egress
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: golden-road-portal-postgres
+    ports:
+    - protocol: TCP
+      port: 5432
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: golden-road-portal-collector
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: golden-road-portal-collector
+  policyTypes:
+  - Ingress
+  - Egress
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: golden-road-portal-postgres
+    ports:
+    - protocol: TCP
+      port: 5432
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: golden-road-portal-migrate
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: golden-road-portal-migrate
+  policyTypes:
+  - Ingress
+  - Egress
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: golden-road-portal-postgres
+    ports:
+    - protocol: TCP
+      port: 5432
+---
+# Writer: DNS and the GitHub API and web hosts (the App's installation token, the pull requests, the merge).
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: golden-road-portal-writer-egress
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: golden-road-portal-writer
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        io.kubernetes.pod.namespace: kube-system
+        k8s-app: kube-dns
+    toPorts:
+    - ports:
+      - port: '53'
+        protocol: ANY
+      rules:
+        dns:
+        - matchPattern: '*'
+  - toFQDNs:
+    - matchName: api.github.com
+    toPorts:
+    - ports:
+      - port: '443'
+        protocol: TCP
+  - toFQDNs:
+    - matchName: github.com
+    toPorts:
+    - ports:
+      - port: '443'
+        protocol: TCP
+---
+# Collector: DNS and the GitHub API (it reads repository admins; it never needs github.com).
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: golden-road-portal-collector-egress
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: golden-road-portal-collector
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        io.kubernetes.pod.namespace: kube-system
+        k8s-app: kube-dns
+    toPorts:
+    - ports:
+      - port: '53'
+        protocol: ANY
+      rules:
+        dns:
+        - matchPattern: '*'
+  - toFQDNs:
+    - matchName: api.github.com
+    toPorts:
+    - ports:
+      - port: '443'
+        protocol: TCP
+---
+# Migration job: DNS only (to find Postgres).
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: golden-road-portal-migrate-egress
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: golden-road-portal-migrate
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        io.kubernetes.pod.namespace: kube-system
+        k8s-app: kube-dns
+    toPorts:
+    - ports:
+      - port: '53'
+        protocol: ANY
+      rules:
+        dns:
+        - matchPattern: '*'
+---
+# Web: the identity provider, in addition to the GitHub hosts the release's own egress policy allows.
+# REPLACE the matchName with the host of PORTAL_OIDC_ISSUER in kustomization.yaml (the two must agree; the kit's test checks it).
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: golden-road-portal-oidc-egress
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: golden-road-portal
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        io.kubernetes.pod.namespace: kube-system
+        k8s-app: kube-dns
+    toPorts:
+    - ports:
+      - port: '53'
+        protocol: ANY
+      rules:
+        dns:
+        - matchPattern: '*'
+  - toFQDNs:
+    - matchName: authentik.replace-me.invalid
+    toPorts:
+    - ports:
+      - port: '443'
+        protocol: TCP

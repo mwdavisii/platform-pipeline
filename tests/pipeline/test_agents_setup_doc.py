@@ -114,7 +114,7 @@ def test_case_a_skips_what_step_13_already_did_and_case_b_does_it():
     one, six, seven = (" ".join(sub(h).split()) for h in ("14.1", "14.6", "14.7"))
     assert "13.2 already brought in" in one and "skip the export" in one
     assert "already pinned" in six and "already regenerated" in six and "13.6" in six
-    assert "13.4 already created" in seven and "intake-request.yml" in seven
+    assert "the request form is retired" in seven and "intake-request.yml" in seven and "git rm" in seven
 
 
 def test_step_13_releases_the_source_version_and_names_no_fixed_one():
@@ -198,14 +198,8 @@ def test_the_draft_is_published_with_latest_false_right_after_the_pin_and_before
     assert "every PR on `hello-app` fails" in part.replace("\n", " ")
 
 
-def test_the_intake_label_is_the_one_the_form_applies():
-    import yaml
-    from golden_road import doctor
-    part = sub("14.7")
-    assert f"gh label create {doctor.INTAKE_LABEL} --repo <you>/scorecard-factory" in part
-    form = yaml.safe_load((ROOT / "bootstrap/scorecard-factory/.github/ISSUE_TEMPLATE/intake-request.yml").read_text())
-    assert form["labels"] == [doctor.INTAKE_LABEL]
-    assert ".github/ISSUE_TEMPLATE/intake-request.yml" in part and "rsync -a --exclude .git" in part
+def test_14_7_creates_no_label():
+    assert "gh label create" not in sub("14.7")
 
 
 def test_the_doctor_command_is_where_the_skill_installs_the_builder():
@@ -224,14 +218,14 @@ def test_the_doctor_command_is_where_the_skill_installs_the_builder():
 def test_the_first_runs_record_what_5c_will_check():
     part = sub("14.9")
     for needle in ("every `user` question", "showed every outward command", "--private", "read the visibility before the first push",
-                   "exit=0", "`ruleset`", "transcript", "Intake request: <you>/fixture-", "SCORECARD_GATEWAY_KEY"):
+                   "exit=0", "`ruleset`", "transcript", "golden-road register", "SCORECARD_GATEWAY_KEY"):
         assert needle in part, needle
     assert "Claude Code" in step_14() and "OpenAI Codex" in step_14() and "Cursor" in step_14()
 
 
 def test_the_proof_items_and_the_kit_operations_cover_the_execution_notes():
     proof, ops = sub("14.10"), sub("Kit operations")
-    for needle in ("--exclude-drafts", "offline", "label", "personal skills folder", "Windows"):
+    for needle in ("--exclude-drafts", "offline", "No portal yet", "personal skills folder", "Windows"):
         assert needle in proof, needle
     for needle in ("--cleanup-tag", "refuse a lower", "Publish a higher version", "highest.json", "stale draft", "--latest",
                    "--landing-page-url", "every app regenerates", "cannot be unset", "delete the `approved_models_url` key"):
@@ -358,7 +352,7 @@ def test_the_exact_commands_the_runs_and_the_fixes_depend_on():
 
 def test_the_new_platform_keys_the_checks_allow_are_exactly_the_ones_configure_writes_by_default():
     from helpers import CONFIGURE_KEYS
-    written = set(CONFIGURE_KEYS) - {"org", "approved_models_url"}  # org was already there; the models link has no default
+    written = set(CONFIGURE_KEYS) - {"org", "approved_models_url", "portal_url"}  # org was already there; the models link and the portal address have no default
     thirteen = step_13()
     for text in (thirteen[thirteen.index("### 13.2"):thirteen.index("### 13.3")], sub("14.1")):
         sentence = re.search(r"diff only adds ([^.]*)\.", " ".join(text.split())).group(1)
@@ -375,7 +369,6 @@ def test_each_agent_run_starts_from_a_clean_install_with_scripted_answers_and_th
     for text in (sub("14.1"), thirteen):
         assert "cp ~/poc/platform-pipeline/bootstrap/golden-road-agents/.github/CODEOWNERS" in text
     assert "tests/kit" in thirteen[thirteen.index("**Check:** `grep -n 'gate1_checks:'"):]
-    assert "checkout -- config/scorecard.yaml" in sub("14.7")
     five = " ".join(sub("14.5").split())
     assert "gh run list" in five[five.index("stale draft"):]
     six = sub("14.6")

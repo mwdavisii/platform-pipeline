@@ -1,0 +1,153 @@
+# The portal's database: one Postgres, pinned by digest (the digest the portal's docker tests run the migrations against).
+# The init script runs once, on an empty data directory, and creates the four roles the migrations expect (portal README, "Database roles").
+# Passwords come from the golden-road-portal-postgres Secret (secrets.example.yaml); they are never in this file.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: golden-road-portal-postgres-init
+data:
+  10-portal-roles.sh: |
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname postgres \
+      -v owner_pw="$PORTAL_OWNER_PASSWORD" -v web_pw="$PORTAL_WEB_PASSWORD" \
+      -v writer_pw="$PORTAL_WRITER_PASSWORD" -v collector_pw="$PORTAL_COLLECTOR_PASSWORD" <<'SQL'
+    CREATE ROLE portal_owner LOGIN PASSWORD :'owner_pw';
+    CREATE ROLE portal_web LOGIN PASSWORD :'web_pw';
+    CREATE ROLE portal_writer LOGIN PASSWORD :'writer_pw';
+    CREATE ROLE portal_collector LOGIN PASSWORD :'collector_pw';
+    CREATE DATABASE portal OWNER portal_owner;
+    REVOKE ALL ON DATABASE portal FROM PUBLIC;
+    GRANT CONNECT ON DATABASE portal TO portal_web, portal_writer, portal_collector;
+    \connect portal
+    REVOKE ALL ON SCHEMA public FROM PUBLIC;
+    GRANT ALL ON SCHEMA public TO portal_owner;
+    GRANT USAGE ON SCHEMA public TO portal_web, portal_writer, portal_collector;
+    SQL
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: golden-road-portal-postgres
+  labels:
+    app.kubernetes.io/name: golden-road-portal-postgres
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: golden-road-portal-postgres
+  ports:
+  - name: postgres
+    port: 5432
+    targetPort: postgres
+    protocol: TCP
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: golden-road-portal-postgres
+  labels:
+    app.kubernetes.io/name: golden-road-portal-postgres
+spec:
+  serviceName: golden-road-portal-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: golden-road-portal-postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: golden-road-portal-postgres
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: postgres
+        image: docker.io/library/postgres@sha256:eee6c6e1b0894fa4fe0075eb054af9fd1cf39a35321c2d4110626cfe506411fb
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: postgres
+          containerPort: 5432
+          protocol: TCP
+        env:
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: golden-road-portal-postgres
+              key: POSTGRES_PASSWORD
+        - name: PORTAL_OWNER_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: golden-road-portal-postgres
+              key: PORTAL_OWNER_PASSWORD
+        - name: PORTAL_WEB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: golden-road-portal-postgres
+              key: PORTAL_WEB_PASSWORD
+        - name: PORTAL_WRITER_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: golden-road-portal-postgres
+              key: PORTAL_WRITER_PASSWORD
+        - name: PORTAL_COLLECTOR_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: golden-road-portal-postgres
+              key: PORTAL_COLLECTOR_PASSWORD
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        readinessProbe:
+          exec:
+            command: ["pg_isready", "--username=postgres", "--dbname=postgres"]
+          periodSeconds: 10
+        livenessProbe:
+          exec:
+            command: ["pg_isready", "--username=postgres", "--dbname=postgres"]
+          initialDelaySeconds: 30
+          periodSeconds: 20
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/postgresql/data
+        - name: run
+          mountPath: /var/run/postgresql
+        - name: tmp
+          mountPath: /tmp
+        - name: init
+          mountPath: /docker-entrypoint-initdb.d
+          readOnly: true
+      volumes:
+      - name: run
+        emptyDir:
+          sizeLimit: 16Mi
+      - name: tmp
+        emptyDir:
+          sizeLimit: 64Mi
+      - name: init
+        configMap:
+          name: golden-road-portal-postgres-init
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 5Gi

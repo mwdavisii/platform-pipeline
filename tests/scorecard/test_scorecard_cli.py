@@ -839,6 +839,13 @@ def test_check_factory_passes_a_good_factory_and_counts_its_records(factory, cap
     assert code == 0 and err is None and json.loads(out) == {"intake": 2, "na": 1, "suppressions": 1}
 
 
+def test_check_factory_accepts_an_intake_v2_record(factory, capsys):
+    from test_factory_config import V2
+    (factory / "intake/acme/notes.yaml").write_text(V2)
+    code, out, err = check_factory(factory, capsys)
+    assert code == 0 and err is None and json.loads(out)["intake"] == 2
+
+
 def test_check_factory_catches_a_bad_tier(factory, capsys):
     path = factory / "intake/acme/notes.yaml"
     path.write_text(path.read_text().replace("tier: moderate", "tier: huge"))

@@ -4,3 +4,5 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 node_modules/
+deploy-kits/*/manifests.yaml
+deploy-kits/*/*.jsonl

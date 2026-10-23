@@ -77,7 +77,7 @@ def test_the_hello_app_intake_record_loads():
     intake = load_intake(FACTORY, f"{owner}/hello-app")
     assert intake["tier"] == "moderate" and intake["data_classification"] == "internal"
     assert intake["data_classification"] == json.loads((APP / "builder-spec.json").read_text())["data_classification"]
-    assert list((FACTORY / "intake").rglob("*.yaml")) == [FACTORY / f"intake/{owner}/hello-app.yaml"]
+    assert sorted((FACTORY / "intake").rglob("*.yaml")) == sorted([FACTORY / f"intake/{owner}/golden-road-portal.yaml", FACTORY / f"intake/{owner}/hello-app.yaml"])
 
 
 def fenced(path, lang):
@@ -121,17 +121,84 @@ def assert_codeowners_protect_the_records(factory):
         assert not any("/" in o[1:] for os_ in owners.values() for o in os_)
 
 
-def test_codeowners_and_the_ruleset_protect_main():
+RULESETS = FACTORY / ".github/rulesets"
+# The single ruleset the factory had before it was split in two: the union of the pair must still hold all of it.
+OLD_RULES = [
+    {"type": "deletion"},
+    {"type": "non_fast_forward"},
+    {"type": "pull_request", "parameters": {"required_approving_review_count": 1, "dismiss_stale_reviews_on_push": True, "require_code_owner_review": True,
+                                            "require_last_push_approval": True, "required_review_thread_resolution": False}},
+    {"type": "required_status_checks", "parameters": {"strict_required_status_checks_policy": True,
+                                                      "required_status_checks": [{"context": "factory-check", "integration_id": 15368}]}},
+]
+
+
+def factory_rulesets():
+    return {name: json.loads((RULESETS / f"{name}.json").read_text()) for name in ("main", "main-review")}
+
+
+def test_codeowners_and_the_rulesets_protect_main():
     assert_codeowners_protect_the_records(FACTORY)
-    ruleset = json.loads((FACTORY / ".github/rulesets/main.json").read_text())
-    assert ruleset["enforcement"] == "active" and ruleset["conditions"]["ref_name"]["include"] == ["~DEFAULT_BRANCH"]
-    assert "bypass_actors" not in ruleset
-    rules = {r["type"]: r.get("parameters") for r in ruleset["rules"]}
-    assert set(rules) == {"deletion", "non_fast_forward", "pull_request", "required_status_checks"}
-    single = json.loads((ROOT / "platform/platform.json").read_text())["gate2_single_approver"]  # configure.py --single-approver relaxes this ruleset too
-    pr = rules["pull_request"]
+    docs = factory_rulesets()
+    assert sorted(p.name for p in RULESETS.glob("*.json")) == ["main-review.json", "main.json"]
+    for name, doc in docs.items():
+        assert doc["name"] == name and doc["target"] == "branch" and doc["enforcement"] == "active"
+        assert doc["conditions"]["ref_name"] == {"include": ["~DEFAULT_BRANCH"], "exclude": []}
+        assert doc.get("bypass_actors", []) == [], "the committed files carry no bypass actors; the writer App is added live"
+    assert [r["type"] for r in docs["main"]["rules"]] == ["deletion", "non_fast_forward", "required_status_checks"]
+    assert [r["type"] for r in docs["main-review"]["rules"]] == ["pull_request"]
+    single = json.loads((ROOT / "platform/platform.json").read_text())["gate2_single_approver"]  # configure.py --single-approver relaxes main-review
+    pr = docs["main-review"]["rules"][0]["parameters"]
     assert (pr["required_approving_review_count"], pr["require_code_owner_review"]) == ((0, False) if single else (1, True))
-    assert rules["required_status_checks"]["required_status_checks"] == [{"context": "factory-check", "integration_id": 15368}]
+    [checks] = [r for r in docs["main"]["rules"] if r["type"] == "required_status_checks"]
+    assert checks["parameters"] == OLD_RULES[3]["parameters"]
+
+
+def test_the_two_rulesets_together_hold_every_rule_the_single_one_had():
+    docs = factory_rulesets()
+    union = docs["main"]["rules"] + docs["main-review"]["rules"]
+    expected = copy.deepcopy(OLD_RULES)
+    if json.loads((ROOT / "platform/platform.json").read_text())["gate2_single_approver"]:
+        expected[2]["parameters"].update(required_approving_review_count=0, require_code_owner_review=False, require_last_push_approval=False)
+    key = lambda r: r["type"]
+    assert sorted(union, key=key) == sorted(expected, key=key)
+    assert len(union) == len({r["type"] for r in union}), "no rule is in both rulesets"
+
+
+PORTAL = ROOT / "bootstrap/golden-road-portal"
+WRITE_APP = {"actor_id": 424242, "actor_type": "Integration", "bypass_mode": "pull_request"}
+
+
+def writer_bypass_problems(monkeypatch, add_app_to):
+    """Run the portal writer's own check_bypass over the committed pair, with the write App added to the named rulesets."""
+    import httpx
+    for path in (PORTAL, PORTAL / "tests"):
+        monkeypatch.syspath_prepend(str(path))
+    from portal_fakes import FakeGitHub, transport, writer_config
+    from portal.github.client import GitHub
+    from portal.writer.bypass import check_bypass
+    gh = FakeGitHub()
+    docs = factory_rulesets()
+    ids = {"main": 101, "main-review": 102}
+    r = "/repos/acme/scorecard-factory"
+    gh.on("GET", "/app/installations/777", (200, gh.fixture("installation")))
+    gh.on("GET", "/installation/repositories", (200, gh.fixture("installation_repositories")))
+    gh.on("GET", r + "/rulesets", (200, [{"id": i, "name": n} for n, i in ids.items()]))
+    for name, doc in docs.items():
+        doc = {**doc, "id": ids[name], "bypass_actors": [WRITE_APP] if name in add_app_to else []}
+        gh.on("GET", f"{r}/rulesets/{ids[name]}", (200, doc))
+    client = GitHub("https://api.github.com", httpx.Client(transport=transport(gh)), lambda: "token")
+    return check_bypass(client, client, 777, writer_config())
+
+
+def test_the_pair_with_the_write_app_bypassing_only_main_review_passes_the_writers_check(monkeypatch):
+    assert writer_bypass_problems(monkeypatch, {"main-review"}) == []
+
+
+def test_the_write_app_on_main_fails_the_writers_check(monkeypatch):
+    problems = writer_bypass_problems(monkeypatch, {"main", "main-review"})
+    assert any("status checks" in p for p in problems), problems
+    assert writer_bypass_problems(monkeypatch, {"main"}), "and the App on main alone is no better"
 
 
 # ---- the intake action ----
@@ -546,34 +613,13 @@ def test_the_poc_doc_makes_the_firewall_rule_before_the_route_and_posts_only():
     assert 'http.request.method eq "POST"' in one and "allowed_routes" in step and "<litellm internal host>" in step[:step.index("### 13.1")]
 
 
-# ---- the intake request form ----
+# ---- the intake request form is retired ----
 
-FORM = FACTORY / ".github/ISSUE_TEMPLATE/intake-request.yml"
-
-
-def test_the_intake_form_is_what_doctor_searches_for():
-    from golden_road import doctor
-    form = yaml.safe_load(FORM.read_text())
-    assert form["labels"] == [doctor.INTAKE_LABEL] and form["title"] == doctor.INTAKE_TITLE_PREFIX
-    fields = {f["id"]: f for f in form["body"] if "id" in f}
-    assert list(fields) == ["repository", "does", "does-not", "owner", "data-classification"]
-    assert all(f["validations"]["required"] is True for f in fields.values())
-    schema = json.loads((ROOT / "src/contracts/schemas/builder-spec.v1.json").read_text())
-    assert fields["data-classification"]["type"] == "dropdown"
-    options = fields["data-classification"]["attributes"]["options"]
-    assert options == schema["properties"]["data_classification"]["enum"]
-    assert options == json.loads((ROOT / "src/contracts/schemas/intake.v1.json").read_text())["properties"]["data_classification"]["enum"]
-    assert "tier" not in fields
-    # No item asks about the tier; the only mention, markdown included, is the sentence saying security sets it.
-    mentions = [text for item in form["body"] for text in json.dumps(item).replace("\\n", "\n").splitlines() if "tier" in text.lower()]
-    allowed = "Security sets the tier and turns this into `intake/<owner>/<repo>.yaml` by pull request."
-    assert [m.strip() for m in mentions] == [allowed], mentions
-
-
-def test_the_readme_names_the_form_and_the_title():
+def test_the_intake_request_form_is_retired():
+    assert not (FACTORY / ".github/ISSUE_TEMPLATE").exists()
     text = " ".join((FACTORY / "README.md").read_text().split())
-    for needle in ("`.github/ISSUE_TEMPLATE/intake-request.yml`", "`Intake request: <owner>/<repo>`", "no label"):
-        assert needle in text, needle
+    assert "ISSUE_TEMPLATE" not in text and "Intake request:" not in text
+    assert "registers it in the golden road portal" in text and "`golden-road register`" in text and "`factory-check` passes" in text
 
 
 def test_the_access_setup_in_the_poc_doc_keeps_the_secret_out_of_argv_and_sets_all_four_secrets_guarded():
@@ -594,3 +640,18 @@ def test_the_access_setup_in_the_poc_doc_keeps_the_secret_out_of_argv_and_sets_a
     for needle in ("Return 401 response for service auth policies", "empty path", "before the tunnel hostname exists"):
         assert needle in step, needle
     assert "path `/v1/chat/completions`, and a policy" not in step
+
+
+def test_the_readme_says_intake_records_are_v1_or_the_portal_s_v2():
+    text = " ".join((FACTORY / "README.md").read_text().split())
+    assert "`intake/v1`, or `intake/v2` as the golden road portal's writer records it" in text
+
+
+def test_the_poc_doc_creates_main_review_before_it_replaces_main():
+    text = (ROOT / "docs/setup/personal-poc.md").read_text()
+    step = text[text.index("### 13.8"):text.index("## 14. ")]
+    post = step.index("-X POST repos/<you>/scorecard-factory/rulesets --input bootstrap/scorecard-factory/.github/rulesets/main-review.json")
+    put = step.index("-X PUT repos/<you>/scorecard-factory/rulesets/$id --input bootstrap/scorecard-factory/.github/rulesets/main.json")
+    assert post < put
+    assert 'select(.source_type=="Repository"' in step and "configure.py" in step
+    assert "to be confirmed live" in step and "fails closed" in step

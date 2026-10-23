@@ -38,7 +38,7 @@ def test_builds_the_bundle_and_the_stub_files(kit, tmp_path):
     want = sorted(p.relative_to(kit / "skill").as_posix() for p in (kit / "skill").rglob("*") if p.is_file() and "__pycache__" not in p.parts)
     assert [m.name for m in members] == want  # in name order, whatever order the filesystem lists them
     assert (dist / f"golden-road-skill-{v}.tar.gz").read_bytes()[4:8] == b"\0\0\0\0"  # the gzip header's file time
-    assert {"SKILL.md", "VERSION", "install_builder.py", "write_callers.py", "templates/workflows/ci.yml", "templates/intake-issue.md"} <= set(want)
+    assert {"SKILL.md", "VERSION", "install_builder.py", "write_callers.py", "templates/workflows/ci.yml"} <= set(want)
 
 
 def test_the_same_tree_gives_the_same_bytes(kit, tmp_path):

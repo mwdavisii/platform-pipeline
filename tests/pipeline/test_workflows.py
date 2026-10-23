@@ -9,7 +9,8 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 SCANS = ROOT / "reference/security-scans"
-DIRS = [ROOT / ".github/workflows", ROOT / "bootstrap/hello-app/.github/workflows", ROOT / "bootstrap/scorecard-factory/.github/workflows",
+DIRS = [ROOT / ".github/workflows", ROOT / "bootstrap/hello-app/.github/workflows", ROOT / "bootstrap/golden-road-portal/.github/workflows",
+        ROOT / "bootstrap/scorecard-factory/.github/workflows",
         ROOT / "bootstrap/golden-road-agents/.github/workflows", SCANS / ".github/workflows"]
 WORKFLOWS = sorted(p for d in DIRS if d.is_dir() for p in d.glob("*.yml"))
 ACTIONLINT = "rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667"

@@ -308,3 +308,54 @@ def test_the_re_review_settings_are_required_and_checked(factory, edit):
     path.write_text(yaml.safe_dump(doc))
     with pytest.raises(InputError):
         load_config(factory)
+
+
+V2 = """schema: intake/v2
+repo: acme/notes
+tier: moderate
+purpose: "Stores short team notes. It does not send email, call external APIs, or store files."
+owner: p_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+data_classification: internal
+registered_by: p_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+approved_by: p_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+approved_at: "2026-10-23T12:00:00Z"
+approval_justification: Purpose and classification checked against the repo.
+review_by: "2027-10-23"
+request: r_cccccccccccccccccccccccccccccccc
+"""
+
+
+def test_intake_v2_loads_and_scores_like_the_same_v1_record(factory, config):
+    path = factory / "intake" / "acme" / "notes.yaml"
+    v1 = load_intake(factory, "acme/notes")
+    path.write_text(V2)
+    v2 = load_intake(factory, "acme/notes")
+    assert v2["schema"] == "intake/v2" and v2["owner"].startswith("p_")
+    assert (asvs_level(config, v1, None), floor(config, v1)) == (asvs_level(config, v2, None), floor(config, v2))
+
+
+@pytest.mark.parametrize("text, needle", [
+    (V2.replace("owner: p_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "owner: notes-team"), "intake.v2"),
+    (V2.replace("schema: intake/v2", "schema: intake/v3"), "intake/v1, intake/v2"),
+    (V2.replace("schema: intake/v2\n", ""), "intake/v1, intake/v2"),
+    ("- schema: intake/v2\n", "intake/v1, intake/v2"),
+    (V2.replace("repo: acme/notes", "repo: acme/other"), "not acme/notes"),
+])
+def test_bad_intake_v2_is_an_input_error(factory, text, needle):
+    (factory / "intake" / "acme" / "notes.yaml").write_text(text)
+    with pytest.raises(InputError, match=needle):
+        load_intake(factory, "acme/notes")
+
+
+@pytest.mark.parametrize("stamp", ["2026-99-99T99:99:99Z", "2026-02-30T12:00:00Z"])
+def test_intake_v2_with_an_impossible_approval_time_is_an_input_error(factory, stamp):
+    (factory / "intake" / "acme" / "notes.yaml").write_text(V2.replace("2026-10-23T12:00:00Z", stamp))
+    with pytest.raises(InputError, match="approved_at"):
+        load_intake(factory, "acme/notes")
+
+
+def test_intake_v2_approved_by_the_person_who_registered_it_is_an_input_error(factory):
+    same = V2.replace("approved_by: p_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "approved_by: p_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    (factory / "intake" / "acme" / "notes.yaml").write_text(same)
+    with pytest.raises(InputError, match="approved_by"):
+        load_intake(factory, "acme/notes")

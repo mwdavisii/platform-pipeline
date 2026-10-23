@@ -200,16 +200,28 @@ def gate1_list(factory, config: dict | None = None) -> list[dict]:
     return validate_required([entry for entry, _ in checks], "gate1_checks")
 
 
+INTAKE_SCHEMAS = {"intake/v1": "intake.v1", "intake/v2": "intake.v2"}  # intake/v2 is what the portal's writer records
+
+
 def load_intake(factory, repo: str) -> dict | None:
-    """The intake record, or None when the repo has none (trigger T-8)."""
+    """The intake record (intake/v1, or intake/v2 as the portal writes it), or None when the repo has none (trigger T-8)."""
     owner, name = repo_parts(repo)
     path = Path(factory) / "intake" / owner / f"{name}.yaml"
     if not _is_file(path):
         return None
-    intake = _checked(path, "intake.v1")
-    if intake["repo"] != repo:
-        raise InputError(f"{path} is for {intake['repo']}, not {repo}")
-    return intake
+    doc = load_yaml(path)
+    kind = doc.get("schema") if isinstance(doc, dict) else None
+    schema = INTAKE_SCHEMAS.get(kind) if isinstance(kind, str) else None
+    if schema is None:
+        raise InputError(f"{path} is not an intake record: its schema must be one of {', '.join(INTAKE_SCHEMAS)}")
+    errors = validate(schema, doc)
+    if errors:
+        raise InputError(f"{path} is not a valid {schema}: {errors[0]}")
+    if doc["repo"] != repo:
+        raise InputError(f"{path} is for {doc['repo']}, not {repo}")
+    if schema == "intake.v2" and doc["approved_by"] == doc["registered_by"]:
+        raise InputError(f"{path} is not valid: approved_by is the person who registered it (nobody approves their own registration)")
+    return doc
 
 
 def load_confirmed_na(factory, repo: str) -> list[dict]:

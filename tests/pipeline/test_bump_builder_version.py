@@ -11,7 +11,7 @@ import json
 import pytest
 import yaml
 
-from helpers import unconfigure_agents, unconfigure_factory, unconfigure_hello_app, unconfigure_platform
+from helpers import unconfigure_agents, unconfigure_factory, unconfigure_hello_app, unconfigure_platform, unconfigure_portal
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = "scripts/bump-builder-version.py"
@@ -40,6 +40,7 @@ def make_scratch(root, source=ROOT):
     live = json.loads((source / "platform/platform.json").read_text())
     unconfigure_platform(root / "platform")
     unconfigure_hello_app(root / "bootstrap/hello-app")
+    unconfigure_portal(root / "bootstrap/golden-road-portal")
     unconfigure_factory(root / "bootstrap/scorecard-factory", live.get("org"))
     unconfigure_agents(root / "bootstrap/golden-road-agents", live.get("org"), live.get("github_host"), live.get("actions_oidc_issuer"))
     return root
@@ -96,7 +97,8 @@ def test_a_bump_changes_the_version_and_hello_app_s_lock_and_dockerfile_and_is_r
     assert out.returncode == 0, out.stderr
     after = snapshot(scratch)
     changed = {str(p) for p in before if after.get(p) != before[p]} | {str(p) for p in after if p not in before}
-    assert changed == {"src/builder/__init__.py", "bootstrap/hello-app/.builder.lock", "bootstrap/hello-app/Dockerfile"}
+    assert changed == {"src/builder/__init__.py", "bootstrap/hello-app/.builder.lock", "bootstrap/hello-app/Dockerfile",
+                       "bootstrap/golden-road-portal/.builder.lock", "bootstrap/golden-road-portal/Dockerfile"}
     assert current_version(scratch) == new
     again = run(scratch, new)
     assert again.returncode == 0 and snapshot(scratch) == after
@@ -116,7 +118,8 @@ def test_after_a_bump_a_tree_configured_with_the_sample_config_still_passes_its_
     assert out.returncode == 0, out.stderr
     after = snapshot(scratch)
     changed = {str(p) for p in configured if after.get(p) != configured[p]}
-    assert changed == {"src/builder/__init__.py", "bootstrap/hello-app/.builder.lock", "bootstrap/hello-app/Dockerfile"}
+    assert changed == {"src/builder/__init__.py", "bootstrap/hello-app/.builder.lock", "bootstrap/hello-app/Dockerfile",
+                       "bootstrap/golden-road-portal/.builder.lock", "bootstrap/golden-road-portal/Dockerfile"}
     assert b"example-org" in (scratch / "bootstrap/hello-app/.github/workflows/ci.yml").read_bytes()
     run_relevant_tests(scratch)
 
@@ -129,7 +132,7 @@ def test_the_scratch_copy_is_unconfigured_even_when_the_tree_it_copies_is_config
     assert done.returncode == 0, done.stderr
     assert b"example-org" in (configured / "bootstrap/hello-app/.github/workflows/ci.yml").read_bytes()
     again = make_scratch(tmp_path / "again", source=configured)
-    for rel in ("platform", "bootstrap/hello-app", "bootstrap/golden-road-agents", "bootstrap/scorecard-factory"):
+    for rel in ("platform", "bootstrap/hello-app", "bootstrap/golden-road-portal", "bootstrap/golden-road-agents", "bootstrap/scorecard-factory"):
         left, right = snapshot(pristine / rel), snapshot(again / rel)
         assert left == right, [str(p) for p in set(left) | set(right) if left.get(p) != right.get(p)][:5]
     # and both variants of the bump test work on it

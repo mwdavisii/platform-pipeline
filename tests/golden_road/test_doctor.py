@@ -46,7 +46,7 @@ def good_rules():
          "stdout": json.dumps([{"type": "pull_request", "parameters": {}}, {"type": "required_status_checks", "parameters": {"required_status_checks": contexts}}])},
         {"args": ["pr", "checks"], "stdout": json.dumps([{"name": c, "bucket": "pass"} for c in doctor.REQUIRED_CONTEXTS])},
         {"args": ["api", f"repos/{ORG}/scorecard-factory/contents/intake/{REPO}.yaml"], "stdout": "abc123\n"},
-        {"args": ["issue", "list"], "stdout": "[]"},
+        {"args": ["api", f"repos/{ORG}/scorecard-factory", "--jq", ".full_name"], "stdout": f"{ORG}/scorecard-factory\n"},
     ]
 
 
@@ -371,41 +371,6 @@ def test_intake_record_passes(app, pin, gh):
     assert doctor.check_intake(ctx(app, pin))["status"] == "pass"
 
 
-def test_intake_requested_or_not(app, pin, gh):
-    gh.answer(INTAKE, code=1, stderr="gh: Not Found (HTTP 404)\n")
-    result = doctor.check_intake(ctx(app, pin))
-    assert result["status"] == "warn" and "not requested" in result["message"]
-    listed = [call["args"] for call in gh.calls() if call["args"][:2] == ["issue", "list"]][-1]
-    assert listed[listed.index("--repo") + 1] == f"{ORG}/scorecard-factory" and "--label" not in listed
-    assert listed[listed.index("--limit") + 1] == "100"
-    prefix = doctor.INTAKE_TITLE_PREFIX
-    gh.answer(["issue", "list"], stdout=json.dumps([{"number": 9, "title": f"{prefix}other-org/other"}, {"number": 12, "title": f"{prefix}{REPO}"}]))
-    result = doctor.check_intake(ctx(app, pin))
-    assert result["status"] == "warn" and "requested, issue #12" in result["message"]
-
-
-def test_intake_ignores_a_title_that_only_mentions_the_repo(app, pin, gh):
-    gh.answer(INTAKE, code=1, stderr="gh: Not Found (HTTP 404)\n")
-    gh.answer(["issue", "list"], stdout=json.dumps([{"number": 5, "title": f"Suppression for {REPO} expired"}]))
-    assert "not requested" in doctor.check_intake(ctx(app, pin))["message"]
-    gh.answer(["issue", "list"], stdout=json.dumps([{"number": 6, "title": f"  intake REQUEST: {REPO}"}]))
-    assert "requested, issue #6" in doctor.check_intake(ctx(app, pin))["message"]
-
-
-@pytest.mark.parametrize("record, issues, status", [
-    ({"code": 1, "stderr": "gh: Forbidden (HTTP 403)\n"}, None, "warn"),
-    ({"code": 1, "stderr": "gh: Server Error (HTTP 502)\n"}, None, "fail"),
-    ({"code": 1, "stderr": "gh: Not Found (HTTP 404)\n"}, {"code": 1, "stderr": "gh: Not Found (HTTP 404)\n"}, "warn"),
-    ({"code": 1, "stderr": "gh: Not Found (HTTP 404)\n"}, {"code": 1, "stderr": "timeout\n"}, "fail"),
-    ({"code": 1, "stderr": "gh: Not Found (HTTP 404)\n"}, {"stdout": "{}"}, "fail"),
-])
-def test_intake_unreadable(app, pin, gh, record, issues, status):
-    gh.answer(INTAKE, **record)
-    if issues:
-        gh.answer(["issue", "list"], **issues)
-    assert doctor.check_intake(ctx(app, pin))["status"] == status
-
-
 def test_intake_without_an_org_fails(app, pin, gh):
     assert doctor.check_intake(ctx(app, pin, org=None))["status"] == "fail"
 
@@ -449,7 +414,7 @@ def test_doctor_never_changes_anything_and_only_reads_github(app, pin, gh, capsy
     gh.answer(INTAKE, code=1, stderr="gh: Not Found (HTTP 404)\n")
     run(capsys, str(app), "--pin", str(pin))
     assert tree() == before and pin.read_bytes() == pin_before
-    read_only = (["auth", "status"], ["repo", "view"], ["api"], ["pr", "checks"], ["issue", "list"])
+    read_only = (["auth", "status"], ["repo", "view"], ["api"], ["pr", "checks"])
     calls = [call["args"] for call in gh.calls()]
     assert len(calls) == 6
     for args in calls:
@@ -747,16 +712,6 @@ def test_messages_drop_c1_and_bidi_controls():
 
 # ---- intake ----
 
-def test_intake_title_match_is_whole_token(app, pin, gh):
-    gh.answer(INTAKE, code=1, stderr="gh: Not Found (HTTP 404)\n")
-    gh.answer(["issue", "list"], stdout=json.dumps([{"number": 3, "title": f"Intake request: {REPO}-two"}, {"number": 4, "title": f"Intake request: x{REPO}"},
-                                                    {"number": 5, "title": f"Intake request: {REPO}.v2"}, {"number": 8, "title": f"Intake request: {REPO}/sub"}]))
-    assert "not requested" in doctor.check_intake(ctx(app, pin))["message"]
-    for title in (f"Intake request: {REPO}", f"Intake request: {REPO}.", f"Intake request: ({REPO})", f"Intake request: {REPO.upper()} please"):
-        gh.answer(["issue", "list"], stdout=json.dumps([{"number": 6, "title": title}]))
-        assert "requested, issue #6" in doctor.check_intake(ctx(app, pin))["message"], title
-
-
 def test_intake_record_read_forbidden_warns(app, pin, gh):
     gh.answer(INTAKE, code=1, stderr="gh: Forbidden (HTTP 403)\n")
     result = doctor.check_intake(ctx(app, pin))
@@ -837,14 +792,48 @@ def test_a_local_remote_path_with_a_space_is_ignored(app, pin, gh, monkeypatch):
     assert result["status"] == "pass", result
 
 
-def test_intake_finds_an_unlabeled_request_and_names_the_title_in_the_fix(app, pin, gh):
-    """An issue opened with gh by someone without triage access carries no label, so doctor doesn't filter on one."""
+def test_no_intake_record_points_at_the_portal(app, pin, gh, monkeypatch):
+    monkeypatch.setattr(doctor, "load_platform", lambda: {"org": ORG, "portal_url": "https://portal.example.org"})
     gh.answer(INTAKE, code=1, stderr="gh: Not Found (HTTP 404)\n")
     result = doctor.check_intake(ctx(app, pin))
-    assert result["status"] == "warn" and f'"{doctor.INTAKE_TITLE_PREFIX}{REPO}"' in result["fix"]
-    gh.answer(["issue", "list"], stdout=json.dumps([{"number": 7, "title": f"{doctor.INTAKE_TITLE_PREFIX}{REPO}"}]))
-    assert "requested, issue #7" in doctor.check_intake(ctx(app, pin))["message"]
+    assert result["status"] == "warn" and result["message"] == "no intake record yet"
+    assert f"golden-road register --repo {REPO}" in result["fix"] and "an admin approves it" in result["fix"]
+    assert not [c for c in gh.calls() if c["args"][:2] == ["issue", "list"]]
 
 
-def test_the_intake_title_prefix():
-    assert doctor.INTAKE_TITLE_PREFIX == "Intake request: " and doctor.INTAKE_LABEL == "intake-request"
+def test_without_a_portal_the_fix_says_who_adds_the_record(app, pin, gh, monkeypatch):
+    monkeypatch.setattr(doctor, "load_platform", lambda: {"org": ORG})
+    gh.answer(INTAKE, code=1, stderr="gh: Not Found (HTTP 404)\n")
+    assert "security adds the intake record" in doctor.check_intake(ctx(app, pin))["fix"]
+
+
+@pytest.mark.parametrize("record, status", [({"code": 1, "stderr": "gh: Forbidden (HTTP 403)\n"}, "warn"),
+                                            ({"code": 1, "stderr": "gh: Server Error (HTTP 502)\n"}, "fail")])
+def test_intake_unreadable(app, pin, gh, record, status):
+    gh.answer(INTAKE, **record)
+    assert doctor.check_intake(ctx(app, pin))["status"] == status
+
+
+def test_doctor_has_no_intake_issue_vocabulary_left():
+    assert not hasattr(doctor, "INTAKE_TITLE_PREFIX") and not hasattr(doctor, "INTAKE_LABEL")
+
+
+FACTORY = ["api", f"repos/{ORG}/scorecard-factory"]
+
+
+def test_no_record_in_a_factory_that_can_be_read_is_no_record_yet_after_one_call_to_the_factory(app, pin, gh):
+    gh.answer(INTAKE, code=1, stderr="gh: Not Found (HTTP 404)\n")
+    result = doctor.check_intake(ctx(app, pin))
+    assert result["message"] == "no intake record yet"
+    assert len([c for c in gh.calls() if c["args"][:2] == FACTORY]) == 1
+
+
+@pytest.mark.parametrize("answer, status", [({"code": 1, "stderr": "gh: Not Found (HTTP 404)\n"}, "warn"),
+                                            ({"code": 1, "stderr": "gh: Forbidden (HTTP 403)\n"}, "warn"),
+                                            ({"code": 1, "stderr": "gh: Server Error (HTTP 502)\n"}, "fail")])
+def test_a_factory_that_cannot_be_read_is_not_reported_as_no_record(app, pin, gh, answer, status):
+    """A 404 on the record is also what a person without read access to the factory sees, so doctor asks the factory itself."""
+    gh.answer(INTAKE, code=1, stderr="gh: Not Found (HTTP 404)\n")
+    gh.answer(FACTORY, **answer)
+    result = doctor.check_intake(ctx(app, pin))
+    assert result["status"] == status and result["message"] != "no intake record yet" and "register" not in result["fix"]

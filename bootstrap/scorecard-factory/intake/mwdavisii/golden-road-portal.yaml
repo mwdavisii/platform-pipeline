@@ -1,0 +1,7 @@
+# The only trusted source of this app's tier and purpose. Registered outside the portal: the portal can't approve itself.
+schema: intake/v1
+repo: mwdavisii/golden-road-portal
+tier: high
+purpose: "The golden road portal: people sign in with the identity provider, link their GitHub login, and register app repos; admins approve registrations; a separate writer process turns approved requests into pull requests on the platform's repos. It holds the git write credential (the write App installation), and later read credentials for clusters and the image registry."
+owner: "platform-team"
+data_classification: internal

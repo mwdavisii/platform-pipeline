@@ -4,6 +4,7 @@ Every schema in `schemas/` is registered under its `$id`, so one schema can `$re
 (scorecard/v1 embeds finding/v2 and requirement-result/v1) without any network lookup.
 """
 
+import datetime as dt
 import json
 from functools import cache
 from importlib import resources
@@ -39,7 +40,24 @@ def _validator(name: str) -> Draft202012Validator:
     return Draft202012Validator(schema, registry=_registry(), format_checker=Draft202012Validator.FORMAT_CHECKER)
 
 
+# `format: date-time` is checked only when an optional package is installed, so these fields are parsed here as well: the
+# schema's pattern fixes the shape, this proves the instant exists (no month 99, no February 30).
+DATE_TIME_FIELDS = {"intake.v2": ("approved_at",), "identity-link.v1": ("created_at",)}
+
+
+def _bad_instants(name: str, document) -> list[str]:
+    errors = []
+    for field in DATE_TIME_FIELDS.get(name, ()):
+        value = document.get(field) if isinstance(document, dict) else None
+        if isinstance(value, str):
+            try:
+                dt.datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+            except ValueError:
+                errors.append(f"{field}: {value!r} is not a real UTC date and time")
+    return errors
+
+
 def validate(name: str, document) -> list[str]:
     """Return human-readable errors; an empty list means the document is valid."""
     errors = sorted(_validator(name).iter_errors(document), key=lambda e: [str(p) for p in e.absolute_path])
-    return [f"{'/'.join(str(p) for p in e.absolute_path) or '<root>'}: {e.message}" for e in errors]
+    return [f"{'/'.join(str(p) for p in e.absolute_path) or '<root>'}: {e.message}" for e in errors] + _bad_instants(name, document)

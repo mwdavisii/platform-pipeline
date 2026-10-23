@@ -3,10 +3,10 @@
     "AGENTS.md": "456d1c864d5fa330313d179c41ee8ce602b908217f1fa550bb26c26d1c90fad0",
     "CLAUDE.md": "80335c8c80902767fd3e773e3411f3e25b118b411de6e71de97616c818b5f1b7"
   },
-  "builder_version": "0.3.9",
+  "builder_version": "0.3.10",
   "files": {
     ".dockerignore": "16db3544cb06ccea08c36be035d48d045628f77baf1fc24f23f8472896d68ede",
-    "Dockerfile": "f57a42ff825279391130ab15644da638e956e2f79cc174bf6aaf8cc8eab2c7af",
+    "Dockerfile": "a8f71938b53199fc6f1db0af9a210594e42acd99bc1aae4e2c92efd0fcf08a5e",
     "_platform/__init__.py": "44d60d96d8ea7bf72f6d79c09aa40f1a0257b59c788efae75c91796356efed77",
     "_platform/authz-policy.json": "283420ce0f9e94f6c2384fb0be60151bdfa1b8c384472f8448f0014a709764ba",
     "_platform/authz.py": "8d9b934260887fad674d58e3da6ec7b2f351ad6752140647ad674ea60e90df5e",
@@ -18,6 +18,6 @@
     "deploy/base/service.yaml": "42fa6b9f797928f333e63df1ff85fd8e4417d1621c1051bd441eee7d930af5cd",
     "deploy/base/serviceaccount.yaml": "5c967bfe364c90468a9d1d3b14c969b975c0887aa5ff0b2f1e5f49d402431834"
   },
-  "platform_config_sha256": "acba38f508e3aa820d364197d19f778befd4027eebcef308c5e3166a8630aab3",
+  "platform_config_sha256": "b0afa2a990bceb28d4524f953ee62c93dd27c2028469303c09fab17c4df9d81a",
   "spec_sha256": "0475a96031981697adcf59ddd7697edb0ebd6467751c0b86ca5f2c0dc30cd0c5"
 }

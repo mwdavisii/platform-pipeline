@@ -31,7 +31,7 @@ This README holds the canonical block. The landing page copies this block word f
 |---|---|
 | `INSTALL_FOR_AGENTS.md` | Commands only: the access check, the `uv` check, installing the stub into the agent's personal skills folder |
 | `stub/golden-road/` | The stub skill: `SKILL.md` and `fetch_skill.py`, which downloads, verifies, caches and loads the skill bundle. It names this repository and `release-skill.yml` as the only signer |
-| `skill/` | The skill bundle: the procedure (`SKILL.md`), `install_builder.py` (the platform's pinned builder, verified, in a venv), `write_callers.py` and the caller workflow templates, the intake request template |
+| `skill/` | The skill bundle: the procedure (`SKILL.md`), `install_builder.py` (the platform's pinned builder, verified, in a venv), `write_callers.py` and the caller workflow templates |
 | `scripts/build_release.py` | Builds a skill release's assets; the same tree always gives the same bytes |
 | `.github/workflows/release-skill.yml` | Builds, attests and publishes a `skill-vX.Y.Z` release |
 | `.github/rulesets/` | A protected `main`, and `skill-v*` tags that only admins create, move or delete |

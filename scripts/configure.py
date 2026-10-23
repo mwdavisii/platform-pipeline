@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Fill in the org-specific values (org, model gateway host, optional edge selector) and regenerate hello-app.
+"""Fill in the org-specific values (org, model gateway host, optional edge selector) and regenerate hello-app and golden-road-portal.
 
 Usage: scripts/configure.py --org <org> --gateway-host <host> --edge-namespace NS --edge-label KEY=VALUE [...]
                             --identity-header NAME [--scorecard-gateway-url URL] [--single-approver]
                             [--github-host HOST] [--cert-oidc-issuer URL]
-                            [--landing-page-url URL] [--approved-models-url URL]
+                            [--landing-page-url URL] [--approved-models-url URL] [--portal-url URL]
 
 --scorecard-gateway-url is the chat-completions URL the scorecard's review agent calls from the CI runners. It
 defaults to https://<gateway host>/v1/chat/completions; pass it when the runners reach the gateway at another
@@ -17,6 +17,10 @@ host's release-skill.yml with that issuer). Once recorded they can't change.
 
 --landing-page-url and --approved-models-url are the two links in the AGENTS.md block of every app. The landing page defaults to
 the README of golden-road-agents; the approved-models link has no default. A later run may change them.
+
+--portal-url is the golden road portal's address (https, no path). It is recorded in platform/platform.json, and `golden-road register` and
+`golden-road doctor` read it from the installed builder's platform config: an agent can't be steered to another portal. Like the links, a
+later run may change it. There is no default: without it `register` says to ask the platform team.
 
 --single-approver is for the personal PoC only, for an owner with no second GitHub account. It records
 gate2_single_approver in platform/platform.json and relaxes the approval settings of hello-app, the scorecard factory and golden-road-agents (no PR approvals
@@ -48,6 +52,7 @@ DEFAULT_ISSUER = "https://token.actions.githubusercontent.com"
 GHE_TENANT = re.compile(r"([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)\.ghe\.com")
 # A link in the AGENTS.md block: https, a host, an optional port and path; no user info, spaces, quotes or brackets (it sits in markdown).
 LINK_URL = re.compile(r"https://([A-Za-z0-9.-]+)(:[0-9]{1,5})?(/[A-Za-z0-9._~%/?&=+#-]*)?")
+PORTAL_URL = re.compile(r"https://([A-Za-z0-9.-]+)(:[0-9]{1,5})?/?")  # the portal answers on its own origin: no path, so its __Host- cookie works
 ISSUER_URL = re.compile(r"https://([A-Za-z0-9.-]+)((?:/[A-Za-z0-9._~-]+)*)")  # no query, no trailing slash
 # The kit files that name the platform's GitHub host or its Actions OIDC issuer, with how many times each does in the committed
 # tree (host, issuer). They can't read the platform config, so configure.py rewrites them, and refuses before writing anything
@@ -76,6 +81,14 @@ PLACEHOLDER_STATE = {
     "bootstrap/hello-app/.github/workflows/security-scans.yml": "ORG_PLACEHOLDER",
     "bootstrap/hello-app/.github/CODEOWNERS": "ORG_PLACEHOLDER",
     "bootstrap/hello-app/.github/workflows/scorecard.yml": "ORG_PLACEHOLDER",
+    "bootstrap/golden-road-portal/deploy/base/networkpolicy.yaml": "replace-me",
+    "bootstrap/golden-road-portal/_platform/authz-policy.json": "X-replace-me",
+    "bootstrap/golden-road-portal/.github/workflows/ci.yml": "ORG_PLACEHOLDER",
+    "bootstrap/golden-road-portal/.github/workflows/promote.yml": "ORG_PLACEHOLDER",
+    "bootstrap/golden-road-portal/.github/workflows/security-scans.yml": "ORG_PLACEHOLDER",
+    "bootstrap/golden-road-portal/.github/workflows/scorecard.yml": "ORG_PLACEHOLDER",
+    "bootstrap/golden-road-portal/.github/CODEOWNERS": "ORG_PLACEHOLDER",
+    "bootstrap/scorecard-factory/intake/ORG_PLACEHOLDER/golden-road-portal.yaml": "ORG_PLACEHOLDER",
     "bootstrap/scorecard-factory/.github/CODEOWNERS": "ORG_PLACEHOLDER",
     "bootstrap/scorecard-factory/.github/workflows/factory-check.yml": "ORG_PLACEHOLDER",
     "bootstrap/scorecard-factory/.github/workflows/scorecard.yml": "ORG_PLACEHOLDER",
@@ -93,6 +106,7 @@ PLACEHOLDER_STATE = {
 }
 
 RULESET_REL = Path(".github/rulesets/main.json")
+FACTORY_REVIEW_RULESET_REL = Path(".github/rulesets/main-review.json")  # the factory's pull_request rule lives in its own ruleset
 PROD_ENV_REL = Path(".github/environment-prod.json")
 
 
@@ -106,19 +120,24 @@ def _relaxed_ruleset(path: Path) -> bytes:
     return (json.dumps(ruleset, indent=2) + "\n").encode("utf-8")
 
 
-def single_approver_files(app: Path, factory: Path | None = None, agents: Path | None = None) -> dict[Path, bytes]:
-    """New content for the files that --single-approver relaxes: hello-app's ruleset and prod environment, and the main ruleset
-    of the scorecard factory and of golden-road-agents when the tree has them. Raises ValueError if a file is not as expected."""
-    ruleset_path, env_path = app / RULESET_REL, app / PROD_ENV_REL
-    files = {ruleset_path: _relaxed_ruleset(ruleset_path)}
-    env = json.loads(read_regular(env_path).decode("utf-8"))
-    if not isinstance(env, dict) or "prevent_self_review" not in env:
-        raise ValueError(f"{env_path} has no prevent_self_review")
-    env["prevent_self_review"] = False
-    files[env_path] = (json.dumps(env, indent=2) + "\n").encode("utf-8")
-    for repo in (factory, agents):
+def single_approver_files(app: Path, factory: Path | None = None, agents: Path | None = None, portal: Path | None = None) -> dict[Path, bytes]:
+    """New content for the files that --single-approver relaxes: hello-app's ruleset and prod environment (and the portal's, when the
+    tree has it), and the review ruleset of the scorecard factory (main-review) and the main ruleset of golden-road-agents when the tree has them. Raises ValueError
+    if a file is not as expected."""
+    files = {}
+    for target in (app, portal):
+        if target is None or (target is not app and not is_real_dir(target)):
+            continue
+        ruleset_path, env_path = target / RULESET_REL, target / PROD_ENV_REL
+        files[ruleset_path] = _relaxed_ruleset(ruleset_path)
+        env = json.loads(read_regular(env_path).decode("utf-8"))
+        if not isinstance(env, dict) or "prevent_self_review" not in env:
+            raise ValueError(f"{env_path} has no prevent_self_review")
+        env["prevent_self_review"] = False
+        files[env_path] = (json.dumps(env, indent=2) + "\n").encode("utf-8")
+    for repo, rel in ((factory, FACTORY_REVIEW_RULESET_REL), (agents, RULESET_REL)):
         if repo is not None and is_real_dir(repo):
-            files[repo / RULESET_REL] = _relaxed_ruleset(repo / RULESET_REL)
+            files[repo / rel] = _relaxed_ruleset(repo / rel)
     return files
 
 
@@ -272,14 +291,37 @@ def loadable(config_text: str) -> None:
             raise ValueError(f"the scorecard config does not load: {exc}") from exc
 
 
-def regenerate_hello_app(root: Path, spec: dict | None = None) -> None:
-    """Regenerate bootstrap/hello-app from its spec with the tree's own platform config: the last step of a configure run, and what
-    scripts/bump-builder-version.py repeats after a version change. Needs root/src importable. Raises BuilderError."""
+BUILDER_APPS = ("hello-app", "golden-road-portal")  # bootstrap apps the builder generates; configure and the version bump regenerate both
+
+
+def github_hosts(host: str) -> list[str]:
+    """The GitHub web and API hosts, the portal's only egress in slice 1 (identity linking)."""
+    api = "api.github.com" if host == "github.com" else (f"api.{host}" if host.endswith(".ghe.com") else host)
+    return sorted({host, api})
+
+
+def portal_spec(spec: dict, host: str) -> dict:
+    """The portal's spec with its egress set to the GitHub host(s) of this platform."""
+    hosts = github_hosts(host)
+    if len(hosts) == 1:  # GitHub Enterprise Server: one host serves both
+        egress = [{"host": host, "port": 443, "reason": "GitHub API and OAuth: identity linking"}]
+    else:
+        egress = [{"host": h, "port": 443, "reason": "GitHub OAuth: identity linking" if h == host else "GitHub API: identity linking"} for h in hosts]
+    return {**spec, "egress": egress}
+
+
+def regenerate_apps(root: Path, specs: dict | None = None) -> None:
+    """Regenerate every builder app in bootstrap/ from its spec with the tree's own platform config: the last step of a configure
+    run, and what scripts/bump-builder-version.py repeats after a version change. Needs root/src importable. Raises BuilderError."""
     from builder.generate import generate
 
-    app = root / "bootstrap/hello-app"
     os.environ["BUILDER_PLATFORM_CONFIG"] = str(root / "platform/platform.json")
-    generate(app, spec if spec is not None else json.loads(read_regular(app / "builder-spec.json").decode("utf-8")))
+    for name in BUILDER_APPS:
+        app = root / "bootstrap" / name
+        if not is_real_dir(app):
+            continue
+        spec = (specs or {}).get(name) or json.loads(read_regular(app / "builder-spec.json").decode("utf-8"))
+        generate(app, spec)
 
 
 def main() -> int:
@@ -309,6 +351,7 @@ def main() -> int:
     p.add_argument("--landing-page-url", default=None,
                    help="the golden-road landing page the AGENTS.md block links to (default https://<github host>/<org>/golden-road-agents)")
     p.add_argument("--approved-models-url", default=None, help="the approved-models policy the AGENTS.md block links to (default: not published yet)")
+    p.add_argument("--portal-url", default=None, help="the golden road portal's address (https, no path); golden-road register links to it")
     args = p.parse_args()
     if not ORG.fullmatch(args.org) or len(args.org) > 39:
         sys.exit("invalid --org")
@@ -340,12 +383,16 @@ def main() -> int:
             link = LINK_URL.fullmatch(value)
             if not link or not valid_host(link.group(1).lower()):
                 sys.exit(f"invalid {flag} (an https URL with a host name; no user info, spaces, quotes or brackets)")
+    if args.portal_url is not None:
+        portal_match = PORTAL_URL.fullmatch(args.portal_url)
+        if not portal_match or not valid_host(portal_match.group(1).lower()):
+            sys.exit("invalid --portal-url (an https URL with a host name and no path)")
     url = args.scorecard_gateway_url or f"https://{args.gateway_host}/v1/chat/completions"
     match = SCORECARD_URL.fullmatch(url)
     if not match or not valid_host(match.group(1).lower()):
         sys.exit("invalid --scorecard-gateway-url (an https URL with a host name and a path, no user info or fragment)")
     for value in (args.org, args.gateway_host, args.edge_namespace, args.identity_header, url, args.github_host or "",
-                  args.cert_oidc_issuer or "", args.landing_page_url or "", args.approved_models_url or "", *args.edge_label):
+                  args.cert_oidc_issuer or "", args.landing_page_url or "", args.approved_models_url or "", args.portal_url or "", *args.edge_label):
         if "replace-me" in value.lower():
             sys.exit(f"{value!r} is still a placeholder")
 
@@ -401,6 +448,8 @@ def main() -> int:
     platform["landing_page_url"] = args.landing_page_url or platform.get("landing_page_url") or f"https://{host}/{args.org}/golden-road-agents"
     if args.approved_models_url:
         platform["approved_models_url"] = args.approved_models_url
+    if args.portal_url:
+        platform["portal_url"] = args.portal_url.rstrip("/")
     recorded = platform.get("gate2_single_approver", False)
     if type(recorded) is not bool:
         sys.exit("gate2_single_approver in platform/platform.json must be true or false")
@@ -418,6 +467,16 @@ def main() -> int:
     errors, questions, _ = check_spec(spec, app, platform)
     if errors or questions:
         sys.exit(f"hello-app spec does not validate: {errors or questions}")
+    portal_app, specs = bootstrap / "golden-road-portal", {"hello-app": spec}
+    if is_real_dir(portal_app):
+        portal_spec_path = portal_app / "builder-spec.json"
+        if portal_spec_path.is_symlink() or not portal_spec_path.is_file():
+            sys.exit(f"{portal_spec_path} must be a regular file")
+        pspec = portal_spec(json.loads(read_regular(portal_spec_path).decode("utf-8")), host)
+        errors, questions, _ = check_spec(pspec, portal_app, platform)
+        if errors or questions:
+            sys.exit(f"golden-road-portal spec does not validate: {errors or questions}")
+        specs["golden-road-portal"] = pspec
 
     try:
         changes.update(scorecard_config(bootstrap, url, changes))
@@ -430,7 +489,7 @@ def main() -> int:
 
     if args.single_approver:
         try:
-            changes.update(single_approver_files(app, bootstrap / "scorecard-factory", bootstrap / "golden-road-agents"))
+            changes.update(single_approver_files(app, bootstrap / "scorecard-factory", bootstrap / "golden-road-agents", portal_app))
         except (ValueError, OSError) as exc:
             sys.exit(f"cannot apply --single-approver: {exc}")
 
@@ -445,10 +504,10 @@ def main() -> int:
             sys.exit(f"cannot rename {directory} to {args.org}: {exc}. The tree is partly configured; "
                      "run `git checkout -- bootstrap platform` and fix the cause before configuring again")
     try:
-        regenerate_hello_app(root, spec)
+        regenerate_apps(root, specs)
     except BuilderError as exc:
         sys.exit(f"regenerate failed: {exc.errors or exc.questions}")
-    print(f"configured org={args.org} github={host} gateway={args.gateway_host} scorecard gateway={url}; regenerated {app}")
+    print(f"configured org={args.org} github={host} gateway={args.gateway_host} scorecard gateway={url}; regenerated {', '.join(n for n in BUILDER_APPS if n in specs)}")
     return 0
 
 

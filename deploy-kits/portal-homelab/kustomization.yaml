@@ -1,0 +1,59 @@
+# The golden-road portal on a home k3s cluster. manifests.yaml is the verified release's asset: download it next to this file
+# (README, "Verify the release"). It is never committed. Edit only the values marked REPLACE.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: golden-road-portal
+resources:
+- manifests.yaml
+- namespace.yaml
+- postgres.yaml
+- migrate-job.yaml
+- writer.yaml
+- collector.yaml
+- networkpolicies.yaml
+
+# Non-secret settings. The name is the one the release's web Deployment reads (golden-road-portal-config), so the hash suffix is off.
+# After changing a value, restart the three Deployments' pods (README, "Change a setting").
+generatorOptions:
+  disableNameSuffixHash: true
+configMapGenerator:
+- name: golden-road-portal-config
+  literals:
+  - PORTAL_BASE_URL=https://viber.mwdavisii.com
+  - PORTAL_ORG=mwdavisii
+  - PORTAL_GITHUB_HOST=github.com
+  - 'PORTAL_ROLE_GROUPS={"admin": ["golden-road-admins"], "ops": ["golden-road-ops"]}'
+  # REPLACE: the Authentik provider's issuer URL. Its host must also be the matchName in networkpolicies.yaml (oidc-egress).
+  - PORTAL_OIDC_ISSUER=https://authentik.replace-me.invalid/application/o/golden-road-portal/
+  # REPLACE: the Authentik client id, and the read App's OAuth client id (both are public values).
+  - PORTAL_OIDC_CLIENT_ID=replace-me
+  - PORTAL_GITHUB_OAUTH_CLIENT_ID=replace-me
+  # REPLACE: the two GitHub Apps' ids and the ids of their installations on the organization.
+  - PORTAL_READ_APP_ID=replace-me
+  - PORTAL_READ_INSTALLATION_ID=replace-me
+  - PORTAL_WRITE_APP_ID=replace-me
+  - PORTAL_WRITE_INSTALLATION_ID=replace-me
+
+# One image for every process: the writer, the collector and the migration job take the image of the release's web Deployment,
+# so they can never drift from it.
+replacements:
+- source:
+    kind: Deployment
+    name: golden-road-portal
+    fieldPath: spec.template.spec.containers.[name=app].image
+  targets:
+  - select:
+      kind: Deployment
+      name: golden-road-portal-writer
+    fieldPaths:
+    - spec.template.spec.containers.[name=writer].image
+  - select:
+      kind: Deployment
+      name: golden-road-portal-collector
+    fieldPaths:
+    - spec.template.spec.containers.[name=collector].image
+  - select:
+      kind: Job
+      name: golden-road-portal-migrate
+    fieldPaths:
+    - spec.template.spec.containers.[name=migrate].image

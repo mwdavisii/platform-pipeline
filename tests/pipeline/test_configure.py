@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from helpers import builder_cmd, builder_env, unconfigure_agents, unconfigure_factory, unconfigure_hello_app, unconfigure_platform
+from helpers import builder_cmd, builder_env, unconfigure_agents, unconfigure_factory, unconfigure_hello_app, unconfigure_platform, unconfigure_portal
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -21,6 +21,7 @@ def workspace(tmp_path):
     org = live.get("org")
     unconfigure_platform(tmp_path / "platform")
     unconfigure_hello_app(tmp_path / "bootstrap/hello-app")
+    unconfigure_portal(tmp_path / "bootstrap/golden-road-portal")
     unconfigure_factory(tmp_path / "bootstrap/scorecard-factory", org)
     unconfigure_agents(tmp_path / "bootstrap/golden-road-agents", org, live.get("github_host"), live.get("actions_oidc_issuer"))
     return tmp_path
@@ -140,7 +141,7 @@ def pr_params(root):
     return next(r for r in rules if r["type"] == "pull_request")["parameters"]
 
 
-FACTORY_RULESET = "bootstrap/scorecard-factory/.github/rulesets/main.json"
+FACTORY_RULESET = "bootstrap/scorecard-factory/.github/rulesets/main-review.json"  # the review half of the factory's pair
 
 
 def factory_pr_params(root):
@@ -167,7 +168,7 @@ def test_unconfigured_workspace_matches_the_committed_placeholder_state(workspac
     assert verify.returncode == 0, verify.stdout
     if not live_tree_is_pristine():
         return  # a configured tree has no committed placeholder content to compare byte for byte
-    for rel in (*state, RULESET, PROD_ENV, "bootstrap/hello-app/.builder.lock"):
+    for rel in (*state, RULESET, PROD_ENV, "bootstrap/hello-app/.builder.lock", "bootstrap/golden-road-portal/.builder.lock"):
         assert (workspace / rel).read_bytes() == (ROOT / rel).read_bytes(), rel
 
 
@@ -546,3 +547,57 @@ def test_bad_links_change_nothing(workspace, flag, url):
     before = (workspace / "platform/platform.json").read_text()
     assert configure(workspace, *GOOD, flag, url).returncode != 0
     assert (workspace / "platform/platform.json").read_text() == before
+
+
+PORTAL = "bootstrap/golden-road-portal"
+
+
+def test_configure_regenerates_the_portal_too(workspace):
+    out = configure(workspace, *GOOD)
+    assert out.returncode == 0, out.stderr
+    policy = json.loads((workspace / PORTAL / "_platform/authz-policy.json").read_text())
+    assert policy["identity_header"] == "X-Roles-Test"
+    assert "example-org/platform-pipeline" in (workspace / PORTAL / ".github/workflows/ci.yml").read_text()
+    env = builder_env(BUILDER_PLATFORM_CONFIG=str(workspace / "platform/platform.json"), PATH="")
+    verify = subprocess.run([*builder_cmd(), "verify", str(workspace / PORTAL)], capture_output=True, text=True, env=env)
+    assert verify.returncode == 0, verify.stdout
+
+
+def test_the_portal_egress_follows_the_github_host(workspace):
+    out = configure(workspace, *GOOD, "--github-host", "acme.ghe.com")
+    assert out.returncode == 0, out.stderr
+    spec = json.loads((workspace / PORTAL / "builder-spec.json").read_text())
+    assert sorted(e["host"] for e in spec["egress"]) == ["acme.ghe.com", "api.acme.ghe.com"]
+
+
+def test_single_approver_relaxes_the_portal_like_hello_app(workspace):
+    out = configure(workspace, *GOOD, "--single-approver")
+    assert out.returncode == 0, out.stderr
+    assert json.loads((workspace / PORTAL / ".github/environment-prod.json").read_text())["prevent_self_review"] is False
+    rules = json.loads((workspace / PORTAL / ".github/rulesets/main.json").read_text())["rules"]
+    assert next(r for r in rules if r["type"] == "pull_request")["parameters"]["required_approving_review_count"] == 0
+
+
+def test_the_portal_url_is_recorded_and_can_change(workspace):
+    assert configure(workspace, *GOOD, "--portal-url", "https://portal.example.org").returncode == 0
+    assert json.loads((workspace / "platform/platform.json").read_text())["portal_url"] == "https://portal.example.org"
+    assert configure(workspace, *GOOD, "--portal-url", "https://golden.example.org").returncode == 0
+    assert json.loads((workspace / "platform/platform.json").read_text())["portal_url"] == "https://golden.example.org"
+
+
+def test_without_the_flag_no_portal_url_is_recorded(workspace):
+    assert configure(workspace, *GOOD).returncode == 0
+    assert "portal_url" not in json.loads((workspace / "platform/platform.json").read_text())
+
+
+def test_a_trailing_slash_is_dropped(workspace):
+    assert configure(workspace, *GOOD, "--portal-url", "https://portal.example.org:8443/").returncode == 0
+    assert json.loads((workspace / "platform/platform.json").read_text())["portal_url"] == "https://portal.example.org:8443"
+
+
+@pytest.mark.parametrize("url", ["http://portal.example.org", "https://portal.example.org/sub", "https://user@portal.example.org",
+                                 "https://portal.replace-me.invalid", "https://portal.example.org/#x"])
+def test_a_bad_portal_url_changes_nothing(workspace, url):
+    before = (workspace / "platform/platform.json").read_bytes()
+    assert configure(workspace, *GOOD, "--portal-url", url).returncode != 0
+    assert (workspace / "platform/platform.json").read_bytes() == before

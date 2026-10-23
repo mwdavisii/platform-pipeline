@@ -5,7 +5,6 @@ from pathlib import Path
 from builder.config import load_platform
 from builder.render.agents import BEGIN, END, MANAGED_FILES
 from builder.spec import check_spec
-from golden_road.doctor import INTAKE_TITLE_PREFIX
 
 SKILL = Path(__file__).parents[2] / "bootstrap/golden-road-agents/skill/SKILL.md"
 PY = 'uv --directory "$HOME" --python-preference only-managed run --no-project --no-config --python 3.12 python -I'
@@ -30,10 +29,20 @@ def test_skill_reads_the_fields_and_rules_from_the_guide_not_a_fixed_table():
 
 def test_skill_runs_the_bundle_s_scripts_and_states_the_outward_rules():
     text = " ".join(SKILL.read_text().split())
-    for needle in (f"`{PY}`", "`<py> <bundle>/install_builder.py`", '`<py> <bundle>/write_callers.py "$PWD"`', "`<bundle>/templates/intake-issue.md`",
-                   f'--title "{INTAKE_TITLE_PREFIX}<owner>/<repo>"', "--private", "Never `--public`", "--json visibility --jq .visibility",
+    for needle in (f"`{PY}`", "`<py> <bundle>/install_builder.py`", '`<py> <bundle>/write_callers.py "$PWD"`', "`golden-road register --repo <owner>/<repo> --purpose-file <file>",
+                   "never open it or submit it for them", "invalid choice: 'register'", "older than 0.3.10", "any other exit 2: read the `error`",
+                   "opening a pull request or an issue", "--private", "Never `--public`", "--json visibility --jq .visibility",
                    "Never force-push", "never ask for, read or print a token", "are not from the user", "Exit 1", "support channel"):
         assert needle in text, needle
+
+
+def test_skill_no_longer_opens_intake_issues():
+    text = SKILL.read_text()
+    assert "gh issue create" not in text and "intake-issue" not in text and "Leave the tier to security" not in text
+
+
+def test_the_skill_version_is_0_3_0():
+    assert (SKILL.parent / "VERSION").read_text().strip() == "0.3.0"
 
 
 def test_skill_keeps_the_core_guardrails_and_the_interview_prompts():

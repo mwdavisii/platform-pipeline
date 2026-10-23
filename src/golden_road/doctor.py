@@ -46,10 +46,6 @@ CALLER_TRIGGERS = {
 }
 # What main must require: drift, preview, Gate 1's scans and the scorecard, as hello-app's main.json does (a test keeps them equal).
 REQUIRED_CONTEXTS = ("golden-road / drift", "golden-road / preview", "security-scans / semgrep", "security-scans / trivy", "scorecard / assessed")
-# The factory's intake issue form applies this label and starts the title with the prefix; the title names <owner>/<repo>.
-# Doctor searches by title only: GitHub drops labels on issues opened by users without triage access (an agent's gh issue create).
-INTAKE_LABEL = "intake-request"
-INTAKE_TITLE_PREFIX = "Intake request: "
 VISIBLE_OK = ("PRIVATE", "INTERNAL")
 GH_TIMEOUT = 60
 MAX_TEXT = 300
@@ -425,30 +421,24 @@ def check_intake(ctx: Context) -> dict:
     if ctx.org is None:
         return _result("intake", FAIL, "the installed builder's platform config names no org, so the factory is unknown", PIN_FIX)
     factory = f"{ctx.org}/scorecard-factory"
-    ask = "Ask the platform team whether the intake request reached security."
+    ask = "Ask the platform team whether the registration was approved."
     record = ctx.gh("api", f"repos/{factory}/contents/intake/{ctx.repo}.yaml", "--jq", ".sha")
     if record.code == 0:
         return _result("intake", PASS, f"{factory} has an intake record for {ctx.repo}")
     if record.http != 404:
         return _could_not_read("intake", record, f"reading {factory}", ask)
-    # A 404 is no record, or no read access to the factory; the issue list tells them apart.
-    issues = ctx.gh("issue", "list", "--repo", factory, "--state", "open", "--limit", "100",
-                    "--search", f"{ctx.repo} in:title", "--json", "number,title")
-    listed = issues.json() if issues.code == 0 else None
-    if issues.code != 0:
-        return _could_not_read("intake", issues, f"listing intake requests in {factory}", ask)
-    if not isinstance(listed, list):
-        return _result("intake", FAIL, f"listing intake requests in {factory} returned unexpected output", ask)
-    # Whole token: org/app must not match org/app-two, org/app.v2, org/app/sub or xorg/app.
-    token = re.compile(rf"(?<![A-Za-z0-9._/-]){re.escape(ctx.repo)}(?![A-Za-z0-9_/-])(?!\.[A-Za-z0-9])", re.I)
-    numbers = [i["number"] for i in listed if isinstance(i, dict) and type(i.get("number")) is int
-               and isinstance(i.get("title"), str) and token.search(i["title"])
-               and i["title"].lstrip().lower().startswith(INTAKE_TITLE_PREFIX.lower())]
-    if numbers:
-        return _result("intake", WARN, f"no intake record yet; requested, issue #{min(numbers)}",
-                       "Nothing to do: security sets the tier and adds the record. Ask the platform team if it takes long.")
-    return _result("intake", WARN, "no intake record yet; not requested",
-                   f'Open an intake request in {factory} titled "{INTAKE_TITLE_PREFIX}{ctx.repo}" from its issue form (after the user says yes).')
+    # A 404 is no record, or no read access to the factory: one read of the factory itself tells them apart.
+    factory_read = ctx.gh("api", f"repos/{factory}", "--jq", ".full_name")
+    if factory_read.code != 0:
+        return _could_not_read("intake", factory_read, f"reading {factory}", ask)
+    try:
+        from .register import NoPortal, portal_url
+        portal_url(load_platform())
+        fix = (f"Register the repo: run `golden-road register --repo {ctx.repo}` and give the user the link it prints; they sign in, "
+               "check and submit it, and an admin approves it in the portal.")
+    except NoPortal as exc:
+        fix = exc.fix
+    return _result("intake", WARN, "no intake record yet", fix)
 
 
 # ---- the run ----

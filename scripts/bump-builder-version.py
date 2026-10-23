@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Raise the builder version and regenerate bootstrap/hello-app, so the tree keeps passing its own tests.
+"""Raise the builder version and regenerate bootstrap/hello-app and bootstrap/golden-road-portal, so the tree keeps passing its own tests.
 
 Usage: scripts/bump-builder-version.py <X.Y.Z> [--root DIR]
 
-A builder release is tagged builder-v<VERSION>, and hello-app's lock and Dockerfile record the version, so a version change by hand
-(one `sed`) leaves hello-app stale and the drift test failing. This sets VERSION in src/builder/__init__.py and then regenerates
-hello-app with the tree's own platform config: in an unconfigured tree that is the committed placeholder state, in a configured tree
+A builder release is tagged builder-v<VERSION>, and the lock and Dockerfile of hello-app and of the portal record the version, so a version change by hand
+(one `sed`) leaves them stale and the drift test failing. This sets VERSION in src/builder/__init__.py and then regenerates
+both apps with the tree's own platform config: in an unconfigured tree that is the committed placeholder state, in a configured tree
 what re-running scripts/configure.py would produce (it is the same regeneration code). A version that is not higher than the current
 one is refused; the current version again is accepted and only regenerates, so a run that stopped half-way can be repeated.
 Docs and doc tests read the version from the source and need no edit.
@@ -62,7 +62,7 @@ def main() -> int:
             written = True
             for name in [n for n in sys.modules if n == "builder" or n.startswith("builder.")]:
                 del sys.modules[name]
-        configure.regenerate_hello_app(root)
+        configure.regenerate_apps(root)
     except BaseException as exc:
         if written:
             init.write_text(text, encoding="utf-8")
@@ -70,7 +70,7 @@ def main() -> int:
         if isinstance(exc, (KeyboardInterrupt, SystemExit)):
             raise
         sys.exit(f"regenerate failed, version restored: {detail}")
-    print(f"builder version {args.version}; regenerated {root / 'bootstrap/hello-app'}")
+    print(f"builder version {args.version}; regenerated bootstrap/hello-app and bootstrap/golden-road-portal")
     return 0
 
 

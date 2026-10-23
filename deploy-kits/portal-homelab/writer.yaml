@@ -1,0 +1,98 @@
+# The writer: the only process that writes to git (spec P17). It holds the write App's key and nobody else does. It refuses to
+# start until the factory's rulesets are split the way its bypass check wants (README, "Checks after deploy").
+# One replica, and Recreate, so two writers never run at once.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: golden-road-portal-writer
+  labels:
+    app.kubernetes.io/name: golden-road-portal-writer
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: golden-road-portal-writer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: golden-road-portal-writer
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: writer
+        image: replaced-from-the-web-deployment
+        imagePullPolicy: IfNotPresent
+        command: ["python", "-m", "portal.writer"]
+        env:
+        - name: PORTAL_GITHUB_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: golden-road-portal-config
+              key: PORTAL_GITHUB_HOST
+        - name: PORTAL_ORG
+          valueFrom:
+            configMapKeyRef:
+              name: golden-road-portal-config
+              key: PORTAL_ORG
+        - name: PORTAL_ROLE_GROUPS
+          valueFrom:
+            configMapKeyRef:
+              name: golden-road-portal-config
+              key: PORTAL_ROLE_GROUPS
+        - name: PORTAL_WRITE_APP_ID
+          valueFrom:
+            configMapKeyRef:
+              name: golden-road-portal-config
+              key: PORTAL_WRITE_APP_ID
+        - name: PORTAL_WRITE_INSTALLATION_ID
+          valueFrom:
+            configMapKeyRef:
+              name: golden-road-portal-config
+              key: PORTAL_WRITE_INSTALLATION_ID
+        - name: PORTAL_WRITE_APP_KEY_FILE
+          value: /secrets/write-app/write-app.pem
+        - name: PORTAL_DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: golden-road-portal-writer
+              key: PORTAL_DATABASE_URL
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 250m
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: write-app-key
+          mountPath: /secrets/write-app
+          readOnly: true
+      volumes:
+      - name: tmp
+        emptyDir:
+          sizeLimit: 64Mi
+      - name: write-app-key
+        secret:
+          secretName: golden-road-portal-writer
+          defaultMode: 288  # octal 0440: the group (fsGroup 10001) reads the key, nobody else
+          items:
+          - key: write-app.pem
+            path: write-app.pem

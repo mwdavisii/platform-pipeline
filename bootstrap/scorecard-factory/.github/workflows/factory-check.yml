@@ -14,7 +14,7 @@ on:
 permissions: {}
 
 env:
-  BUILDER_IMAGE: ghcr.io/mwdavisii/golden-road-builder@sha256:f5ec3a9d1c5cc18712a250e0d0384851a9498ed74a999eb080e84e4fc3c6ad27
+  BUILDER_IMAGE: ghcr.io/mwdavisii/golden-road-builder@sha256:1a0bb5a4462479c4c6ee506d34bdf85be2a6fe51ed56a56763765092ed68bfd9
 
 jobs:
   check:

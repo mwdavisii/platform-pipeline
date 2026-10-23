@@ -184,7 +184,7 @@ def required_env(path, patterns):
 
 
 REQUIRED = {
-    "web": lambda: required_env("portal/settings.py", [r'need\("(PORTAL_\w+)"\)']),
+    "web": lambda: required_env("portal/settings.py", [r'need\("(PORTAL_\w+)"[,)]']),
     "writer": lambda: required_env("portal/writer/__main__.py", [r'_need\(env, "(PORTAL_\w+)"\)', r'_int\(env, "(PORTAL_\w+)"\)']),
     "collector": lambda: required_env("portal/collectors/__main__.py", [r'= env\.get\("(PORTAL_GITHUB_HOST)", ""\)\.lower', r'_missing\("(PORTAL_\w+)"\)']),
     "migrate": lambda: required_env("portal/migrate.py", [r'environ\.get\("(PORTAL_\w+)"']),

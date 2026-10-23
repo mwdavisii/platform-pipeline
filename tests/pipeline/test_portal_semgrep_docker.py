@@ -1,4 +1,5 @@
-"""The portal is held to the bar it reports on (P9): the security team's vendored semgrep rules find nothing in its tree."""
+"""The portal is held to the bar it reports on (P9): the security team's vendored semgrep rules find nothing in its tree.
+GOLDEN_ROAD_SCANS_REGISTRY=1 adds the registry rules (p/default, needs the network), which the live scan also runs."""
 
 import os
 import re
@@ -21,7 +22,11 @@ def _image():
 
 def test_the_portal_tree_has_no_semgrep_error(tmp_path):
     shutil.copytree(ROOT / "bootstrap/golden-road-portal", tmp_path / "src", ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache"))
-    env = {**os.environ, "SEMGREP_IMAGE": _image(), "REGISTRY_RULESETS": ""}
+    # Default: the vendored rules only, offline. GOLDEN_ROAD_SCANS_REGISTRY=1 also runs the registry rules the live scan runs.
+    registry = os.environ.get("GOLDEN_ROAD_SCANS_REGISTRY") == "1"
+    env = {**os.environ, "SEMGREP_IMAGE": _image(), "REGISTRY_RULESETS": "p/default" if registry else ""}
+    if registry:
+        env["SCANS_SEMGREP_NETWORK"] = "host"
     out = subprocess.run(["bash", str(SCANS / "scripts/run_semgrep.sh")], cwd=tmp_path, env=env, capture_output=True, text=True)
     assert out.returncode == 0, out.stdout + out.stderr
     report = subprocess.run([sys.executable, str(SCANS / "scripts/sarif_report.py"), "--tool", "semgrep", "--fail-on", "error", "--root",

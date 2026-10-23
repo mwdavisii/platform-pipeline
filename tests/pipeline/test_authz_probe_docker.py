@@ -24,7 +24,11 @@ def hello_tree(tmp_path):
     return root
 
 
-def app_tree(tmp_path, break_guard=False, hello=False):
+def app_tree(tmp_path, break_guard=False, hello=False, portal=False):
+    if portal:
+        root = tmp_path / "app"
+        shutil.copytree(ROOT / "bootstrap/golden-road-portal", root, ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache"))
+        return root
     if hello:
         return hello_tree(tmp_path)
     root = tmp_path / "app"
@@ -44,8 +48,8 @@ def app_tree(tmp_path, break_guard=False, hello=False):
     return root
 
 
-def probe(builder_image, tmp_path, break_guard, hello=False):
-    root = app_tree(tmp_path, break_guard, hello)
+def probe(builder_image, tmp_path, break_guard, hello=False, portal=False):
+    root = app_tree(tmp_path, break_guard, hello, portal)
     tag = f"golden-road-probe-test:{'broken' if break_guard else 'good'}-{uuid.uuid4().hex[:8]}"
     out = tmp_path / "out"
     out.mkdir()
@@ -82,3 +86,9 @@ def test_reader_write_hole_fails(builder_image, tmp_path):
     code, result = probe(builder_image, tmp_path, break_guard=True)
     assert code == 1 and result["status"] == "fail"
     assert any(f["method"] == "POST" and f["roles"] == "reader" for f in result["failures"])
+
+
+def test_real_portal_with_no_environment_passes(builder_image, tmp_path):
+    """The preview's exact run: the portal image with no environment starts in unconfigured mode and the probe passes."""
+    code, result = probe(builder_image, tmp_path, break_guard=False, portal=True)
+    assert code == 0 and result["status"] == "pass" and result["denied"] > 0

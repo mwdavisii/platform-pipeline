@@ -165,9 +165,11 @@ kubectl -n golden-road-portal logs job/golden-road-portal-migrate      # lists 0
 kubectl -n golden-road-portal port-forward svc/golden-road-portal 8080:80 &
 curl -s -H 'X-Platform-Roles: portal' http://127.0.0.1:8080/healthz    # ok (from the port-forward you set the header yourself)
 curl -si https://viber.mwdavisii.com/healthz | head -1     # 200 through the tunnel and the transform rule
+curl -s -H 'X-Platform-Roles: portal' http://127.0.0.1:8080/healthz    # must say ok; "portal is not configured" lists the missing settings
 curl -si https://viber.mwdavisii.com/ -H 'X-Platform-Roles: nobody' | head -1   # still the portal: the edge replaces the header
 ```
 
+- **Unconfigured mode.** With a missing or invalid web setting the pod starts and reports healthy, but serves only 503 and `/healthz` says the portal is not configured, naming the settings (never values). Confirm `/healthz` does NOT report unconfigured; if it does, fix the named settings in the Deployment's environment and Secrets and restart.
 - **Sign in** at `https://viber.mwdavisii.com/`: you reach Authentik and come back through `/auth/callback`; the people page is for `golden-road-admins` members only.
 - **Writer.** `kubectl -n golden-road-portal logs deploy/golden-road-portal-writer`. Until the scorecard factory's `main` ruleset is split into a checks ruleset and a review-only ruleset (`main-review`, the one ruleset the write App may bypass, by pull request only), the writer prints `writer: refusing to start: ...` with the reasons and exits 3, and the pod restarts in a loop. That is the safe outcome: do not weaken the check to make it pass. Fix the factory's rulesets (the factory's own docs), and the next restart runs. Exit code 2 means a missing or bad setting or key: the message names the variable and never prints a key.
 - **Collector.** Its log line `collectors: repo_admins: N rows` appears every five minutes. A `failed: 401` or `404` means the read App's id, installation id or key is wrong.

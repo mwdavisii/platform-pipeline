@@ -254,6 +254,16 @@ def test_the_socket_timeout_never_exceeds_the_time_left(config):
     assert opener.requests[0][1] == 30  # config timeout_seconds is 120
 
 
+def test_without_a_run_deadline_each_call_still_gets_the_socket_timeout(config):
+    clock = Clock()
+    opener = Opener(REPLY, http_error(503), REPLY)
+    gateway = GatewayClient(config, TOKEN, model=WIRE, opener=opener, sleep=lambda s: None, clock=clock)
+    gateway.complete([], [], max_tokens=300)
+    clock.now += 10**9
+    gateway.complete([], [], max_tokens=300)  # a retry too, however late the clock
+    assert [r[1] for r in opener.requests] == [120, 120, 120]
+
+
 def test_duplicate_tool_call_ids_are_a_gateway_error():
     call = {"id": "c1", "type": "function", "function": {"name": "grep", "arguments": "{}"}}
     body = json.dumps({"choices": [{"message": {"content": None, "tool_calls": [call, call]}}]}).encode()

@@ -139,6 +139,18 @@ def test_the_remaining_run_time_is_passed_to_a_client_that_wants_it(tools, confi
     assert len(Timed.limits) == 1 and 1790 < Timed.limits[0] <= config["agent"]["budget"]["max_run_seconds"]
 
 
+def test_no_run_deadline_passes_no_time_limit(tools, config):
+    class Timed(Scripted):
+        limits = []
+
+        def set_time_limit(self, seconds):
+            self.limits.append(seconds)
+
+    model = Timed(submit(GOOD))
+    batch(model, tools, config, budget=budget(config, max_run_seconds=0))
+    assert Timed.limits == []
+
+
 def test_an_invalid_submission_ends_the_reply_and_the_correction_is_delivered(tools, config):
     """M1: a reply with two submissions: the first is invalid, the second is not run, and the one correction turn still happens."""
     two = submit({})
@@ -248,6 +260,14 @@ def test_budget_exhaustion_leaves_the_rest_needs_human_and_fires_t14(prepared, f
     assert "T-14" in card["triggers_fired"] and card["level"] != "standard"
     unassessed = [r for r in card["asvs"]["results"] if r.get("downgrade_reason") == "not assessed by the agent"]
     assert len(unassessed) == len(p.agent_reqs) - len(doc["results"]) > 0
+
+
+def test_a_run_with_no_token_or_time_limit_finishes(prepared):
+    p = prepared()
+    p.config["agent"]["budget"].update(max_total_tokens=0, max_run_seconds=0)
+    model = OracleModel(default=PASS, tokens=10_000_000)
+    doc, stats = assess(p, model)
+    assert doc["complete"] is True and stats["failed_batches"] == [] and stats["tokens_used"] >= 10_000_000 * stats["batches"]
 
 
 def test_a_refused_credential_stops_the_run(prepared):

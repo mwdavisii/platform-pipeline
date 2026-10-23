@@ -183,6 +183,6 @@ agent:
     timeout_seconds: 120
     retry_seconds: 5
     max_response_bytes: 2000000
-  budget: {max_total_tokens: 1500000, max_tokens_per_call: 4096, max_run_seconds: 1800}
+  budget: {max_total_tokens: 0, max_tokens_per_call: 4096, max_run_seconds: 0}
   batching: {max_requirements: 12, max_turns: 16}
   tools: {max_read_lines: 400, max_output_chars: 24000, max_grep_matches: 100, max_list_files: 500, max_diff_chars: 60000}

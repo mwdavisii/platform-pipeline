@@ -401,6 +401,9 @@ def test_timeouts_cover_the_gate1_wait_and_the_agent_budget():
 
     budget = load_config(FACTORY)["agent"]["budget"]["max_run_seconds"]
     assert JOBS["assess"]["timeout-minutes"] * 60 >= budget + 300
+    schema = json.loads((ROOT / "src/contracts/schemas/scorecard-config.v1.json").read_text())
+    longest = schema["properties"]["agent"]["properties"]["budget"]["properties"]["max_run_seconds"]["maximum"]
+    assert JOBS["assess"]["timeout-minutes"] * 60 >= longest + 300  # a deadline the schema allows always ends before the job is killed
     assert JOBS["precondition"]["timeout-minutes"] * 60 >= int(DOC["env"]["GATE1_TIMEOUT_SECONDS"]) + 600
     assert all("timeout-minutes" in job for job in JOBS.values())
 

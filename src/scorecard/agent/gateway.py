@@ -12,7 +12,7 @@ Time: urllib's `timeout_seconds` applies to each socket operation, so a server t
 The response body is therefore read in chunks (one socket read each) against the run's deadline (`set_time_limit`), and a call
 is not started or retried once the deadline has passed. Two things are not covered: the connect and the response headers (each
 bounded only by `timeout_seconds` per socket operation), and one chunk read already waiting, which ends within `timeout_seconds`.
-The workflow's job timeout is the backstop for those. Chunk-size lines of a chunked response are not deadline-covered either (the
+The workflow's job timeout is the backstop for those, and with `max_run_seconds` 0 (no deadline) the only bound on a slow-drip response. Chunk-size lines of a chunked response are not deadline-covered either (the
 success path reads them through http.client; an error response's body is never read when it is chunked).
 """
 

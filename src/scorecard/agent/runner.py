@@ -54,8 +54,9 @@ def run_batch(client: ModelClient, tools: RepoTools, budget: Budget, *, system: 
         estimate = estimate_tokens(messages, specs)
         if why := budget.refusal(estimate):
             raise Stop(why)
-        if hasattr(client, "set_time_limit"):  # the HTTP client bounds a slow response body by the run's remaining time
-            client.set_time_limit(budget.remaining_seconds())
+        left = budget.remaining_seconds()
+        if left is not None and hasattr(client, "set_time_limit"):  # the HTTP client bounds a slow response body by the run's remaining time
+            client.set_time_limit(left)  # with no run deadline, each socket operation still has the gateway's timeout_seconds
         try:
             done = client.complete(messages, specs, max_tokens=budget.per_call)
         except GatewayError as exc:

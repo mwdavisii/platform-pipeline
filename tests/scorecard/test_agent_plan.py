@@ -69,3 +69,17 @@ def test_time_budget():
     assert budget.remaining_seconds() == 60
     clock.now += 60
     assert budget.refusal(1) == "the run's time budget ran out"
+
+
+def test_zero_tokens_means_no_token_limit_but_still_counts():
+    budget = Budget({**LIMITS, "max_total_tokens": 0}, clock=Clock())
+    budget.spend(50_000_000, 100, {})
+    budget.spend(None, 100, {})
+    assert budget.used > 50_000_000 and budget.refusal(10**9) is None
+
+
+def test_zero_seconds_means_no_deadline():
+    clock = Clock()
+    budget = Budget({**LIMITS, "max_run_seconds": 0}, clock=clock)
+    clock.now += 10**9
+    assert budget.remaining_seconds() is None and budget.refusal(1) is None

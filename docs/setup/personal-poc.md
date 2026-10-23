@@ -540,6 +540,8 @@ jq '{model, prompt_version, tokens_used, relative: .baseline_relative.totals}' ~
 ```
 It uses only the `agent` block of the factory config (gateway URL, model version, budget) and `SCORECARD_GATEWAY_TOKEN` and `SCORECARD_GATEWAY_MODEL` from 13.1. **Check:** `1 passed` (the eval reports accuracy; it does not assert it), and the report file exists. Record `tokens_used`, and the false positives and false negatives in `baseline_relative`; then set the LiteLLM key's `max_budget` and the config's `agent.budget.max_total_tokens` from the per-case cost, with room to spare. A live accuracy target is not set yet: these first numbers are what it will be calibrated from.
 
+`0` means no limit (for `max_total_tokens` and `max_run_seconds`); the assess job's own timeout still stops a stuck run. A `max_run_seconds` a little below the job timeout (at most 14100; for example 14000) keeps partial results: unfinished batches become `needs_human` (T-14). With `0`, a run killed by the job timeout writes no assessment (not assessed, fails closed).
+
 ### 13.4 Create `scorecard-factory` (public)
 ```bash
 cd ~/poc/platform-pipeline

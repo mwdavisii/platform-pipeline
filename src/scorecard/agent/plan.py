@@ -32,26 +32,28 @@ def estimate_tokens(*items) -> int:
 
 
 class Budget:
-    """Tokens and wall-clock time for one run. A call is allowed only if its worst case fits in what is left."""
+    """Tokens and wall-clock time for one run. A call is allowed only if its worst case fits in what is left.
+    A limit of 0 (`max_total_tokens` or `max_run_seconds`) means no limit; tokens are still counted."""
 
     def __init__(self, budget: dict, clock=time.monotonic):
         self.limit, self.per_call, self.used = budget["max_total_tokens"], budget["max_tokens_per_call"], 0
         self.clock = clock
-        self.deadline = clock() + budget["max_run_seconds"]
+        self.deadline = clock() + budget["max_run_seconds"] if budget["max_run_seconds"] else None
 
-    def remaining_seconds(self) -> float:
-        return self.deadline - self.clock()
+    def remaining_seconds(self) -> float | None:
+        """Seconds left, or None when the run has no deadline."""
+        return None if self.deadline is None else self.deadline - self.clock()
 
     def refusal(self, prompt_estimate: int) -> str | None:
         """Why the next call can't be made, or None when it can."""
-        if self.clock() >= self.deadline:
+        if self.deadline is not None and self.clock() >= self.deadline:
             return "the run's time budget ran out"
-        if self.used + prompt_estimate + self.per_call > self.limit:
+        if self.limit and self.used + prompt_estimate + self.per_call > self.limit:
             return "the run's token budget ran out"
         return None
 
     def spend(self, reported: int | None, prompt_estimate: int, reply) -> None:
         """Charge the larger of what the gateway reported and our own high estimate, so a gateway that reports 0 (or
-        nothing) can't make the run unlimited."""
+        nothing) can't make a limited run unlimited (a limit of 0 is unlimited by choice, and `used` is still counted)."""
         estimate = prompt_estimate + estimate_tokens(reply)
         self.used += max(reported or 0, estimate)

@@ -250,7 +250,11 @@ def test_sample_agent_config(config):
     {"gateway.auth": {"scheme": "header", "header": "cf-access-client-secret"}},
     {"gateway.auth": {"scheme": "basic"}},
     {"gateway.auth": {"scheme": "header", "header": "User-Agent"}},
-    {"budget.max_total_tokens": 0},
+    {"budget.max_total_tokens": 999},
+    {"budget.max_total_tokens": -1},
+    {"budget.max_run_seconds": -1},
+    {"budget.max_run_seconds": 14101},
+    {"budget.max_run_seconds": 0.5},
     {"batching.max_turns": 1},
     {"tools.max_read_lines": 100000},
     {"model.extra": "x"},
@@ -263,6 +267,15 @@ def test_bad_agent_config_is_an_input_error(factory, changes):
     _agent(factory, **changes)
     with pytest.raises(InputError):
         load_config(factory)
+
+
+@pytest.mark.parametrize("changes", [{"budget.max_total_tokens": 0}, {"budget.max_run_seconds": 0}, {"budget.max_total_tokens": 0, "budget.max_run_seconds": 0},
+                                     {"budget.max_total_tokens": 1000, "budget.max_run_seconds": 14100}])
+def test_zero_budget_means_no_limit_and_is_accepted(factory, changes):
+    _agent(factory, **changes)
+    cfg = load_config(factory)
+    for key, value in changes.items():
+        assert cfg["agent"]["budget"][key.split(".")[1]] == value
 
 
 def test_an_api_key_header_is_accepted(factory):

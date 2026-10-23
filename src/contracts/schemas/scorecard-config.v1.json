@@ -136,9 +136,9 @@
         "budget": {
           "type": "object", "additionalProperties": false, "required": ["max_total_tokens", "max_tokens_per_call", "max_run_seconds"],
           "properties": {
-            "max_total_tokens": {"type": "integer", "minimum": 1000},
+            "max_total_tokens": {"type": "integer", "anyOf": [{"const": 0}, {"minimum": 1000}], "description": "0 means no token limit"},
             "max_tokens_per_call": {"type": "integer", "minimum": 256, "maximum": 65536},
-            "max_run_seconds": {"type": "number", "exclusiveMinimum": 0, "maximum": 7200}
+            "max_run_seconds": {"type": "number", "maximum": 14100, "anyOf": [{"const": 0}, {"minimum": 1}], "description": "0 means no time limit"}
           }
         },
         "batching": {

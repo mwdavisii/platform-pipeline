@@ -705,3 +705,13 @@ def test_the_apim_template_is_accepted_and_a_path_word_name_is_refused(config):
 def test_the_literal_check_is_case_sensitive(config):
     config["agent"]["model"]["version"] = "GPT-5-2025"
     GatewayClient(config, TOKEN, model="gpt-5")
+
+
+def test_tool_choice_is_forced_only_when_asked(config):
+    opener = Opener(REPLY, REPLY)
+    gateway = client(config, opener)
+    gateway.complete([], [], max_tokens=300)
+    gateway.complete([], [], max_tokens=300, tool_choice="submit_assessment")
+    bodies = [json.loads(request.data) for request, _ in opener.requests]
+    assert bodies[0]["tool_choice"] == "auto"
+    assert bodies[1]["tool_choice"] == {"type": "function", "function": {"name": "submit_assessment"}}

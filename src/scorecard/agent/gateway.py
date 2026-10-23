@@ -48,7 +48,7 @@ MIN_LITERAL_CHECK = 3
 
 
 class ModelClient(Protocol):
-    def complete(self, messages: list[dict], tools: list[dict], *, max_tokens: int) -> Completion: ...
+    def complete(self, messages: list[dict], tools: list[dict], *, max_tokens: int, tool_choice: str | None = None) -> Completion: ...
 
 
 class GatewayError(Exception):
@@ -183,8 +183,10 @@ class GatewayClient:
             headers.update(self.access)
         return headers
 
-    def complete(self, messages: list[dict], tools: list[dict], *, max_tokens: int) -> Completion:
-        request = {"model": self.model, "messages": messages, "tools": tools, "tool_choice": "auto", "max_tokens": max_tokens}
+    def complete(self, messages: list[dict], tools: list[dict], *, max_tokens: int, tool_choice: str | None = None) -> Completion:
+        """`tool_choice` names a tool the model must call; None leaves it free ("auto")."""
+        choice = "auto" if tool_choice is None else {"type": "function", "function": {"name": tool_choice}}
+        request = {"model": self.model, "messages": messages, "tools": tools, "tool_choice": choice, "max_tokens": max_tokens}
         if self.temperature is not None:  # a model that rejects the parameter is configured with null
             request["temperature"] = self.temperature
         body = json.dumps(request, allow_nan=False).encode("utf-8")

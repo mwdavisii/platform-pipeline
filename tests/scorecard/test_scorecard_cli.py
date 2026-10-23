@@ -725,7 +725,7 @@ def test_a_gateway_failure_still_writes_an_incomplete_assessment(app, run):
     class Down:
         sent = []
 
-        def complete(self, messages, tools, *, max_tokens):
+        def complete(self, messages, tools, *, max_tokens, tool_choice=None):
             self.sent.append(messages)
             raise GatewayError("the gateway returned HTTP 502")
 
@@ -742,7 +742,7 @@ def test_a_fatal_gateway_error_stops_the_run_but_still_writes(app, run):
     class Refused:
         sent = []
 
-        def complete(self, messages, tools, *, max_tokens):
+        def complete(self, messages, tools, *, max_tokens, tool_choice=None):
             self.sent.append(messages)
             raise GatewayError("the gateway returned HTTP 401", fatal=True)
 

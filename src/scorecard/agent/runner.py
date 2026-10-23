@@ -1,6 +1,6 @@
 """The agent loop: one conversation per batch, tools answered by code, and a structured submission checked by code.
 
-Per batch: at most `max_turns` model calls and one correction for an invalid submission; after that the batch's
+Per batch: at most `max_turns` model calls (the second-to-last turn adds a submit-now nudge, the last forces the submit tool) and one correction for an invalid submission; after that the batch's
 requirements are left out of the assessment, so `scorecard run` makes them `needs_human` and fires T-14. A spent token
 or time budget, or a gateway that refuses the credential, stops the run: every batch not yet done is left out the same way.
 The model never sees the PR's title, body, comments, or commit messages (SEC-4), and nothing it says is logged.
@@ -26,6 +26,9 @@ from .tools import SPECS, RepoTools
 MAX_CALLS_PER_TURN = 8
 MAX_FINDINGS = 1000
 SUBMIT_NAME = "submit_assessment"
+NUDGE_AT = 2  # model calls left when the model is told to submit; the last call forces the submit tool
+NUDGE = (f"You are running out of model calls: call {SUBMIT_NAME} now with what you have. Answer every requirement, "
+         "and mark any you could not check as needs_human with low confidence, as you would for insufficient evidence.")
 
 
 def _submit_spec() -> dict:
@@ -49,8 +52,14 @@ def run_batch(client: ModelClient, tools: RepoTools, budget: Budget, *, system: 
               max_turns: int, now: str) -> tuple[list[dict], list[dict]]:
     specs = [*SPECS, _submit_spec()]
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-    corrected = False
-    for _ in range(max_turns):
+    corrected = pending = False  # pending: the last reply was answered with a correction the model has not yet had a call to act on
+    for turn in range(max_turns):
+        left_calls = max_turns - turn
+        if left_calls == NUDGE_AT and turn > 0:  # a user message may follow tool results; after another user message it joins that one
+            if messages[-1]["role"] == "user":
+                messages[-1] = {**messages[-1], "content": f"{messages[-1]['content']}\n\n{NUDGE}"}
+            else:
+                messages.append({"role": "user", "content": NUDGE})
         estimate = estimate_tokens(messages, specs)
         if why := budget.refusal(estimate):
             raise Stop(why)
@@ -58,12 +67,16 @@ def run_batch(client: ModelClient, tools: RepoTools, budget: Budget, *, system: 
         if left is not None and hasattr(client, "set_time_limit"):  # the HTTP client bounds a slow response body by the run's remaining time
             client.set_time_limit(left)  # with no run deadline, each socket operation still has the gateway's timeout_seconds
         try:
-            done = client.complete(messages, specs, max_tokens=budget.per_call)
+            if left_calls == 1:
+                done = client.complete(messages, specs, max_tokens=budget.per_call, tool_choice=SUBMIT_NAME)
+            else:
+                done = client.complete(messages, specs, max_tokens=budget.per_call)
         except GatewayError as exc:
             if exc.fatal:
                 raise Stop(str(exc)) from None
             raise BatchFailed(str(exc)) from None
         budget.spend(done.tokens, estimate, done.message)
+        pending = False
         message = done.message
         calls = message.get("tool_calls") or []
         skipped = max(0, len(calls) - MAX_CALLS_PER_TURN)
@@ -77,7 +90,7 @@ def run_batch(client: ModelClient, tools: RepoTools, budget: Budget, *, system: 
             except InvalidOutput as exc:
                 if corrected:
                     raise BatchFailed("invalid output after one correction") from None
-                corrected = True
+                corrected = pending = True
                 messages.append({"role": "user", "content": f"error: {exc}. Call {SUBMIT_NAME} with a corrected submission."})
                 continue
         rejected = False
@@ -91,13 +104,15 @@ def run_batch(client: ModelClient, tools: RepoTools, budget: Budget, *, system: 
                 except InvalidOutput as exc:
                     if corrected:
                         raise BatchFailed("invalid output after one correction") from None
-                    corrected = rejected = True
+                    corrected = rejected = pending = True
                     reply = f"error: {exc}. Call {SUBMIT_NAME} again with a corrected submission."
             else:
                 reply = tools.call(name, arguments)
             messages.append({"role": "tool", "tool_call_id": call["id"], "content": reply})
         if skipped:
             messages[-1]["content"] += f"\n[note: only the first {MAX_CALLS_PER_TURN} tool calls of your last reply were run; {skipped} were dropped]"
+    if pending:
+        raise BatchFailed("invalid output after one correction")
     raise BatchFailed(f"no valid submission within {max_turns} model calls")
 
 

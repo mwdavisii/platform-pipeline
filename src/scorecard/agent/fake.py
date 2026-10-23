@@ -40,7 +40,7 @@ class OracleModel:
         bound = {ref for a in self.answers.values() for ref in a.get("finding_refs", [])}
         return [f for f in self.findings if f["ref"] in named or (self._submitted == 0 and f["ref"] not in bound)]
 
-    def complete(self, messages, tools, *, max_tokens):
+    def complete(self, messages, tools, *, max_tokens, tool_choice=None):
         self.sent.append(copy.deepcopy(messages))
         if len(messages) == 2 and self.reads:  # the batch's first turn: read before answering
             calls = [{"id": f"read-{n}", "type": "function",

@@ -27,10 +27,11 @@ class Scripted:
     """Returns the scripted replies in order (an exception is raised), then repeats the last one."""
 
     def __init__(self, *replies, tokens=100):
-        self.replies, self.tokens, self.sent = list(replies), tokens, []
+        self.replies, self.tokens, self.sent, self.choices = list(replies), tokens, [], []
 
-    def complete(self, messages, tools, *, max_tokens):
+    def complete(self, messages, tools, *, max_tokens, tool_choice=None):
         self.sent.append(copy.deepcopy(messages))
+        self.choices.append(tool_choice)
         reply = self.replies.pop(0) if len(self.replies) > 1 else self.replies[0]
         if isinstance(reply, Exception):
             raise reply
@@ -101,6 +102,53 @@ def test_max_turns(tools, config):
     with pytest.raises(BatchFailed, match="no valid submission within 4 model calls"):
         batch(model, tools, config, max_turns=4)
     assert len(model.sent) == 4
+
+
+def nudges(messages):
+    return sum(m["role"] == "user" and "running out of model calls" in m["content"] for m in messages)
+
+
+def test_the_model_is_nudged_before_the_second_to_last_call_and_forced_on_the_last(tools, config):
+    model = Scripted(tool_call("list_files", {"glob": "*"}))
+    with pytest.raises(BatchFailed, match="no valid submission within 5 model calls"):
+        batch(model, tools, config, max_turns=5)
+    assert [nudges(m) for m in model.sent] == [0, 0, 0, 1, 1]
+    assert model.choices == [None, None, None, None, "submit_assessment"]
+    assert [m["role"] for m in model.sent[3][-3:]] == ["assistant", "tool", "user"]  # tool results stay right after their tool_calls
+    assert "needs_human" in model.sent[3][-1]["content"] and "submit_assessment" in model.sent[3][-1]["content"]
+
+
+def test_a_model_that_submits_after_the_nudge_succeeds(tools, config):
+    read = tool_call("list_files", {"glob": "*"})
+    model = Scripted(read, read, read, submit(GOOD))
+    assert batch(model, tools, config, max_turns=5)[0][0]["status"] == "pass"
+    assert len(model.sent) == 4 and nudges(model.sent[3]) == 1 and model.choices == [None] * 4
+
+
+def test_max_turns_two_gives_a_free_call_then_forces(tools, config):
+    model = Scripted(tool_call("list_files", {"glob": "*"}))
+    with pytest.raises(BatchFailed):
+        batch(model, tools, config, max_turns=2)
+    assert [nudges(m) for m in model.sent] == [0, 0] and model.choices == [None, "submit_assessment"]
+    assert [m["role"] for m in model.sent[1][-2:]] == ["assistant", "tool"]  # no nudge before the model's first turn
+    model = Scripted(submit(GOOD))
+    batch(model, tools, config, max_turns=1)
+    assert model.choices == ["submit_assessment"] and nudges(model.sent[0]) == 0
+
+
+def test_an_invalid_forced_submission_fails_as_an_invalid_output(tools, config):
+    bad = submit({"results": [], "findings": []})
+    with pytest.raises(BatchFailed, match="invalid output after one correction"):
+        batch(Scripted(bad), tools, config, max_turns=2)
+    with pytest.raises(BatchFailed, match="invalid output after one correction"):
+        batch(Scripted({"role": "assistant", "content": "done"}), tools, config, max_turns=1)
+
+
+def test_a_nudge_after_a_correction_joins_the_correction_message(tools, config):
+    model = Scripted({"role": "assistant", "content": "done"}, submit(GOOD))  # a plain-text answer gets a user-role correction
+    batch(model, tools, config, max_turns=3)
+    assert nudges(model.sent[1]) == 1 and "error:" in model.sent[1][-1]["content"]
+    assert [m["role"] for m in model.sent[1]][-2:] != ["user", "user"]
 
 
 def test_at_most_eight_tool_calls_run_per_turn(tools, config, monkeypatch):

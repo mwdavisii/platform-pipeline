@@ -18,7 +18,8 @@ if [ "$visibility" = "--public" ]; then
   owner_type=$(gh api "users/$org" --jq .type) || owner_type=""
   [ "$owner_type" = "User" ] || { echo "--public is refused: $org is not a personal account (type '${owner_type:-unknown}'). Organizations stay private or internal." >&2; exit 1; }
 fi
-src="$(cd "$(dirname "$0")/.." && pwd)/bootstrap/$name"
+root="$(cd "$(dirname "$0")/.." && pwd)"
+src="$root/bootstrap/$name"
 [ -d "$src" ] || { echo "no bootstrap/$name" >&2; exit 2; }
 
 rc=0
@@ -27,8 +28,16 @@ if [ "$rc" -eq 0 ]; then echo "bootstrap/$name still has placeholder values (rep
 [ "$rc" -eq 1 ] || { echo "could not scan bootstrap/$name for placeholders (grep exit $rc)" >&2; exit 2; }
 
 work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
-cp -a "$src/." "$work/"
+trap 'rm -rf "$work" "$work.files"' EXIT
+# Only what git tracks under bootstrap/<name> (as it is in the working folder): never caches, build output or other untracked files.
+git -C "$root" ls-files -z --cached -- "bootstrap/$name" > "$work.files" || { echo "bootstrap/$name is not in a git checkout" >&2; exit 2; }
+[ -s "$work.files" ] || { echo "git tracks no files under bootstrap/$name" >&2; exit 2; }
+while IFS= read -r -d '' f; do
+  rel="${f#bootstrap/$name/}"
+  mkdir -p "$work/$(dirname "$rel")"
+  cp -p "$root/$f" "$work/$rel"
+done < "$work.files"
+rm -f "$work.files"
 cd "$work"
 git init -q -b main
 git add -A

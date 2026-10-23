@@ -17,7 +17,7 @@ from .agent.gateway import GatewayClient, access_headers, credential, gateway_mo
 from .agent.runner import assess
 from .build import NotAssessed, agent_scope, build_scorecard, prepare
 from .asvs import check_ids, load_asvs
-from .config import gate1_list, load_config, load_confirmed_na, load_intake, runner_env
+from .config import gate1_list, load_config, load_confirmed_na, load_intake, load_registration_rules, runner_env
 from .factory_digest import factory_digest
 from .observations import checks_from_doc, checks_sha
 from .precondition import RERUN_HINT, not_assessed
@@ -76,6 +76,15 @@ def _parser() -> argparse.ArgumentParser:
     r.add_argument("--pr-text", type=Path, default=None)
     r.add_argument("--server-url", default="https://github.com")
     r.add_argument("--out", required=True, type=Path)
+    po = sub.add_parser("poll", help="central review: queue and dispatch one assess run per ready pull request of every registered repo")
+    po.set_defaults(handler=_cmd_poll)
+    po.add_argument("--factory", required=True, type=Path)
+    po.add_argument("--factory-repo", required=True, help="OWNER/REPO of the factory, where the assess workflow is dispatched")
+    po.add_argument("--workflow", required=True, help="the assess workflow's file name")
+    po.add_argument("--ref", required=True, help="the factory ref to dispatch on (main)")
+    po.add_argument("--run-url", required=True, help="this run's URL, the check runs' details_url")
+    po.add_argument("--out", required=True, type=Path, help="the poll result (JSON) to write")
+    po.add_argument("--now", default=None)
     return p
 
 
@@ -108,6 +117,40 @@ def _cmd_gate1_checks(args, registry, model) -> int:
     write_json(args.out, {"required": checks})
     print(json.dumps({"gate1_checks": len(checks)}))
     return EXIT_OK
+
+
+_RUN_URL = re.compile(r"^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?/[A-Za-z0-9._/-]+$")
+
+
+def _cmd_poll(args, registry, model) -> int:
+    """Central review's poller. Inert (exit 0, {"central": "off"}) unless the factory config has `central`; with it, needs the
+    App id (SCORECARD_APP_ID) and key (GOLDEN_ROAD_APP_KEY) in the environment. Exit 1 when any repository or pull request errored."""
+    from golden_road.checks import GitHubAPI
+    from golden_road.github_app import KEY_ENV, installation_token
+
+    from . import central
+    if args.out.is_dir():
+        raise InputError(f"{args.out} is a directory, not a file")
+    args.out.unlink(missing_ok=True)
+    if not load_config(args.factory).get("central"):
+        write_json(args.out, {"central": "off"})
+        print(json.dumps({"central": "off"}))
+        return EXIT_OK
+    raw = os.environ.get("SCORECARD_APP_ID", "")
+    if not re.fullmatch(r"[1-9][0-9]{0,9}", raw):
+        raise InputError("SCORECARD_APP_ID is not an App id")
+    app_id, key = int(raw), os.environ.get(KEY_ENV, "")
+    if not key:
+        raise InputError(f"{KEY_ENV} is not set")
+    if not _RUN_URL.fullmatch(args.run_url) or ".." in args.run_url.split("/"):
+        raise InputError("--run-url is not an https URL")
+    api_url = os.environ.get("GITHUB_API_URL", "https://api.github.com")
+    doc = central.poll(args.factory, app_id=app_id, mint=lambda repo, perms: installation_token(api_url, app_id, key, repo, perms)["token"],
+                       factory_api=GitHubAPI(api_url, os.environ.get("GITHUB_TOKEN", "")), make_api=lambda token: GitHubAPI(api_url, token),
+                       factory_repo=args.factory_repo, workflow=args.workflow, ref=args.ref, run_url=args.run_url, now=_now(args.now))
+    write_json(args.out, doc)
+    print(json.dumps({"dispatched": sum(a["action"] == "dispatch" for a in doc["actions"]), "errors": len(doc["errors"])}))
+    return EXIT_ERROR if doc["errors"] else EXIT_OK
 
 
 def _symlinks(factory: Path) -> list[str]:
@@ -179,6 +222,10 @@ def _cmd_check_factory(args, registry, model) -> int:
         gate1_list(factory, config)
     except Exception as exc:  # noqa: BLE001 - every failure is a problem to report, not a traceback
         problems.append(f"config: {exc}")
+    try:
+        load_registration_rules(factory)
+    except Exception as exc:  # noqa: BLE001
+        problems.append(f"registration: {exc}")
     try:
         requirements = load_asvs()
     except Exception as exc:  # noqa: BLE001

@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Write the platform's four caller workflows into an app folder, from this bundle's templates.
+"""Write the platform's caller workflows into an app folder, from this bundle's templates.
 
     uv run --no-project --no-config --python 3.12 python -I <bundle>/write_callers.py [app folder]
 
 The app name comes from the folder's builder-spec.json. The callers are platform-owned: a caller the platform wrote, even
 edited, is overwritten, and golden-road doctor checks them. A workflow with one of these names that doesn't call the platform's
 workflow is the user's own: the script refuses and writes nothing until they rename it. Writes only
-.github/workflows/<the four names>, never through a link. Output: one JSON
-object on stdout. Exit 0 done, 2 usage, 3 can't continue (the message and fix say what to do).
+.github/workflows/<the caller names>, never through a link. The bundle carries ci.yml, promote.yml and security-scans.yml, and scorecard.yml
+while the platform runs the scorecard per app. When the platform reviews centrally the bundle has no scorecard.yml, and the script then
+removes the platform's old scorecard.yml from the app (a scorecard.yml that isn't the platform's is left alone). Output: one JSON
+object on stdout ("written", "unchanged", "removed"). Exit 0 done, 2 usage, 3 can't continue (the message and fix say what to do).
 """
 
 import json
@@ -16,7 +18,10 @@ import sys
 from pathlib import Path
 
 TEMPLATES = Path(__file__).resolve().parent / "templates" / "workflows"
-NAMES = ("ci.yml", "promote.yml", "scorecard.yml", "security-scans.yml")
+REQUIRED = ("ci.yml", "promote.yml", "security-scans.yml")
+OPTIONAL = ("scorecard.yml",)  # absent from a bundle built for central review
+ALL = ("ci.yml", "promote.yml", "scorecard.yml", "security-scans.yml")
+NAMES = tuple(name for name in ALL if name in REQUIRED or (TEMPLATES / name).is_file())  # the callers this bundle carries
 # What marks a caller as the platform's: a job whose `uses:` calls a workflow of this repository (the same names doctor checks).
 # Read line by line (this script is standard library only): a comment, a name or a step that only mentions the repository doesn't count.
 USES = re.compile(r"^\s*uses:\s*[\"']?([^\s\"'#]+)")
@@ -64,6 +69,9 @@ def main(argv=None):
     name = app_name(root)
     if name is None:
         return error(3, "builder-spec.json is missing, a link, or has no valid app_name", "Write builder-spec.json and run builder generate . first.")
+    for file in REQUIRED:
+        if not (TEMPLATES / file).is_file():
+            return error(3, f"this bundle has no {file} template", "The golden-road skill bundle is damaged. Run the skill's installer again, or tell the platform team.")
     texts = {}
     for file in NAMES:
         text = (TEMPLATES / file).read_text(encoding="utf-8")
@@ -74,13 +82,13 @@ def main(argv=None):
     for folder in (root / ".github", workflows):
         if folder.is_symlink() or (folder.exists() and not folder.is_dir()):
             return error(3, f"{folder.relative_to(root).as_posix()} is a link or not a folder", "Make it a real folder, then run this again.")
-    for file in NAMES:
+    for file in ALL:
         target = workflows / file
         if target.is_symlink() or (target.exists() and not target.is_file()):
             return error(3, f".github/workflows/{file} is a link or not a regular file", "Remove it, then run this again.")
     try:
         current = {file: (workflows / file).read_bytes() if (workflows / file).exists() else None for file in NAMES}
-        for file in NAMES:  # all four are checked before any is written
+        for file in NAMES:  # all of them are checked before any is written
             old = current[file]
             if old is not None and old != texts[file] and not calls_platform(file, old):
                 return error(3, f"rename your workflow {file}; the platform owns this name",
@@ -93,9 +101,15 @@ def main(argv=None):
             else:
                 (workflows / file).write_bytes(texts[file])
                 written.append(file)
+        removed = []
+        for file in ALL:  # a caller this bundle doesn't carry: the platform's old one goes, the user's own stays
+            target = workflows / file
+            if file not in NAMES and target.is_file() and calls_platform(file, target.read_bytes()):
+                target.unlink()
+                removed.append(file)
     except OSError as exc:
         return error(3, f"can't read or write the caller workflows: {exc.strerror or 'file error'}", "Fix the folder's permissions, then run this again.")
-    return emit({"status": "ok", "app_name": name, "written": written, "unchanged": unchanged}, 0)
+    return emit({"status": "ok", "app_name": name, "written": written, "unchanged": unchanged, "removed": removed}, 0)
 
 
 if __name__ == "__main__":

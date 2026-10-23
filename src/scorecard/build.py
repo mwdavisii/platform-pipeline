@@ -7,12 +7,13 @@ Gate 1 result, the PR event payload, and optionally the agent's assessment for t
 import dataclasses
 import datetime as dt
 
+from builder.config import load_platform
 from contracts.schema import validate
 from golden_road.io import InputError
 
 from . import VERSION, git
 from .asvs import ASVS_SHA256, chapter_names, check_ids, for_level, load_asvs
-from .config import gate1_list, load_config, load_confirmed_na, load_intake
+from .config import gate1_list, load_config, load_confirmed_na, load_intake, load_registration_rules
 from .event import re_review_event
 from .level import decide
 from .levels import asvs_level, effective_classification
@@ -28,6 +29,7 @@ from .signals.changes import change_signals
 from .signals.dependencies import dependency_signals
 from .signals.injection import text_hits, tree_signals
 from .signals.lock_diff import LOCK, builder_bumped
+from .signals.registration import registration_floor
 from .signals.size import change_size
 from .signals.spec_diff import SPEC, head_spec, recorded_spec_signals, spec_changes
 from .suppressions import apply_suppressions, expired, load_suppressions
@@ -116,6 +118,7 @@ class Prepared:
     agent_reqs: list
     pr_number: int | None
     pr_head: str | None
+    registration: dict | None = None
 
 
 def prepare(*, repo_root, repo: str, base_ref: str, factory, checks_doc, event, now: str) -> Prepared:
@@ -146,6 +149,7 @@ def prepare(*, repo_root, repo: str, base_ref: str, factory, checks_doc, event, 
     classification = effective_classification(intake["data_classification"] if intake else None, spec_classification)
     level_n = asvs_level(config, intake, spec_classification)
     head_packages, problems = read_packages(lambda p: git.show(repo_root, head, p))
+    registration = _registration_floor(repo_root, factory, repo, head, intake, problems)
     # Base lockfile problems are discarded on purpose. An unreadable base list is empty, so every head package looks new
     # and is looked up: the conservative direction. Head problems are kept and fire T-14.
     base_packages, _ = read_packages(lambda p: git.show(repo_root, base, p))
@@ -158,7 +162,22 @@ def prepare(*, repo_root, repo: str, base_ref: str, factory, checks_doc, event, 
                     suppressions=suppressions, requirements=requirements, level_n=level_n, classification=classification,
                     spec_classification=spec_classification, head=head, base=base, tree_sha=tree_sha, changed=changed,
                     base_spec=base_spec, head_spec_text=head_spec_text, head_packages=head_packages, base_packages=base_packages,
-                    problems=problems, decided=decided, agent_reqs=agent_reqs, pr_number=_pr_number(event), pr_head=pr_head)
+                    problems=problems, decided=decided, agent_reqs=agent_reqs, pr_number=_pr_number(event), pr_head=pr_head,
+                    registration=registration)
+
+
+def _registration_floor(repo_root, factory, repo, head, intake, problems) -> dict | None:
+    """T-21's input: the floor for this tree under the factory's rules. Nothing to compare without an intake record (T-8 covers that);
+    rules or platform values that can't be read are an input problem (T-14), never a skipped review."""
+    if intake is None:
+        return None
+    try:
+        rules = load_registration_rules(factory)
+        gateway_hosts = tuple(load_platform()["model_gateway_hosts"])
+    except (InputError, OSError, ValueError, KeyError, TypeError) as exc:
+        problems.append({"source": "registration rules", "detail": f"can't read what the registration floor needs: {exc}"[:300]})
+        return None
+    return registration_floor(repo_root, rules, repo=repo, commit=head, gateway_hosts=gateway_hosts, problems=problems)
 
 
 def agent_scope(prepared: Prepared) -> dict:
@@ -204,7 +223,7 @@ def finish(p: Prepared, assessment_doc=None, *, pr_text=None, registry=None) -> 
     covered, total_agent = coverage_counts(agent_results)
     level, floor, reasons = decide(config=config, intake=intake, spec_classification=p.spec_classification, results=results, findings=kept,
                                    covered=covered, total=total_agent, flags=flags, lookup_failures=failures, pr_text_hits=pr_hits,
-                                   problems=problems, change_size=size)
+                                   problems=problems, change_size=size, registration=p.registration)
     names = chapter_names(requirements)
     total = counts(results)
     level_n = p.level_n

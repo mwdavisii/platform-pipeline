@@ -14,13 +14,13 @@ import json
 import os
 import re
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
 
 from builder import VERSION
-from builder.config import load_platform, platform_sha256
+from builder.config import load_platform, platform_sha256, scorecard_app_id, scorecard_mode
 from builder.lock import LOCK_PATH
 from builder.verify import Reader, verify
 from contracts.schema import validate
@@ -35,6 +35,26 @@ CALLERS = {
     "scorecard.yml": "{org}/scorecard-factory/.github/workflows/scorecard.yml@main",
     "security-scans.yml": "{org}/security-scans/.github/workflows/scan.yml@main",
 }
+
+
+def callers_for(platform: dict) -> dict:
+    """The callers an app needs under this platform config: all four per app, and without scorecard.yml when the factory assesses
+    centrally. An unreadable mode is the builder-pin check's to report, so it counts as per-app here."""
+    try:
+        central = scorecard_mode(platform) == "central"
+    except ValueError:
+        central = False
+    return {name: template for name, template in CALLERS.items() if not (central and name == "scorecard.yml")}
+
+
+def central_app_id(platform: dict) -> int | None:
+    """The scorecard App's id when the platform reviews centrally, else None (also for a config that names a mode it can't use)."""
+    try:
+        return scorecard_app_id(platform)
+    except ValueError:
+        return None
+
+
 # What triggers each caller, parsed from hello-app's files (a test keeps them equal): a caller that runs on other events,
 # or not on these, isn't the platform's.
 CALLER_TRIGGERS = {
@@ -143,6 +163,7 @@ class Context:
     host: str
     org: str | None
     repo: str | None = None  # set by the visibility check
+    platform: dict = field(default_factory=dict)  # the installed builder's platform config; empty means per-app
 
     def gh(self, *args) -> GhResult:
         return run_gh(self.root, self.host, list(args))
@@ -237,13 +258,14 @@ def check_verify(ctx: Context) -> dict:
 
 
 def check_callers(ctx: Context) -> dict:
-    fix = ("Copy the four caller workflows from the golden-road skill's templates into .github/workflows/. They are platform-owned: don't edit them. "
+    fix = ("Copy the caller workflows from the golden-road skill's templates into .github/workflows/. They are platform-owned: don't edit them. "
            "The required checks must run on every PR and on main; to change triggers, ask the platform team.")
     if ctx.org is None:
         return _result("callers", FAIL, "the installed builder's platform config names no org, so the platform workflows are unknown", PIN_FIX)
     reader = Reader(ctx.root)
     problems = []
-    for name, template in CALLERS.items():
+    callers = callers_for(ctx.platform)
+    for name, template in callers.items():
         rel, want = f".github/workflows/{name}", template.format(org=ctx.org)
         text, reason = reader.read(rel)
         if text is None:
@@ -266,7 +288,22 @@ def check_callers(ctx: Context) -> dict:
             problems.append(f"{name} has different triggers than the platform's caller")
     if problems:
         return _result("callers", FAIL, "; ".join(problems), fix)
-    return _result("callers", PASS, "the four caller workflows call the platform's workflows")
+    if "scorecard.yml" not in callers and _calls_factory_scorecard(reader, ctx.org):
+        return _result("callers", WARN, "scorecard.yml still calls the factory's per-app scorecard, but the platform now reviews centrally",
+                       "Remove .github/workflows/scorecard.yml in a pull request: the scorecard App assesses every ready pull request, "
+                       "and the ruleset requires its `scorecard / assessed`. Don't edit the file; the platform owns it.")
+    return _result("callers", PASS, "the caller workflows call the platform's workflows")
+
+
+def _calls_factory_scorecard(reader: Reader, org: str) -> bool:
+    text, _ = reader.read(".github/workflows/scorecard.yml")
+    try:
+        doc = yaml.safe_load(text) if text is not None else None
+    except yaml.YAMLError:
+        return False
+    jobs = doc.get("jobs") if isinstance(doc, dict) else None
+    want = CALLERS["scorecard.yml"].format(org=org)
+    return isinstance(jobs, dict) and any(isinstance(job, dict) and job.get("uses") == want for job in jobs.values())
 
 
 # ---- GitHub checks ----
@@ -375,16 +412,24 @@ def check_ruleset(ctx: Context) -> dict:
     rules = result.json()
     if not isinstance(rules, list):
         return _result("ruleset", FAIL, "the rules on main can't be parsed", fix)
-    required = set()
+    required, assessed_ids = set(), set()
     for rule in rules:
         params = rule.get("parameters") if isinstance(rule, dict) and rule.get("type") == "required_status_checks" else None
         checks = params.get("required_status_checks") if isinstance(params, dict) else None
         for check in checks if isinstance(checks, list) else []:
             if isinstance(check, dict) and isinstance(check.get("context"), str):
                 required.add(check["context"])
+                if check["context"] == "scorecard / assessed":
+                    assessed_ids.add(check.get("integration_id"))
     missing = [c for c in REQUIRED_CONTEXTS if c not in required]
     if missing:
         return _result("ruleset", WARN, f"main doesn't require: {', '.join(missing)}", fix)
+    app_id = central_app_id(ctx.platform)
+    if app_id is not None and assessed_ids != {app_id}:
+        return _result("ruleset", WARN, f"main requires `scorecard / assessed` but it is not pinned to the scorecard App (id {app_id}): "
+                       "any workflow job with that name could satisfy it",
+                       "Ask a platform admin to pin the ruleset's `scorecard / assessed` to the scorecard App (configure.py --scorecard-mode central, "
+                       "then apply the ruleset). doctor never changes settings.")
     return _result("ruleset", PASS, "main requires drift, preview, the scans and the scorecard")
 
 
@@ -449,7 +494,11 @@ CHECK_IDS = tuple(check_id for check_id, _ in CHECKS)
 
 
 def run_checks(root: Path, pin: Path, host: str) -> list[dict]:
-    ctx = Context(root=root, pin=pin, host=host, org=_org())
+    try:
+        platform = load_platform()
+    except (OSError, ValueError, AttributeError):
+        platform = {}
+    ctx = Context(root=root, pin=pin, host=host, org=_org(), platform=platform if isinstance(platform, dict) else {})
     results = []
     for check_id, check in CHECKS:
         try:

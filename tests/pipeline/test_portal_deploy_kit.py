@@ -221,7 +221,7 @@ def test_the_env_the_kit_provides_is_what_each_process_requires(built):
     assert REQUIRED["writer"]() == {"PORTAL_GITHUB_HOST", "PORTAL_ORG", "PORTAL_ROLE_GROUPS", "PORTAL_WRITE_APP_ID",
                                     "PORTAL_WRITE_INSTALLATION_ID", "PORTAL_DATABASE_URL", "PORTAL_WRITE_APP_KEY_FILE"}
     assert REQUIRED["collector"]() == {"PORTAL_GITHUB_HOST", "PORTAL_READ_APP_ID", "PORTAL_READ_APP_KEY_FILE", "PORTAL_READ_INSTALLATION_ID",
-                                       "PORTAL_DATABASE_URL"}
+                                       "PORTAL_DATABASE_URL", "PORTAL_ORG", "PORTAL_MODEL_GATEWAY_HOSTS"}
     assert REQUIRED["migrate"]() == {"PORTAL_MIGRATE_DATABASE_URL"}
 
 
@@ -270,6 +270,7 @@ def test_the_configmap_holds_the_poc_values_and_placeholders(built):
     assert parse_role_groups(data["PORTAL_ROLE_GROUPS"]) == {"admin": frozenset({"golden-road-admins"}), "ops": frozenset({"golden-road-ops"})}
     for name in ["PORTAL_WRITE_APP_ID", "PORTAL_WRITE_INSTALLATION_ID", "PORTAL_READ_APP_ID", "PORTAL_READ_INSTALLATION_ID"]:
         assert name in data
+    assert "replace-me" in data["PORTAL_MODEL_GATEWAY_HOSTS"]  # the platform's model_gateway_hosts: the operator sets it
 
 
 def test_no_secret_object_or_value_is_in_the_kit():
@@ -349,6 +350,12 @@ def test_the_readme_lists_the_write_apps_exact_permissions():
     found = set(re.findall(r"([A-Z][\w ]*?)\s*(?:\(`\w+`\))?:\s*(read|write)", write))
     assert found == {("Contents", "write"), ("Pull requests", "write"), ("Metadata", "read"), ("Checks", "read"), ("Actions", "read"),
                      ("Administration", "read")}, found
+
+
+def test_the_readme_says_what_the_read_app_s_contents_read_is_for():
+    text = " ".join((KIT / "README.md").read_text().split())
+    assert "Contents read is used by the evidence collector" in text and "`config/registration.yaml`" in text
+    assert "`PORTAL_MODEL_GATEWAY_HOSTS`" in text and "collectors: evidence: N computed, M waiting" in text
 
 
 def test_the_readme_covers_the_setup_and_the_checks():

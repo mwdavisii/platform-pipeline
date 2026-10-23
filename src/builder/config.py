@@ -29,6 +29,27 @@ def gate2_single_approver(platform: dict) -> bool:
     return value
 
 
+SCORECARD_MODES = ("per-app", "central")
+
+
+def scorecard_mode(platform: dict) -> str:
+    """per-app: each app calls the factory's reusable workflow; central: the factory's poller assesses (central review). Missing means per-app."""
+    value = platform.get("scorecard_mode", "per-app")
+    if value not in SCORECARD_MODES:
+        raise ValueError("scorecard_mode in the platform config must be per-app or central")
+    return value
+
+
+def scorecard_app_id(platform: dict) -> int | None:
+    """The scorecard GitHub App's id in central mode (the ruleset pins `scorecard / assessed` to it); None in per-app mode."""
+    if scorecard_mode(platform) != "central":
+        return None
+    value = platform.get("scorecard_app_id")
+    if type(value) is not int or not 0 < value < 2**31:
+        raise ValueError("scorecard_app_id in the platform config must be the scorecard App's id in central mode")
+    return value
+
+
 def platform_sha256() -> str:
     return hashlib.sha256(platform_config_text().encode("utf-8")).hexdigest()
 

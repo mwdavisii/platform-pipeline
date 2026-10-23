@@ -147,6 +147,10 @@ def make_factory(case: dict, config_path: Path, directory: Path, agent_config_pa
     if agent_config_path is not None:
         config["agent"] = load_yaml(agent_config_path)["agent"]
     (directory / "config" / "scorecard.yaml").write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+    rules = config_path.parent / "registration.yaml"  # T-21's floor rules, from the same factory config directory
+    if not rules.is_file():
+        raise InputError(f"{rules} is missing: T-21 needs the registration rules next to the scorecard config")
+    shutil.copyfile(rules, directory / "config" / "registration.yaml")
     if case.get("intake") is not None:
         (directory / "intake" / "acme").mkdir(parents=True)
         intake = {"schema": "intake/v1", "repo": REPO, "owner": "notes-team", **case["intake"]}

@@ -13,7 +13,7 @@ import unicodedata
 from pathlib import Path
 
 from builder import VERSION
-from builder.config import load_platform
+from builder.config import load_platform, scorecard_app_id
 from builder.lock import NEVER_EDIT, is_safe_rel
 from scorecard.redact import redact
 from scorecard.signals.injection import has_invisible, is_directive
@@ -147,6 +147,7 @@ TRIGGER_NOTES = {
     "T-17": "The resource tier went up. A person reviews this at the level shown; nothing to fix.",
     "T-18": "The app type changed, so the base image and runtime changed. A person reviews this at the level shown; nothing to fix.",
     "T-19": "The change is large. A person reviews this at the level shown; nothing to fix.",
+    "T-21": "The app needs a higher registration: after merging, ask for the registration to be raised in the portal; nothing to fix in code.",
 }
 UNDO_TRIGGERS = ("T-2", "T-3", "T-15", "T-16")
 UNDO = " If this change was not intended, undo it; if it was, the reviewer decides. Never undo a fix to lower the level."
@@ -382,16 +383,26 @@ def _codeql(items, name, alerts):
                     "Open the check's page on the PR.", priority=PRIORITY["codeql"])
 
 
-def _assessed(items, name, bucket, link, pr, others_failing):
+def _draft_fix(items, name, pr):
+    return items.fix(name, "scorecard", f"The PR is a draft, so the scorecard does not assess it. Mark it ready with `gh pr ready {pr['number']} --repo {items.gh_repo}` (after the user says yes).",
+                     priority=PRIORITY["assessed"], verify=[])
+
+
+CENTRAL_NOT_ASSESSED = ("The scorecard could not assess this PR. Push a new commit to assess it again (the check's Re-run button does nothing for the "
+                        "scorecard App's checks); if it fails again it is for the platform team, who can re-run the assess run in the factory.")
+
+
+def _assessed(items, name, bucket, link, pr, others_failing, central=False):
     if pr.get("isDraft") is True:
-        return items.fix(name, "scorecard", f"The PR is a draft, so the scorecard does not assess it. Mark it ready with `gh pr ready {pr['number']} --repo {items.gh_repo}` (after the user says yes).",
-                         priority=PRIORITY["assessed"], verify=[])
+        return _draft_fix(items, name, pr)
     if pr.get("isCrossRepository") is True:
         return items.human(name, "scorecard", "reviewer", "This PR comes from a fork, which the scorecard does not assess. A maintainer pushes the branch to this repo.",
                            priority=PRIORITY["assessed"])
     if others_failing:
         return items.add(priority=PRIORITY["wait"], category="wait", owner="app-author", check=name, source="scorecard", guardrails=GUARDS["scorecard"],
                          guidance="The scorecard runs after drift, preview and the scans pass. Fix those first, then check again.")
+    if central:  # the App's check run: a re-run from the PR reaches no one, so the only way on is a new push (spec F4)
+        return items.human(name, "scorecard", "platform", CENTRAL_NOT_ASSESSED, priority=PRIORITY["assessed"])
     if bucket == "cancel":
         return items.rerun(name, "scorecard", link, owner="platform")
     items.add(priority=PRIORITY["assessed"], category="rerun", owner="platform", check=name, source="scorecard", link=link, guardrails=RERUN_GUARDS,
@@ -414,8 +425,10 @@ def _level(items, name, level, comments):
                     text=f"{trigger} {reason['summary']}")
 
 
-def classify(pr: dict, checks: list, comments: dict, alerts, root: Path, host: str, repo: str, warnings=()) -> dict:
-    """The whole remediation/v1 document. Pure: the same answers give the same document."""
+def classify(pr: dict, checks: list, comments: dict, alerts, root: Path, host: str, repo: str, warnings=(), scorecard_central: bool = False) -> dict:
+    """The whole remediation/v1 document. Pure: the same answers give the same document. With `scorecard_central` the scorecard's checks
+    come from the scorecard App (central review): a failed one is fixed by a new push, and a draft, which the App posts nothing for, still
+    gets its mark-ready fix."""
     items = _Items(Path(root), host, repo)
     rows = []
     for c in checks if isinstance(checks, list) else []:
@@ -451,14 +464,16 @@ def classify(pr: dict, checks: list, comments: dict, alerts, root: Path, host: s
             else:
                 _codeql(items, name, alerts)
         elif name == CHECKS["scorecard"]:
-            _assessed(items, name, bucket, link, pr, bool(gate1))
+            _assessed(items, name, bucket, link, pr, bool(gate1), scorecard_central)
         elif SCORECARD_JOB.fullmatch(name):  # the scorecard's other jobs: `assessed` already says it all, or stands in for it
             if not any(n == CHECKS["scorecard"] for n, _, _ in rows):
-                _assessed(items, name, bucket, link, pr, bool(gate1))
+                _assessed(items, name, bucket, link, pr, bool(gate1), scorecard_central)
         elif ANALYZE_CHECK.match(name) or bucket == "cancel":
             items.rerun(name, "codeql" if ANALYZE_CHECK.match(name) else "check", link)
         else:
             items.human(name, "check", "user", UNKNOWN_CHECK, priority=PRIORITY["other"])
+    if scorecard_central and pr.get("isDraft") is True and not any(n == CHECKS["scorecard"] for n, _, _ in rows):
+        _draft_fix(items, CHECKS["scorecard"], pr)  # central review posts nothing for a draft, so there is no check to hang the fix on
     if level != "standard":
         _level(items, level_name, level, comments)
     ordered = sorted(items.items.values(), key=lambda i: (
@@ -478,7 +493,7 @@ def exit_code(doc: dict) -> int:
 
 PR_FIELDS = "number,state,isDraft,isCrossRepository,headRefName,headRefOid,url"
 CHECK_FIELDS = "name,state,bucket,link,workflow"
-COMMENT_JQ = ".[] | {id, login: .user.login, type: .user.type, updated_at, body}"
+COMMENT_JQ = ".[] | {id, login: .user.login, type: .user.type, app: .performed_via_github_app.id, updated_at, body}"
 # The PR's head ref: on the PoC (2026-10-23, CodeQL default setup) a PR's alerts are listed there and refs/pull/N/merge returned none
 # (spec A15).
 ALERT_REF = "refs/pull/{pr}/head"
@@ -503,8 +518,11 @@ def _unreadable(result, what: str, host: str) -> Unreadable:
     return Unreadable(f"{what} failed: {result.error()}", "Check the PR number and that you can read the repo.")
 
 
-def _marker_comments(text: str) -> dict[str, str]:
-    """The newest platform comment for each marker: written by github-actions[bot] (type Bot), the marker alone on the first line."""
+def _marker_comments(text: str, scorecard_app: int | None = None, scorecard_login: str | None = None) -> dict[str, str]:
+    """The newest platform comment for each marker: written by github-actions[bot] (type Bot), the marker alone on the first line.
+    With central review (`scorecard_app` is the scorecard App's id) the scorecard comment is the App's alone: a Bot comment whose
+    performed_via_github_app.id is that id. A github-actions[bot] comment can't stand in for it, because any workflow in the app
+    repo can post one; the App's id can't be claimed by a workflow. The other markers still come from github-actions[bot]."""
     first = {marker: key for key, marker in pr_comments.MARKERS.items()}
     best: dict[str, tuple] = {}
     for line in text.splitlines()[-MAX_COMMENT_LINES:]:  # the newest comments are last
@@ -512,10 +530,18 @@ def _marker_comments(text: str) -> dict[str, str]:
             c = json.loads(line)
         except (ValueError, RecursionError):
             continue
-        if not isinstance(c, dict) or c.get("login") != BOT_LOGIN or c.get("type") != BOT_TYPE or not isinstance(c.get("body"), str):
+        if not isinstance(c, dict) or c.get("type") != BOT_TYPE or not isinstance(c.get("body"), str):
             continue
         body = c["body"][:MAX_BODY]
         key = first.get(body.split("\n", 1)[0].rstrip("\r"))
+        if key == "scorecard" and scorecard_app is not None:
+            # GitHub does not always report performed_via_github_app for an installation token's comment, so the App's own bot login
+            # (`<slug>[bot]`, which no workflow can post as) counts too; `scorecard_login` is read from the App's check run in collect().
+            trusted = (type(c.get("app")) is int and c["app"] == scorecard_app) or (scorecard_login is not None and c.get("login") == scorecard_login)
+        else:
+            trusted = c.get("login") == BOT_LOGIN
+        if not trusted:
+            continue
         stamp = (str(c.get("updated_at")), c.get("id") if type(c.get("id")) is int else 0)
         if key and (key not in best or stamp > best[key][0]):
             best[key] = (stamp, body)
@@ -534,6 +560,29 @@ def _alerts(result):
         if isinstance(alert, dict):
             out.append(alert)
     return out
+
+
+def central_app() -> int | None:
+    """The scorecard App's id when the platform reviews centrally (the installed builder's platform config), else None. An unusable
+    config counts as per-app: remediate never crashes on it."""
+    try:
+        return scorecard_app_id(load_platform())
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+_SLUG = re.compile(r"[a-z0-9][a-z0-9-]{0,38}")
+
+
+def _central_login(gh, repo: str, sha: str, app_id: int) -> str | None:
+    """`<slug>[bot]` for the scorecard App, read from its own `scorecard / assessed` check run on this head (the check run's app id is
+    documented, the comment's is not). None when there is no such check run or the slug looks odd: the App id still identifies it."""
+    path = f"repos/{repo}/commits/{sha}/check-runs?check_name=scorecard%20%2F%20assessed&filter=latest&per_page=30"
+    read = gh("api", path, "--jq", f".check_runs[] | select(.app.id == {int(app_id)}) | .app.slug")
+    if read.code != 0:
+        return None
+    slug = next((line.strip() for line in read.stdout.splitlines() if line.strip()), "")
+    return f"{slug}[bot]" if _SLUG.fullmatch(slug) else None
 
 
 def collect(repo: str, pr: int, host: str, root: Path):
@@ -556,7 +605,9 @@ def collect(repo: str, pr: int, host: str, root: Path):
     warnings, comments = [], {}
     read = gh("api", f"repos/{repo}/issues/{pr}/comments?per_page=100", "--paginate", "--jq", COMMENT_JQ)
     if read.code == 0:
-        comments = _marker_comments(read.stdout)
+        app = central_app()
+        login = _central_login(gh, repo, doc["headRefOid"], app) if app is not None else None
+        comments = _marker_comments(read.stdout, app, login)
     else:
         warnings.append("PR comments could not be read: evidence is missing")
     alerts = None
@@ -569,7 +620,7 @@ def collect(repo: str, pr: int, host: str, root: Path):
 
 def run(repo: str, pr: int, host: str, root: Path) -> dict:
     doc, checks, comments, alerts, warnings = collect(repo, pr, host, root)
-    return classify(doc, checks, comments, alerts, root, host, repo, warnings)
+    return classify(doc, checks, comments, alerts, root, host, repo, warnings, scorecard_central=central_app() is not None)
 
 
 # ---- the plan, for the person (stderr) ----

@@ -63,3 +63,26 @@ def test_a_date_time_that_is_not_a_real_instant_is_rejected(stamp):
     """`format: date-time` is only checked when an optional package is installed, so the validator parses these fields itself."""
     assert validate("intake.v2", {**INTAKE, "approved_at": stamp})
     assert validate("identity-link.v1", {**LINK, "created_at": stamp})
+
+
+FLOOR = {"evidence_commit": "e" * 40, "floor_tier": "moderate", "floor_classification": "internal"}
+OVERRIDE = {"by": P2, "at": "2026-10-23T12:00:00Z", "reason": "The spec over-declares egress; checked with the team."}
+
+
+def test_intake_v2_takes_the_floor_fields_and_stays_valid_without_them():
+    assert validate("intake.v2", INTAKE) == []
+    assert validate("intake.v2", {**INTAKE, **FLOOR}) == []
+    assert validate("intake.v2", {**INTAKE, **FLOOR, "tier": "low", "floor_override": OVERRIDE}) == []
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda d: d.update(evidence_commit="E" * 40), lambda d: d.update(evidence_commit="e" * 39), lambda d: d.update(floor_tier="none"),
+    lambda d: d.update(floor_classification="secret"), lambda d: d.update(floor_override={**OVERRIDE, "reason": "too short"}),
+    lambda d: d.update(floor_override={**OVERRIDE, "reason": "x" * 29}), lambda d: d.update(floor_override={**OVERRIDE, "reason": "a" * 40 + "\nb"}),
+    lambda d: d.update(floor_override={**OVERRIDE, "by": "someone"}), lambda d: d.update(floor_override={**OVERRIDE, "at": "2026-02-30T12:00:00Z"}),
+    lambda d: d.update(floor_override={**OVERRIDE, "extra": 1}), lambda d: d.update(floor_override={"by": P2, "at": OVERRIDE["at"]}),
+])
+def test_intake_v2_floor_fields_reject(mutate):
+    doc = copy.deepcopy({**INTAKE, **FLOOR, "floor_override": OVERRIDE})
+    mutate(doc)
+    assert validate("intake.v2", doc)

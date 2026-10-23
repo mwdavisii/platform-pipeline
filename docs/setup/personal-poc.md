@@ -488,8 +488,8 @@ find . -name __pycache__ -prune -exec rm -rf {} +
 jq -r '.required[] | "  - " + tostring' platform/required-checks.json > ../gate1-extra.txt
 sed -i '/name: "golden-road \/ preview"/r ../gate1-extra.txt' bootstrap/scorecard-factory/config/scorecard.yaml
 <src>/.venv/bin/python -c 'import json, pathlib, sys; p = pathlib.Path(sys.argv[1]); p.write_text(p.read_text().replace("version: pinned-1}", "version: " + json.dumps(sys.argv[2]) + "}"))' bootstrap/scorecard-factory/config/scorecard.yaml '<model version string>'
-printf '%s\n' '* @<you> @<deputy>' '/intake/ @<you> @<deputy>' '/suppressions/ @<you> @<deputy>' '/na/ @<you> @<deputy>' > bootstrap/scorecard-factory/.github/CODEOWNERS
-# Single-approver mode: printf '%s\n' '* @<you>' '/intake/ @<you>' '/suppressions/ @<you>' '/na/ @<you>' > bootstrap/scorecard-factory/.github/CODEOWNERS
+printf '%s\n' '* @<you> @<deputy>' '/intake/ @<you> @<deputy>' '/suppressions/ @<you> @<deputy>' '/na/ @<you> @<deputy>' '/config/registration.yaml @<you> @<deputy>' > bootstrap/scorecard-factory/.github/CODEOWNERS
+# Single-approver mode: printf '%s\n' '* @<you>' '/intake/ @<you>' '/suppressions/ @<you>' '/na/ @<you>' '/config/registration.yaml @<you>' > bootstrap/scorecard-factory/.github/CODEOWNERS
 ```
 **Check:** `grep -n 'gate1_checks:' -A8 bootstrap/scorecard-factory/config/scorecard.yaml` lists drift, preview and then every entry of `platform/required-checks.json`; `grep -n 'model:' bootstrap/scorecard-factory/config/scorecard.yaml` prints `model: {version: "<your version string>"}` (no `pinned-1`); `PYTHONPATH=src <src>/.venv/bin/pytest -q tests/pipeline/test_scorecard_factory.py tests/kit` passes (the factory test accepts a changed model version and the extra Gate 1 entries, and checks that `gate1_checks` covers every required check; the kit tests run against the configured kit); and `grep -rn 'replace-me\|ORG_PLACEHOLDER' platform bootstrap` prints nothing. (The factory's `BUILDER_IMAGE` still has the all-zero digest; it is pinned below.)
 
@@ -521,14 +521,14 @@ gh run watch --repo <you>/platform-pipeline
 If the tag is already in use (`git ls-remote` prints it), this source's version was already released: bump in `<src>` with the script and export again. In `<src>`: `<src>/.venv/bin/python scripts/bump-builder-version.py <new version>`, then `git diff --stat` (it shows `src/builder/__init__.py` and, in `bootstrap/hello-app`, `.builder.lock` and `Dockerfile`), then `git add -A && git commit -m "Builder <new version>"`, and start this step again from the export. Never move or reuse a tag.
 The run's `release` job builds, pushes and signs the image; its `kit` job fails at the token step unless you did 14.2 to 14.4 first ("kit" is the agent kit: see the note at the top of this step). The `release` job's result is the one that matters here.
 
-Pin the new digest (`ghcr.io/<you>/golden-road-builder@sha256:...` from the `release` job's summary) in **every** workflow that runs the image (today four: `golden-road.yml`, `golden-road-promote.yml`, and the factory's `scorecard.yml` and `factory-check.yml`). The command finds them by their `BUILDER_IMAGE` line, so a workflow added later is pinned too:
+Pin the new digest (`ghcr.io/<you>/golden-road-builder@sha256:...` from the `release` job's summary) in **every** workflow that runs the image (today six: `golden-road.yml`, `golden-road-promote.yml`, and the factory's `scorecard.yml`, `scorecard-poll.yml`, `scorecard-assess.yml` and `factory-check.yml`). The command finds them by their `BUILDER_IMAGE` line, so a workflow added later is pinned too:
 ```bash
 ref=ghcr.io/<you>/golden-road-builder@sha256:<digest>
 grep -rlE '^  BUILDER_IMAGE: ' .github/workflows bootstrap | xargs sed -i "s|^  BUILDER_IMAGE: .*|  BUILDER_IMAGE: $ref|"
 git add -A && git commit -m "Pin builder $version" && git push origin main
 ```
 (Run it in the terminal where `version` is set, or set it again with the first line of the release block.) From here `hello-app`'s drift check runs the new builder, which expects the `AGENTS.md` and `CLAUDE.md` blocks and a new lock: every PR on `hello-app` fails drift until 13.6's PR is merged, because 13.6 regenerates them.
-**Check:** `grep -rh '^  BUILDER_IMAGE:' .github/workflows bootstrap | sort | uniq -c` prints one line, `4   BUILDER_IMAGE: $ref`; `grep -rlE '^  BUILDER_IMAGE: .*@sha256:0{64}$' .github bootstrap` prints nothing (no placeholder digest is left anywhere); the package is still public (step 3, Check 2), and `docker run --rm --network none "$ref" git --version` prints a git version.
+**Check:** `grep -rh '^  BUILDER_IMAGE:' .github/workflows bootstrap | sort | uniq -c` prints one line, `6   BUILDER_IMAGE: $ref`; `grep -rlE '^  BUILDER_IMAGE: .*@sha256:0{64}$' .github bootstrap` prints nothing (no placeholder digest is left anywhere); the package is still public (step 3, Check 2), and `docker run --rm --network none "$ref" git --version` prints a git version.
 
 ### 13.3 Optional, before any PR: the golden set against your gateway
 The golden set is 13 small PRs with known answers (an IDOR, a deleted test, a hallucinated package, prompt injections, clean PRs, ...). Running it live measures what your model gets right and wrong, and what one assessment costs, before it reviews anything real. It costs tokens; it never touches GitHub.
@@ -774,20 +774,20 @@ Skip if you did this in 13.2.
 Release the skill before any builder release is published, so GitHub's latest release is a skill release: the install command in `INSTALL_FOR_AGENTS.md` downloads `fetch_skill.py` from the latest release.
 ```bash
 cd ~/poc && git clone "$(gh repo view <you>/golden-road-agents --json url --jq .url)" golden-road-agents && cd golden-road-agents
-cat skill/VERSION                      # must print 0.3.0
-git tag skill-v0.3.0 && git push origin skill-v0.3.0
+cat skill/VERSION                      # must print 0.4.0
+git tag skill-v0.4.0 && git push origin skill-v0.4.0
 gh run watch --repo <you>/golden-road-agents
 ```
 **Check:**
 ```bash
-gh release view skill-v0.3.0 --repo <you>/golden-road-agents --json isDraft,assets --jq '{isDraft, assets: ([.assets[].name] | sort)}'
+gh release view skill-v0.4.0 --repo <you>/golden-road-agents --json isDraft,assets --jq '{isDraft, assets: ([.assets[].name] | sort)}'
 gh release list --repo <you>/golden-road-agents --exclude-drafts --json tagName,isLatest --jq '.[] | [.tagName, .isLatest] | @tsv'
-gh release download skill-v0.3.0 --repo <you>/golden-road-agents --pattern fetch_skill.py --dir ~/poc/skill-check
+gh release download skill-v0.4.0 --repo <you>/golden-road-agents --pattern fetch_skill.py --dir ~/poc/skill-check
 gh attestation verify ~/poc/skill-check/fetch_skill.py --repo <you>/golden-road-agents \
-  --cert-identity https://github.com/<you>/golden-road-agents/.github/workflows/release-skill.yml@refs/tags/skill-v0.3.0 \
-  --source-ref refs/tags/skill-v0.3.0 --cert-oidc-issuer https://token.actions.githubusercontent.com
+  --cert-identity https://github.com/<you>/golden-road-agents/.github/workflows/release-skill.yml@refs/tags/skill-v0.4.0 \
+  --source-ref refs/tags/skill-v0.4.0 --cert-oidc-issuer https://token.actions.githubusercontent.com
 ```
-The first prints `"isDraft": false` and the assets `fetch_skill.py`, `golden-road-skill-0.3.0.tar.gz`, `golden-road-stub.md` and `skill-v0.3.0.sigstore.json`; the second prints `skill-v0.3.0` and `true` (`gh release view` has no `isLatest` field, so the latest release is read from the list); the last exits 0 (this is the exact check the stub makes). Record its output.
+The first prints `"isDraft": false` and the assets `fetch_skill.py`, `golden-road-skill-0.4.0.tar.gz`, `golden-road-stub.md` and `skill-v0.4.0.sigstore.json`; the second prints `skill-v0.4.0` and `true` (`gh release view` has no `isLatest` field, so the latest release is read from the list); the last exits 0 (this is the exact check the stub makes). Record its output.
 
 ### 14.4 The GitHub App that publishes the builder kit
 Skip if you did this in 13.2.
@@ -840,7 +840,7 @@ gh release view builder-v$version --repo <you>/golden-road-agents --json isDraft
 gh release list --repo <you>/golden-road-agents --exclude-drafts --json tagName --jq '.[].tagName'
 gh release view --repo <you>/golden-road-agents --json tagName --jq .tagName
 ```
-The first prints `"isDraft": true` and `builder-v<version>.sigstore.json`, `golden_road-<version>-py3-none-any.whl`, `golden_road-<version>-requirements.txt` and `platform-pin.json`; the second prints only `skill-v0.3.0` (agents can't see the draft, so none installs a builder that CI doesn't run yet); the third prints `skill-v0.3.0`. The package is still public (step 3, Check 2). If `kit` failed with "already has a release or draft named builder-v<version>", a stale draft is in the way: delete it with `gh release delete builder-v$version --repo <you>/golden-road-agents --yes` and re-run the job with `gh run rerun <run id> --failed --repo <you>/platform-pipeline` (get the run id from the `gh run list` line above). If it failed at the token step again, check 14.4.
+The first prints `"isDraft": true` and `builder-v<version>.sigstore.json`, `golden_road-<version>-py3-none-any.whl`, `golden_road-<version>-requirements.txt` and `platform-pin.json`; the second prints only `skill-v0.4.0` (agents can't see the draft, so none installs a builder that CI doesn't run yet); the third prints `skill-v0.4.0`. The package is still public (step 3, Check 2). If `kit` failed with "already has a release or draft named builder-v<version>", a stale draft is in the way: delete it with `gh release delete builder-v$version --repo <you>/golden-road-agents --yes` and re-run the job with `gh run rerun <run id> --failed --repo <you>/platform-pipeline` (get the run id from the `gh run list` line above). If it failed at the token step again, check 14.4.
 
 ### 14.6 Pin the builder, publish the draft, regenerate `hello-app`: one change
 From the moment the pin is on `main`, `hello-app`'s drift check runs the new builder, which expects the `AGENTS.md` and `CLAUDE.md` blocks and a lock for its version: every PR on `hello-app` fails drift until its regeneration PR is merged (every app repo regenerates once for a builder upgrade; here `hello-app` is the only one). Agents install the newest published builder, so publish the draft right after the pin, never before it.
@@ -857,7 +857,7 @@ Publish the draft (both cases):
 gh release edit builder-v$version --repo <you>/golden-road-agents --draft=false --latest=false
 ```
 Always publish a builder release with `--latest=false`. If a builder release ever becomes the latest, the stub download in `INSTALL_FOR_AGENTS.md` fails closed ("no assets match"); the fix is `gh release edit skill-v<newest> --repo <you>/golden-road-agents --latest`.
-**Check:** `grep -rh '^  BUILDER_IMAGE:' .github/workflows bootstrap | sort | uniq -c` prints one line, `4   BUILDER_IMAGE: $ref` (`$ref` is the digest pinned in 13.2 in case A), and `gh release list --repo <you>/golden-road-agents --exclude-drafts --json tagName,isLatest --jq '.[] | [.tagName, .isLatest] | @tsv'` prints `builder-v<version> false` and `skill-v0.3.0 true`.
+**Check:** `grep -rh '^  BUILDER_IMAGE:' .github/workflows bootstrap | sort | uniq -c` prints one line, `6   BUILDER_IMAGE: $ref` (`$ref` is the digest pinned in 13.2 in case A), and `gh release list --repo <you>/golden-road-agents --exclude-drafts --json tagName,isLatest --jq '.[] | [.tagName, .isLatest] | @tsv'` prints `builder-v<version> false` and `skill-v0.4.0 true`.
 
 Case B only: regenerate `hello-app` by pull request (its `main` is protected):
 ```bash
@@ -955,12 +955,12 @@ git add -A && git commit -m "Builder <new version>"
 ```
 Then run the 13.2 / 14.1 `configure.py` command plus the new flag in `~/poc/platform-pipeline` (with `--single-approver` if you used it), and keep the new flag in every later `configure.py` command (13.2, 14.1 case B), or the next run drops it. What follows is a builder release: the tag and its run (14.5, case B, with the new version), the pin of the new digest in every workflow (14.6), then you publish the draft with `--latest=false` (14.6), and the `hello-app` PR as in 14.6. A later run can change a link but it cannot be unset: to take `approved_models_url` away, delete the `approved_models_url` key from `platform/platform.json` by hand, then run the same command so `hello-app` regenerates without it (`configure.py` only sets a link, so the hand edit is the only way to unset it).
 
-## 15. Fix my PR: the remediation command and skill 0.3.0
+## 15. Fix my PR: the remediation command and skill 0.4.0
 For a PoC that finished step 14 on an earlier skill release. This step adds `golden-road remediate` (read-only: it lists what to do about a PR's failing checks) and the skill's "Fix my PR" section, then walks the demo: a PR with a Semgrep finding that the agent fixes, and the shortcut it refuses. Everything is public, like the other repos.
 
 ### 15.0 What changes
 - Builder `<new version>` (the next patch version after the one 14 released): the `golden-road remediate` command. It ships in the same wheel and kit as `doctor`.
-- Skill `skill-v0.3.0`: the "Fix my PR" section of `SKILL.md`, and (new in 0.3.0) the Register step, which runs `golden-road register` instead of opening an intake issue (that step needs the builder from this same release). Agents pick it up through the stub, which installs the newest verified skill release.
+- Skill `skill-v0.4.0`: the "Fix my PR" section of `SKILL.md`, and the Register step, which runs `golden-road register` instead of opening an intake issue (that step needs the builder from this same release). From 0.4.0 the agent drafts the purpose from the repo for the user to review and no longer asks for a tier. Agents pick it up through the stub, which installs the newest verified skill release.
 - Nothing changes in `scorecard-factory`, `security-scans` or the callers in `hello-app`.
 
 ### 15.1 Bring the change into the platform tree and the kit
@@ -980,11 +980,11 @@ In `~/poc/golden-road-agents` (your clone of the kit), open a pull request with 
 ```bash
 cd ~/poc/golden-road-agents
 git pull origin main
-cat skill/VERSION                      # must print 0.3.0
-git tag skill-v0.3.0 && git push origin skill-v0.3.0
+cat skill/VERSION                      # must print 0.4.0
+git tag skill-v0.4.0 && git push origin skill-v0.4.0
 gh run watch --repo <you>/golden-road-agents
 ```
-**Check:** 14.3's **Check** commands, written for `skill-v0.3.0`, pass, and `gh release list --repo <you>/golden-road-agents --exclude-drafts --json tagName,isLatest --jq '.[] | [.tagName, .isLatest] | @tsv'` prints `skill-v0.3.0 true` (the newest skill release is the latest; the builder release stays `false`). If the builder release became the latest, run `gh release edit skill-v0.3.0 --repo <you>/golden-road-agents --latest`.
+**Check:** 14.3's **Check** commands, written for `skill-v0.4.0`, pass, and `gh release list --repo <you>/golden-road-agents --exclude-drafts --json tagName,isLatest --jq '.[] | [.tagName, .isLatest] | @tsv'` prints `skill-v0.4.0 true` (the newest skill release is the latest; the builder release stays `false`). If the builder release became the latest, run `gh release edit skill-v0.4.0 --repo <you>/golden-road-agents --latest`.
 
 ### 15.4 The demo: a PR the agent fixes
 `hello-app` is `PUBLIC` in this PoC (the personal exception), so the agent will not push to it: you push. The agent commits locally and tells you.
@@ -1020,6 +1020,110 @@ If the releases in 15.1 to 15.3 slip, run the command from the source checkout: 
 1. **Read-only.** Every `gh` call the agent made was a read, apart from the push you ran.
 2. **The guardrails were shown** in the plan before the agent changed anything.
 3. **The `needs-human` scorecard item.** What the agent did with it: it should list it with its owner and contact and not call it fixed.
+
+## 16. Central AI review (the scorecard App)
+Until now each app repo calls the factory's `scorecard.yml` and holds the gateway secrets itself (13.5). Central review moves the review into the factory: a poller in `scorecard-factory` starts one `scorecard-assess` run per ready pull request head, in the factory's environment `scorecard`, the only place the gateway secrets and the App key exist. A scorecard GitHub App posts `scorecard / assessed`, `scorecard / level: <level>`, the label and the comment, and the apps' rulesets pin `scorecard / assessed` to that App, so a job in an app repo can no longer imitate it. Read the factory README's "Central review" section first; it has the flow, the settings and what each token can do. Per-app mode keeps working until you do 16.4, and each app moves on its own in 16.5.
+
+Requirements: the environment, its secrets and its branch policy need a **public repo** on GitHub Free (a private factory needs a paid plan). The PoC's factory is public (13.4), so this works as it stands.
+
+### 16.0 What changes
+The builder release that carries central review must be released, and its digest pinned in all four factory workflows that run the image (`scorecard.yml`, `scorecard-poll.yml`, `scorecard-assess.yml` and `factory-check.yml`), before anything below does anything: the poller and the assess run both run in that image. The release comes from the lead's version bump, so this section names no number. Do 13.2's release and pin steps with that version first.
+
+Nothing here touches `hello-app` until 16.5. Until then the poller is inert: with no `SCORECARD_APP_ID` variable no runner starts, without the `central` settings the poll does nothing, and even with them it polls only the repos whose intake record in the factory is marked central (16.5 does that, one app at a time). An app that is not marked keeps its own `scorecard.yml` and is not touched: two reviewers writing the same labels and comment is what the mark prevents.
+
+Two things follow the builder, not the app. `golden-road doctor` and `golden-road remediate` read the platform's mode from the installed builder, so once the builder carries central mode they expect central behaviour for every app (doctor wants three callers and a pinned `scorecard / assessed`; remediate reads the App's comment). Migrate an app (16.5) before you tell its agent to run them. And a registration approved after central mode is on is written without the mark, so it is not polled: add the mark to its record by a factory pull request, or its pull requests get no review.
+
+### 16.1 Create the App
+In the browser, like 14.4 (there is no API to create an App):
+1. Settings -> Developer settings -> GitHub Apps -> **New GitHub App**. Name: `<scorecard app name>` (it is public). Homepage URL: `https://github.com/<you>/scorecard-factory`. Webhook: clear **Active**. Repository permissions, exactly these and nothing else: **Checks: Read and write**, **Contents: Read-only**, **Issues: Read and write**, **Pull requests: Read and write**, **Commit statuses: Read-only** (Gate 1 entries can be commit statuses), and **Metadata: Read-only** (GitHub adds it by itself). Where can this GitHub App be installed: **Only on this account**. Create it.
+2. On the App's page note the **App ID** (a number: not the Client ID; the ruleset and the App's token use the App ID). Under Private keys, **Generate a private key**: the browser downloads a `.pem` file. Don't open, copy or upload it anywhere else.
+3. **Install App** -> your account -> **Only select repositories** -> `hello-app` and `golden-road-portal`. The App is not installed on scorecard-factory: nothing uses it there (the poller dispatches with the factory's own `GITHUB_TOKEN`), and a smaller install is a smaller blast radius.
+
+**Check:** Settings -> Applications -> Installed GitHub Apps -> `<scorecard app name>` -> Configure shows **Only select repositories** with those two repos, and the permissions above and no others.
+
+### 16.2 The factory environment, the key, the App ID and the gateway values
+```bash
+gh api -X PUT repos/<you>/scorecard-factory/environments/scorecard --input - <<<'{"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}'
+gh api -X POST repos/<you>/scorecard-factory/environments/scorecard/deployment-branch-policies -f name=main -f type=branch
+pem=~/Downloads/<downloaded key file>.pem
+gh secret set SCORECARD_APP_KEY --env scorecard --repo <you>/scorecard-factory < "$pem" && rm -- "$pem"; unset pem
+gh variable set SCORECARD_APP_ID --repo <you>/scorecard-factory --body '<app id>'   # a repository variable: the poller's job condition can't read environment variables
+```
+The key goes from the file to `gh` on stdin, never on the command line or the screen, and the file is deleted once it is stored. Setting `SCORECARD_APP_ID` is what lets the poller's runner start; until 16.4 adds the settings, the poll still does nothing.
+
+Then a new LiteLLM key for the factory and the model name, made as in 13.1 steps 2 and 3 but with the alias `scorecard-factory` (change `key_alias` in that command), and set as environment secrets, with the same `if` guards as 13.5. No Dependabot copies are needed: the assess run is started by the poller, not by Dependabot.
+```bash
+if [ -n "${SCORECARD_GATEWAY_TOKEN:-}" ] && [ "$SCORECARD_GATEWAY_TOKEN" != null ]; then
+  printf '%s' "$SCORECARD_GATEWAY_TOKEN" | gh secret set SCORECARD_GATEWAY_KEY --env scorecard --repo <you>/scorecard-factory
+  unset SCORECARD_GATEWAY_TOKEN
+else
+  echo "SCORECARD_GATEWAY_TOKEN is empty: redo 13.1 step 3 (alias scorecard-factory) before setting the secret"
+fi
+if [[ "${SCORECARD_GATEWAY_MODEL:-}" =~ ^[A-Za-z0-9._-]{1,128}$ && "$SCORECARD_GATEWAY_MODEL" != . && "$SCORECARD_GATEWAY_MODEL" != .. ]]; then
+  printf '%s' "$SCORECARD_GATEWAY_MODEL" | gh secret set SCORECARD_GATEWAY_MODEL --env scorecard --repo <you>/scorecard-factory
+  unset SCORECARD_GATEWAY_MODEL
+else
+  echo "SCORECARD_GATEWAY_MODEL is empty or has characters other than A-Z a-z 0-9 . _ -: redo 13.1 step 2"
+fi
+```
+If you use the Access service token (13.1 step 4), set `SCORECARD_GATEWAY_ACCESS_ID` and `SCORECARD_GATEWAY_ACCESS_SECRET` the same way, both or neither.
+
+**Check:** `gh api repos/<you>/scorecard-factory/environments/scorecard --jq .deployment_branch_policy` prints `custom_branch_policies` as `true`; `gh secret list --env scorecard --repo <you>/scorecard-factory` lists `SCORECARD_APP_KEY`, `SCORECARD_GATEWAY_KEY` and `SCORECARD_GATEWAY_MODEL`; `gh variable list --repo <you>/scorecard-factory` lists `SCORECARD_APP_ID`.
+
+### 16.3 Configure central mode
+In a fresh export (as in 13.2), run configure with the same flags as 13.2 and the two new ones:
+```bash
+<src>/.venv/bin/python scripts/configure.py --org <you> --gateway-host <gateway host> \
+  --edge-namespace cloudflared --edge-label app=cloudflared --identity-header X-Platform-Roles \
+  --scorecard-gateway-url https://<scorecard gateway host>/v1/chat/completions \
+  --scorecard-mode central --scorecard-app-id <app id>
+```
+It records `scorecard_mode` and `scorecard_app_id` in `platform/platform.json`, re-pins `scorecard / assessed` in the rulesets of `hello-app` and the portal to the App, and removes the apps' `scorecard.yml` callers (and the kit's template, so new apps never get one). Then do 13.2's other edits (the Gate 1 list, the model version, CODEOWNERS), pin `BUILDER_IMAGE` in all four factory workflows, and copy the tree over the published tree as in 13.2. Going back to per-app mode is a restore of `bootstrap` and `platform` from git, not another configure run.
+
+**Check:** `jq '{scorecard_mode, scorecard_app_id}' platform/platform.json` shows `central` and your App ID; `grep -c 'scorecard / assessed", "integration_id": <app id>' bootstrap/hello-app/.github/rulesets/main.json` prints `1`; `bootstrap/hello-app/.github/workflows/scorecard.yml` no longer exists; and `grep -rh '^  BUILDER_IMAGE:' .github/workflows bootstrap | sort | uniq -c` prints one line with your pinned digest.
+
+### 16.4 Turn on the poller
+A factory pull request adds the settings (a deployment that has not got this section does nothing), and merges once `factory-check` passes:
+```yaml
+central: {max_in_flight: 4, assess_timeout_minutes: 360}
+```
+Add it as a new top-level key at the end of `config/scorecard.yaml`. The schedule is the cron in `scorecard-poll.yml` (every five minutes); it is not a setting here, and `poll_minutes` is refused. Then start one poll by hand instead of waiting:
+```bash
+gh workflow run scorecard-poll.yml --repo <you>/scorecard-factory
+gh run watch --repo <you>/scorecard-factory
+```
+**Check:** the run's summary says `central: on`, lists no actions and no errors, and names `hello-app` as per-app (not polled until 16.5 marks it central). A poll that fails with "the App is not installed on `<you>/hello-app`" means 16.1 step 3 missed a repo.
+
+### 16.5 Migrate each app
+For `hello-app`, then again for the portal (`golden-road-portal`). Do the four steps in one sitting: between step 1 and step 3 a pull request that is already open can be assessed twice (the app's own workflow and the App), and each writes its own comment, with the label going to whichever writes last. A new push settles it.
+1. Mark the app central: a factory pull request adds the line `scorecard: central` to `intake/<you>/hello-app.yaml` (a new top-level key, valid in `intake/v1` and `intake/v2`), and merges once `factory-check` passes. From the next poll the poller assesses this app's ready pull requests.
+2. Find the ruleset's id: `gh api repos/<you>/hello-app/rulesets --jq '.[] | select(.name=="main") | .id'`.
+3. Pin it to the App: `gh api -X PUT repos/<you>/hello-app/rulesets/<id> --input bootstrap/hello-app/.github/rulesets/main.json` (the file 16.3 wrote). From now on a PR is mergeable only with the App's `scorecard / assessed`, so open the next step's PR promptly: until the App assesses a head, merges wait.
+4. Open a PR with `git rm .github/workflows/scorecard.yml` (and nothing else). It is itself assessed by the App within a poll or two, and the per-app workflow no longer runs on it.
+5. After it merges, delete the app's gateway secrets, which the app no longer needs and anyone with write access could read: `gh secret delete SCORECARD_GATEWAY_KEY --repo <you>/hello-app`, the same for `SCORECARD_GATEWAY_MODEL` (and for the two Access secrets, if you set them), and the same three or four with `--app dependabot`. Delete the app's old LiteLLM key (alias `scorecard-hello-app`) with `/key/delete` from inside your network.
+
+**Check:** `gh secret list --repo <you>/hello-app` and `gh secret list --repo <you>/hello-app --app dependabot` show no `SCORECARD_*`.
+
+### 16.6 Proof items (record the results)
+1. A ready PR gets `scorecard / assessed` from the App: `gh api repos/<you>/hello-app/commits/<sha>/check-runs --jq '.check_runs[] | select(.name=="scorecard / assessed") | .app.slug'` prints the App's slug (not `github-actions`), and the same check run has `started_at` set (the poller writes it; a missing one is treated as a run in flight, never as a stale one). This also confirms that the poller's `GITHUB_TOKEN` may start the assess workflow (`workflow_dispatch` is one of the two events that token may start).
+2. A branch whose workflow has a job named `scorecard / assessed` does not satisfy the ruleset: on a throwaway PR, make the real one fail (the poller's mark, such as Gate 1 red) and see that the PR stays blocked.
+3. `gh secret list --repo <you>/hello-app` shows no `SCORECARD_*`.
+4. A fork PR gets the fork mark ("pull requests from forks are reviewed by a maintainer"). Whether GitHub accepts a check run on a fork's head commit in the base repo is not verified: if the poll's summary shows an error for that PR instead, record it.
+5. Gate 1 red, then green: the red mark appears at once, and an assessment follows after you re-run the failed scan.
+6. A second push to a PR cancels the first assess run (Actions shows the first run cancelled, and the PR's `assessed` belongs to the second head).
+7. A factory branch can't use the environment. The workflow's job-level `if` already refuses a branch, so test the environment's branch policy itself: on a branch of `scorecard-factory`, copy `scorecard-assess.yml` with every job-level `if:` line removed, push the branch, and dispatch that copy: `gh workflow run scorecard-assess.yml --ref <that branch> -f repo=<you>/hello-app -f pr=1 -f head_sha=<40 hex> -f check_run_id=1 --repo <you>/scorecard-factory`. The run fails before any step starts, with a message that the branch is "not allowed to deploy" to `scorecard` (the environment's branch policy), and `gh secret list --env scorecard` is unchanged. Then delete the branch.
+8. The cap: open 5 PRs at once on `hello-app` (a trivial change each) with `max_in_flight` at 4: 4 dispatch on the first tick, and the fifth waits for the next.
+9. `golden-road remediate` on an elevated PR reads the App's comment (it lists the reasons) and, for a failed `assessed`, says to push again.
+10. The second run edits the same comment: push again to a PR the App already commented on, and see that the App's comment is edited (same comment id, a new "updated at") and no second one appears. The report job finds its comment by the App's id or, when GitHub gives none for an installation token's comment, by the App's bot login (`<slug>[bot]`). If a second comment appears, record the comment's `performed_via_github_app` and `user.login`.
+11. A merge commit that is not ready is retried: open a PR and, as soon as the first assess run starts, push a commit to its base branch. If the run ends "not assessed" with "The next poll tries again", the next poll (after about ten minutes) dispatches it again and the second run assesses; the check's `external_id` goes `queued`, `retry`, `queued`. At most three tries, then a final mark that says a new push starts again.
+
+### 16.7 Roll back
+Re-PUT the ruleset with `integration_id` 15368 for `scorecard / assessed` (restore the committed `main.json` with the same `gh api -X PUT`), restore `scorecard.yml` in the app and its gateway secrets (13.5), remove the `scorecard: central` line from its intake record (a factory pull request, so the poller stops assessing it), and delete the repository variable (`gh variable delete SCORECARD_APP_ID --repo <you>/scorecard-factory`): without it the poller becomes inert at once. The environment, its secrets and the App can stay.
+
+### 16.8 Gaps after section 16
+The "scorecard's checks can be imitated" and "gateway key readable by anyone with write access" bullets under "PoC gaps to record" no longer apply to an app that has migrated; they still apply to one that has not. New gaps to record: anyone who can merge to the factory's `main` can read the environment's secrets (a workflow they merge runs in it), scheduled runs can be delayed or dropped under load (a PR can wait longer than five minutes), and the factory is public, so the assess runs' logs and artifacts are public.
+
+**Scheduled workflows stop after 60 days without activity.** GitHub disables the scheduled workflows of a public repo after 60 days without repository activity (a commit, a merged pull request), and the poller then stops without any failure: pull requests just never get an assessment. Detect it: `gh api repos/<you>/scorecard-factory/actions/workflows/scorecard-poll.yml --jq .state` prints `active`, and `disabled_inactivity` when GitHub has switched it off. Re-enable it with `gh workflow enable scorecard-poll.yml --repo <you>/scorecard-factory`. Any commit to the factory's `main` (a pull request that merges) keeps it alive, and a poll that has not run for an hour is the sign to look: the newest `scorecard-poll` run in `gh run list --workflow scorecard-poll.yml --repo <you>/scorecard-factory --limit 1`.
 
 ## PoC gaps to record
 - The scans are open-source reference scans (Semgrep CE with a small vendored rule set plus `p/default`, Trivy, CodeQL default setup), not the security team's tools, thresholds, or triage. Until step 11, Gate 1 waits on nothing beyond drift and the authz probe. Gate 1 sees only a CodeQL check run's conclusion, so it proves the analysis ran, not that no alert exists; the alert threshold is enforced at merge time.

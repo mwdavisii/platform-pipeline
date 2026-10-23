@@ -1,3 +1,5 @@
 jsonschema
 PyYAML
 setuptools
+# golden-road app-token (central review): RS256 App JWTs; the same versions the portal pins
+pyjwt[crypto]

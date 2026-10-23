@@ -1063,3 +1063,12 @@ def test_a_builder_lock_bump_is_recorded_and_raises_nothing(app, run):
     assert card["triggers_fired"] == []
     assert json.loads((out / "re-review-event.json").read_text())["signals"] == [
         {"id": "builder-bumped", "kind": "recorded", "summary": "builder 0.3.7 -> 0.3.8"}]
+
+
+def test_check_factory_refuses_bad_or_missing_registration_rules(factory, capsys):
+    (factory / "config/registration.yaml").write_text("schema: registration-rules/v1\n")
+    code, _, err = check_factory(factory, capsys)
+    assert code != 0 and any(p.startswith("registration: ") for p in err["problems"])
+    (factory / "config/registration.yaml").unlink()
+    code, _, err = check_factory(factory, capsys)
+    assert code != 0 and any("registration.yaml" in p for p in err["problems"])

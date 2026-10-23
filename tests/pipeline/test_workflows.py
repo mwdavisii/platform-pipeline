@@ -16,7 +16,7 @@ WORKFLOWS = sorted(p for d in DIRS if d.is_dir() for p in d.glob("*.yml"))
 ACTIONLINT = "rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667"
 SHA_PIN = re.compile(r"^[\w.-]+/[\w.-]+(/[\w./-]+)?@[0-9a-f]{40}$")
 REUSABLE = re.compile(r"^[A-Za-z0-9_-]+/(platform-pipeline/\.github/workflows/golden-road(-promote)?\.yml|security-scans/\.github/workflows/scan\.yml"
-                      r"|scorecard-factory/\.github/workflows/scorecard\.yml|scorecard-factory/\.github/actions/intake)@main$")
+                      r"|scorecard-factory/\.github/workflows/scorecard\.yml|scorecard-factory/\.github/actions/(intake|app-token))@main$")
 
 
 def load(path):
@@ -35,7 +35,7 @@ def uses(doc):
 
 
 def test_expected_workflows_exist():
-    expected = {"golden-road.yml", "golden-road-promote.yml", "release-builder.yml", "test.yml", "ci.yml", "promote.yml", "security-scans.yml", "factory-check.yml", "scorecard.yml", "release-skill.yml"}
+    expected = {"golden-road.yml", "golden-road-promote.yml", "release-builder.yml", "test.yml", "ci.yml", "promote.yml", "security-scans.yml", "factory-check.yml", "scorecard.yml", "release-skill.yml", "scorecard-poll.yml", "scorecard-assess.yml"}
     assert expected | ({"scan.yml"} if SCANS.is_dir() else set()) <= {p.name for p in WORKFLOWS}
 
 
@@ -187,11 +187,13 @@ ALLOWED_EXPR = [
     r"github\.run_attempt", r"github\.server_url", r"github\.repository", r"github\.event\.pull_request\.number",
     r"steps\.[\w-]+\.outputs\.[\w-]+", r"github\.run_id", r"github\.server_url", r"job\.workflow_repository", r"job\.workflow_sha", r"needs\.(semgrep|trivy|preview)\.result", r"github\.sha",
     # the scorecard: job results, the factory's own job outputs, and the gateway key secret
-    r"needs\.(precondition|assess|score|report|level)\.result", r"needs\.precondition\.outputs\.checks",
-    r"needs\.assess\.outputs\.(assessment_sha256|factory_sha256)", r"needs\.score\.outputs\.(level|comment_sha256|github_sha256)",
+    r"needs\.(precondition|assess|score|report|level)\.result", r"needs\.precondition\.outputs\.(checks|event|merge_sha)",
+    r"needs\.assess\.outputs\.(assessment_sha256|factory_sha256)", r"needs\.score\.outputs\.(level|comment_sha256|github_sha256|summary_sha256)",
     r"secrets\.SCORECARD_GATEWAY_(KEY|MODEL|ACCESS_ID|ACCESS_SECRET)", r"github\.event\.pull_request\.base\.ref",  # the base ref reaches only an env var, never a script
     # the builder release's kit job: the image digest from the release job, and the App that may publish in golden-road-agents
     r"needs\.release\.outputs\.image", r"vars\.GOLDEN_ROAD_AGENTS_APP_CLIENT_ID", r"secrets\.GOLDEN_ROAD_AGENTS_APP_KEY",
+    # central review: the scorecard App's id (a repository variable) and key (an environment secret, only in the two central workflows)
+    r"vars\.SCORECARD_APP_ID", r"secrets\.SCORECARD_APP_KEY", r"steps\.(apply|verify)\.outcome", r"needs\.(precondition|score)\.outputs\.retry",
 ]
 
 
@@ -844,3 +846,9 @@ def test_no_other_workflow_uses_the_app_secret():
     for path in WORKFLOWS:
         if path != RELEASE_BUILDER:
             assert "GOLDEN_ROAD_AGENTS_APP" not in path.read_text(), path
+
+
+def test_no_other_workflow_uses_the_scorecard_app_key():
+    """The scorecard App's key lives only in the factory's `scorecard` environment, read by the poller and the assess run."""
+    holders = sorted(p.name for p in WORKFLOWS if "SCORECARD_APP_KEY" in p.read_text())
+    assert holders == ["scorecard-assess.yml", "scorecard-poll.yml"]

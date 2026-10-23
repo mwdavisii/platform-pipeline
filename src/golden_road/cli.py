@@ -140,6 +140,14 @@ def _parser() -> argparse.ArgumentParser:
     rm.add_argument("--pr", required=True, type=int, help="the pull request number")
     rm.add_argument("--root", type=Path, default=Path("."), help="the app checkout (default: .), used only to tell whether a cited file exists")
     rm.add_argument("--host", default=None, help="the platform's GitHub host (default: the platform config's, else $GH_HOST, else github.com)")
+    at = sub.add_parser("app-token", help="Mint a GitHub App installation token for one repository and the named permissions.",
+                        description="Mint an installation token of the scorecard App (central review). The App private key is read from "
+                                    "GOLDEN_ROAD_APP_KEY only. The token is written to --output (mode 0600); stdout names only its scope.")
+    at.set_defaults(handler=_cmd_app_token)
+    at.add_argument("--app-id", required=True, type=int)
+    at.add_argument("--repo", required=True, help="OWNER/REPO the token is for")
+    at.add_argument("--permission", required=True, action="append", help="name=read or name=write, repeated")
+    at.add_argument("--output", required=True, type=Path)
     return p
 
 
@@ -321,6 +329,17 @@ def _cmd_remediate(args) -> int:
     print(json.dumps(doc, indent=2, sort_keys=True))
     print(remediate.plan_text(doc), file=sys.stderr)
     return remediate.exit_code(doc)
+
+
+def _cmd_app_token(args) -> int:
+    """The token goes only to the 0600 output file; stdout names its scope. The key is read from the environment only."""
+    from . import github_app
+    perms = github_app.parse_permissions(args.permission)
+    doc = github_app.installation_token(os.environ.get("GITHUB_API_URL", "https://api.github.com"), args.app_id,
+                                        os.environ.get(github_app.KEY_ENV, ""), args.repo, perms)
+    github_app.write_token(args.output, doc)
+    print(json.dumps({k: doc[k] for k in ("repository", "permissions", "expires_at")}, sort_keys=True))
+    return EXIT_PASS
 
 
 def _run(args) -> int:

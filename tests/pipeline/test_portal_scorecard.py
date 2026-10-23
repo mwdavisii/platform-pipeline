@@ -25,7 +25,7 @@ from portal.roles import roles_for  # noqa: E402
 from portal.store.memory import MemoryStore  # noqa: E402
 from portal.writer.run import run_once  # noqa: E402
 from portal.registration import intake_record  # noqa: E402
-from portal.store.base import Request  # noqa: E402
+from portal.store.base import Evidence, Request  # noqa: E402
 from portal.writer.allowlist import target_for  # noqa: E402
 from portal.writer.render import intake_yaml  # noqa: E402
 from scorecard.cli import main  # noqa: E402
@@ -43,11 +43,13 @@ def factory(tmp_path):
     return dest
 
 
-def approved(repo="acme/newapp", approver=ADMIN):
+def approved(repo="acme/newapp", approver=ADMIN, floor=("moderate", "internal"), tier="moderate", override_reason=""):
     req = Request(RID, "registration", repo, "writing", {"schema": "registration-draft/v1", "repo": repo, "purpose": "Stores short team notes; no email.",
                   "data_classification": "internal", "proposed_tier": "low"}, OWNER, NOW, NOW)
-    doc, errors = intake_record(req, approver_id=approver, tier="moderate", classification="restricted", review_by="2027-10-23",
-                                justification="Raised the classification: it stores clinic names.", now=NOW)
+    evidence = Evidence(RID, 1, "e" * 40, {}, floor[0], floor[1], "f" * 40, NOW)
+    doc, errors = intake_record(req, approver_id=approver, tier=tier, classification="restricted", review_by="2027-10-23",
+                                justification="Raised the classification: it stores clinic names.", now=NOW, evidence=evidence,
+                                override_reason=override_reason)
     assert not errors, errors
     return req, doc
 
@@ -76,6 +78,27 @@ def test_factory_check_accepts_what_the_writer_files(factory, capsys):
     write_like_the_writer(factory, req, doc)
     assert main(["check-factory", "--factory", str(factory)]) == 0
     assert json.loads(capsys.readouterr().out)["intake"] == 3
+
+
+def test_the_scorecard_loads_what_the_writer_writes_with_the_floor_and_an_override(factory, capsys):
+    req, doc = approved(tier="low", override_reason="The spec over-declares egress; checked it.")
+    assert doc["floor_override"]["by"] == ADMIN and (doc["floor_tier"], doc["tier"]) == ("moderate", "low")
+    write_like_the_writer(factory, req, doc)
+    assert load_intake(factory, "acme/newapp") == doc
+    assert main(["check-factory", "--factory", str(factory)]) == 0
+    capsys.readouterr()
+    plain_req, plain = approved(repo="acme/other")  # at the floor: the floor fields and no override
+    write_like_the_writer(factory, plain_req, plain)
+    assert "floor_override" not in load_intake(factory, "acme/other") and main(["check-factory", "--factory", str(factory)]) == 0
+
+
+def test_the_scorecard_refuses_a_record_below_its_floor_without_an_override(factory, capsys):
+    req, doc = approved(tier="low", override_reason="The spec over-declares egress; checked it.")
+    write_like_the_writer(factory, req, {k: v for k, v in doc.items() if k != "floor_override"})
+    with pytest.raises(InputError, match="below the floor"):
+        load_intake(factory, "acme/newapp")
+    assert main(["check-factory", "--factory", str(factory)]) != 0
+    capsys.readouterr()
 
 
 def test_factory_check_refuses_a_self_approved_record(factory, capsys):

@@ -33,6 +33,8 @@ configMapGenerator:
   - PORTAL_READ_INSTALLATION_ID=replace-me
   - PORTAL_WRITE_APP_ID=replace-me
   - PORTAL_WRITE_INSTALLATION_ID=replace-me
+  # REPLACE: the platform's model_gateway_hosts (platform/platform.json), comma-separated
+  - PORTAL_MODEL_GATEWAY_HOSTS=litellm.replace-me.invalid
 
 # One image for every process: the writer, the collector and the migration job take the image of the release's web Deployment,
 # so they can never drift from it.

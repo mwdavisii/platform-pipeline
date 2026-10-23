@@ -127,7 +127,7 @@ def test_schemas_resolve_each_other_by_id():
     assert "https://platform.internal/schemas/finding.v2.json" in {uri for uri in _registry()}
 
 
-@pytest.mark.parametrize("trigger", ["T-17", "T-18", "T-19"])
+@pytest.mark.parametrize("trigger", ["T-17", "T-18", "T-19", "T-21"])
 def test_the_re_review_triggers_are_valid_trigger_standards(trigger):
     finding = vc_finding(rule_id=f"{trigger}/x", category="iac", standards=[{"framework": "golden-road-trigger", "id": trigger}])
     assert validate("finding.v2", finding) == []

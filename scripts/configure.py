@@ -5,6 +5,7 @@ Usage: scripts/configure.py --org <org> --gateway-host <host> --edge-namespace N
                             --identity-header NAME [--scorecard-gateway-url URL] [--single-approver]
                             [--github-host HOST] [--cert-oidc-issuer URL]
                             [--landing-page-url URL] [--approved-models-url URL] [--portal-url URL]
+                            [--scorecard-mode {per-app,central} [--scorecard-app-id ID]]
 
 --scorecard-gateway-url is the chat-completions URL the scorecard's review agent calls from the CI runners. It
 defaults to https://<gateway host>/v1/chat/completions; pass it when the runners reach the gateway at another
@@ -25,6 +26,11 @@ later run may change it. There is no default: without it `register` says to ask 
 --single-approver is for the personal PoC only, for an owner with no second GitHub account. It records
 gate2_single_approver in platform/platform.json and relaxes the approval settings of hello-app, the scorecard factory and golden-road-agents (no PR approvals
 required; the person who triggers a promotion may approve it). Never use it for a real organization.
+
+--scorecard-mode central (central AI review) needs --scorecard-app-id, the scorecard GitHub App's App ID. It records scorecard_mode and
+scorecard_app_id in platform/platform.json, re-pins `scorecard / assessed` in the rulesets of hello-app and the portal to the App, and
+removes the scorecard caller workflows (hello-app, the portal and the kit template): the factory's poller assesses instead. The default,
+per-app, records nothing and changes nothing. A later run may change the App ID; going back to per-app needs a restore of bootstrap and platform.
 
 The edge selector and identity header come from the deploy owners. There are no defaults: the committed
 platform/platform.json carries `replace-me` placeholders for them, so an unconfigured tree is refused by the
@@ -92,6 +98,8 @@ PLACEHOLDER_STATE = {
     "bootstrap/scorecard-factory/.github/CODEOWNERS": "ORG_PLACEHOLDER",
     "bootstrap/scorecard-factory/.github/workflows/factory-check.yml": "ORG_PLACEHOLDER",
     "bootstrap/scorecard-factory/.github/workflows/scorecard.yml": "ORG_PLACEHOLDER",
+    "bootstrap/scorecard-factory/.github/workflows/scorecard-poll.yml": "ORG_PLACEHOLDER",
+    "bootstrap/scorecard-factory/.github/workflows/scorecard-assess.yml": "ORG_PLACEHOLDER",
     "bootstrap/scorecard-factory/config/scorecard.yaml": "llm.replace-me.invalid",
     "bootstrap/scorecard-factory/intake/ORG_PLACEHOLDER/hello-app.yaml": "ORG_PLACEHOLDER",
     "bootstrap/golden-road-agents/README.md": "ORG_PLACEHOLDER",
@@ -139,6 +147,30 @@ def single_approver_files(app: Path, factory: Path | None = None, agents: Path |
         if repo is not None and is_real_dir(repo):
             files[repo / rel] = _relaxed_ruleset(repo / rel)
     return files
+
+
+SCORECARD_CONTEXT = "scorecard / assessed"
+# In central mode the platform's scorecard callers are not needed: the factory's poller assesses every ready PR. configure.py removes them.
+SCORECARD_CALLERS = ("hello-app/.github/workflows/scorecard.yml", "golden-road-portal/.github/workflows/scorecard.yml",
+                     "golden-road-agents/skill/templates/workflows/scorecard.yml")  # under bootstrap/
+_ASSESSED_ENTRY = re.compile(r'("context"\s*:\s*"scorecard / assessed"\s*,\s*"integration_id"\s*:\s*)\d+')
+APP_ID = re.compile(r"[1-9][0-9]{0,9}")
+
+
+def scorecard_ruleset(data: bytes, integration_id: int) -> bytes:
+    """The ruleset with `scorecard / assessed` required from the scorecard App (its integration id) instead of the Actions app.
+    Raises ValueError unless exactly one required check is named `scorecard / assessed`. A file written in the usual
+    `{"context": ..., "integration_id": ...}` form keeps its formatting; any other form is rewritten as JSON."""
+    ruleset = json.loads(data.decode("utf-8"))
+    entries = [c for rule in ruleset.get("rules", []) if isinstance(rule, dict) and rule.get("type") == "required_status_checks"
+               for c in (rule.get("parameters") or {}).get("required_status_checks", []) if isinstance(c, dict) and c.get("context") == SCORECARD_CONTEXT]
+    if len(entries) != 1:
+        raise ValueError(f"the ruleset must require {SCORECARD_CONTEXT!r} exactly once (it has {len(entries)})")
+    text = data.decode("utf-8")
+    if len(_ASSESSED_ENTRY.findall(text)) == 1:
+        return _ASSESSED_ENTRY.sub(lambda m: f"{m.group(1)}{integration_id}", text).encode("utf-8")
+    entries[0]["integration_id"] = integration_id
+    return (json.dumps(ruleset, indent=2) + "\n").encode("utf-8")
 
 
 def valid_host(host: str) -> bool:
@@ -352,7 +384,13 @@ def main() -> int:
                    help="the golden-road landing page the AGENTS.md block links to (default https://<github host>/<org>/golden-road-agents)")
     p.add_argument("--approved-models-url", default=None, help="the approved-models policy the AGENTS.md block links to (default: not published yet)")
     p.add_argument("--portal-url", default=None, help="the golden road portal's address (https, no path); golden-road register links to it")
+    p.add_argument("--scorecard-mode", choices=("per-app", "central"), default=None,
+                   help="per-app (default): each app calls the factory's scorecard workflow. central: the factory's poller assesses every ready PR; "
+                        "the rulesets require `scorecard / assessed` from the scorecard App and the apps' scorecard callers are removed")
+    p.add_argument("--scorecard-app-id", default=None, help="the scorecard GitHub App's id (the App ID, not the client ID); required with --scorecard-mode central")
     args = p.parse_args()
+    if args.scorecard_app_id is not None and (not APP_ID.fullmatch(args.scorecard_app_id) or int(args.scorecard_app_id) >= 2**31):
+        sys.exit("invalid --scorecard-app-id (the App ID: a positive whole number below 2147483648)")
     if not ORG.fullmatch(args.org) or len(args.org) > 39:
         sys.exit("invalid --org")
     if not valid_host(args.gateway_host):
@@ -457,6 +495,21 @@ def main() -> int:
         sys.exit(f"bootstrap already configured {'with' if recorded else 'without'} --single-approver; "
                  "restore with git checkout -- bootstrap platform to change it")
     platform["gate2_single_approver"] = args.single_approver
+    from builder.config import scorecard_mode as recorded_scorecard_mode
+    try:
+        recorded_mode = recorded_scorecard_mode(platform)
+    except ValueError as exc:
+        sys.exit(str(exc))
+    mode = args.scorecard_mode or recorded_mode
+    if recorded_mode == "central" and mode != "central":
+        sys.exit("bootstrap already configured with --scorecard-mode central; restore with git checkout -- bootstrap platform to change it")
+    if mode != "central" and args.scorecard_app_id is not None:
+        sys.exit("--scorecard-app-id is only for --scorecard-mode central")
+    app_id = int(args.scorecard_app_id) if args.scorecard_app_id is not None else platform.get("scorecard_app_id")
+    if mode == "central":
+        if app_id is None:
+            sys.exit("--scorecard-mode central needs --scorecard-app-id (the scorecard GitHub App's App ID)")
+        platform["scorecard_mode"], platform["scorecard_app_id"] = "central", app_id
     platform["model_gateway_hosts"] = [args.gateway_host]
     platform["edge_ingress"]["namespace"] = args.edge_namespace
     platform["edge_ingress"]["pod_labels"] = dict(label.split("=", 1) for label in args.edge_label)
@@ -493,10 +546,29 @@ def main() -> int:
         except (ValueError, OSError) as exc:
             sys.exit(f"cannot apply --single-approver: {exc}")
 
+    removals = []
+    if mode == "central":
+        for target in (app, portal_app):
+            if not is_real_dir(target):
+                continue
+            ruleset_path = target / RULESET_REL
+            try:
+                before = changes.get(ruleset_path) or read_regular(ruleset_path)
+                after = scorecard_ruleset(before, app_id)
+            except (ValueError, OSError) as exc:
+                sys.exit(f"cannot pin the scorecard check in {ruleset_path}: {exc}")
+            if after != before:
+                changes[ruleset_path] = after
+        removals = [bootstrap / rel for rel in SCORECARD_CALLERS if os.path.lexists(bootstrap / rel)]
+        for path in removals:
+            changes.pop(path, None)
+
     # Phase 2: write, then regenerate.
     write_bytes_atomic(platform_path, (json.dumps(platform, indent=2) + "\n").encode("utf-8"))
     for path, data in changes.items():
         write_bytes_atomic(path, data)
+    for path in removals:  # never through a link: unlink removes the link itself
+        os.unlink(path)
     for directory in renames:  # deepest first, after the files inside them are written
         try:
             os.rename(directory, directory.parent / args.org)

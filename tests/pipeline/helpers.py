@@ -20,7 +20,41 @@ COMMITTED_CODEOWNERS = """\
 
 DEFAULT_HOST = "github.com"
 DEFAULT_ISSUER = "https://token.actions.githubusercontent.com"
-CONFIGURE_KEYS = ("org", "github_host", "actions_oidc_issuer", "landing_page_url", "approved_models_url", "portal_url")
+CONFIGURE_KEYS = ("org", "github_host", "actions_oidc_issuer", "landing_page_url", "approved_models_url", "portal_url", "scorecard_mode", "scorecard_app_id")
+# The committed per-app scorecard caller (hello-app, the portal and the kit template are the same text). Central mode removes the files;
+# the helpers put this text back. A test keeps it equal to the committed files whenever the live tree is pristine.
+COMMITTED_SCORECARD_CALLER = """\
+# The risk scorecard from the platform's factory repo, called as a reusable workflow (a personal account can't require
+# workflows with a ruleset). It classifies how much human review a pull request needs; it does not gate. The job id is
+# `scorecard`, so the checks are `scorecard / precondition`, `scorecard / assess`, `scorecard / score`,
+# `scorecard / report`, `scorecard / level: <level>` and `scorecard / assessed`. The ruleset requires `scorecard / assessed`.
+# The `types` are the called workflow's, `edited` included: a retargeted base changes the diff, so it is assessed again.
+name: scorecard
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+
+permissions: {}
+
+jobs:
+  scorecard:
+    permissions:
+      contents: read
+      packages: read
+      checks: read
+      statuses: read
+      pull-requests: write
+      issues: write
+      id-token: write
+    uses: ORG_PLACEHOLDER/scorecard-factory/.github/workflows/scorecard.yml@main
+    secrets:
+      SCORECARD_GATEWAY_KEY: ${{ secrets.SCORECARD_GATEWAY_KEY }}
+      SCORECARD_GATEWAY_MODEL: ${{ secrets.SCORECARD_GATEWAY_MODEL }}
+      SCORECARD_GATEWAY_ACCESS_ID: ${{ secrets.SCORECARD_GATEWAY_ACCESS_ID }}
+      SCORECARD_GATEWAY_ACCESS_SECRET: ${{ secrets.SCORECARD_GATEWAY_ACCESS_SECRET }}
+"""
+SCORECARD_INTEGRATION = re.compile(r'("context"\s*:\s*"scorecard / assessed"\s*,\s*"integration_id"\s*:\s*)\d+')
 # The committed text itself, not read from the file: in a configured tree the file holds the org or personal logins.
 COMMITTED_AGENTS_CODEOWNERS = """\
 # Everything here is what agents download and run, and what the stub trusts: every change needs a platform owner's review.
@@ -39,6 +73,22 @@ def unconfigure_platform(platform_dir):
     doc["edge_ingress"] = {"namespace": "replace-me", "pod_labels": {"app": "replace-me"}}
     doc["identity_header"] = "X-replace-me"
     path.write_text(json.dumps(doc, indent=2) + "\n")
+
+
+def _restore_scorecard_caller(path):
+    """Central mode removes the scorecard caller; put the committed text back when it is missing."""
+    path = Path(path)
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(COMMITTED_SCORECARD_CALLER)
+
+
+def _repin_scorecard(ruleset_path):
+    """Central mode pins `scorecard / assessed` to the App; put the Actions app's id back (a file already at 15368 is left alone)."""
+    text = ruleset_path.read_text()
+    new = SCORECARD_INTEGRATION.sub(r"\g<1>15368", text)
+    if new != text:
+        ruleset_path.write_text(new)
 
 
 def _restore_default_approval(app, with_env=True, ruleset_name="main.json"):
@@ -63,6 +113,8 @@ def unconfigure_hello_app(app_dir):
     """Reset hello-app to the committed placeholder state: org placeholders, default approval settings, and the generated
     files (rebuilt by the builder against the unconfigured platform file, which must sit at <app>/../../platform)."""
     app = Path(app_dir)
+    _restore_scorecard_caller(app / ".github/workflows/scorecard.yml")
+    _repin_scorecard(app / ".github/rulesets/main.json")
     for rel in (".github/workflows/ci.yml", ".github/workflows/promote.yml", ".github/workflows/security-scans.yml", ".github/workflows/scorecard.yml"):
         path = app / rel
         path.write_text(re.sub(r"uses: [A-Za-z0-9-]+/(platform-pipeline|security-scans|scorecard-factory)/", r"uses: ORG_PLACEHOLDER/\1/", path.read_text()))
@@ -87,6 +139,7 @@ COMMITTED_FACTORY_CODEOWNERS = """\
 /intake/ @ORG_PLACEHOLDER/security
 /suppressions/ @ORG_PLACEHOLDER/security
 /na/ @ORG_PLACEHOLDER/security
+/config/registration.yaml @ORG_PLACEHOLDER/security
 """
 ZERO_IMAGE = "ghcr.io/ORG_PLACEHOLDER/golden-road-builder@sha256:" + "0" * 64
 SCORECARD_URL_PLACEHOLDER = "https://llm.replace-me.invalid/v1/chat/completions"
@@ -97,6 +150,7 @@ def unconfigure_agents(agents_dir, org, host=None, issuer=None):
     when the live tree is pristine), wrote the GitHub host and OIDC issuer into the files in its HOST_SITES table, and, in
     single-approver mode, relaxed the main ruleset. The setup doc has the owner replace CODEOWNERS with personal logins."""
     agents = Path(agents_dir)
+    _restore_scorecard_caller(agents / "skill/templates/workflows/scorecard.yml")
     if issuer and issuer != DEFAULT_ISSUER:
         for path in agents.rglob("*"):
             if path.is_file() and not path.is_symlink() and issuer.encode() in path.read_bytes():
@@ -117,10 +171,14 @@ def unconfigure_factory(factory_dir, org):
     """Reset bootstrap/scorecard-factory to the committed placeholder state. `org` is the org the live tree was configured
     for (None when it is pristine): configure.py renamed the per-owner record directories to it."""
     factory = Path(factory_dir)
-    workflow = factory / ".github/workflows/scorecard.yml"
-    text = re.sub(r"[A-Za-z0-9_-]+/scorecard-factory", "ORG_PLACEHOLDER/scorecard-factory", workflow.read_text())
-    # The setup doc has the owner pin the real builder digest here.
-    workflow.write_text(re.sub(r"(?m)^  BUILDER_IMAGE: .*$", f"  BUILDER_IMAGE: {ZERO_IMAGE}", text))
+    # Every workflow (scorecard, scorecard-poll, scorecard-assess): the factory's own org, and the builder digest the setup doc has the owner pin.
+    for workflow in sorted((factory / ".github/workflows").glob("*.yml")):
+        if workflow.name == "factory-check.yml":
+            continue  # handled below: only its builder digest is configured
+        text = re.sub(r"[A-Za-z0-9_-]+/scorecard-factory", "ORG_PLACEHOLDER/scorecard-factory", workflow.read_text())
+        workflow.write_text(re.sub(r"(?m)^  BUILDER_IMAGE: .*$", f"  BUILDER_IMAGE: {ZERO_IMAGE}", text))
+    for action in sorted((factory / ".github/actions").glob("*/action.yml")):
+        action.write_text(re.sub(r"uses: [A-Za-z0-9_-]+/scorecard-factory/", "uses: ORG_PLACEHOLDER/scorecard-factory/", action.read_text()))
     (factory / ".github/CODEOWNERS").write_text(COMMITTED_FACTORY_CODEOWNERS)
     config = factory / "config/scorecard.yaml"
     config.write_text(re.sub(r'(?m)^(    url: )".*"$', rf'\1"{SCORECARD_URL_PLACEHOLDER}"', config.read_text()))
@@ -143,6 +201,8 @@ def unconfigure_portal(app_dir):
     app = Path(app_dir)
     if not app.is_dir():
         return
+    _restore_scorecard_caller(app / ".github/workflows/scorecard.yml")
+    _repin_scorecard(app / ".github/rulesets/main.json")
     for rel in (".github/workflows/ci.yml", ".github/workflows/promote.yml", ".github/workflows/security-scans.yml", ".github/workflows/scorecard.yml"):
         path = app / rel
         path.write_text(re.sub(r"uses: [A-Za-z0-9-]+/(platform-pipeline|security-scans|scorecard-factory)/", r"uses: ORG_PLACEHOLDER/\1/", path.read_text()))
@@ -191,6 +251,7 @@ def blank_setup_doc_edits(config, required=()):
     config["agent"]["batching"]["max_turns"] = None  # a deployment may give the model more calls per batch
     config["agent"]["budget"]["max_tokens_per_call"] = None  # a deployment may allow longer replies (a cut-off submission is invalid)
     config["large_change"] = None  # a deployment may set its own large-change limits (T-19)
+    config.pop("central", None)  # a deployment that turns on central review adds this section
     return config
 
 

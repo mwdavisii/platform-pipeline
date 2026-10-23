@@ -1,0 +1,60 @@
+name: scorecard-factory app-token
+description: >-
+  An installation token of the scorecard App for one repository and the named permissions, minted by `golden-road app-token`
+  in the pinned builder image (BUILDER_IMAGE from the workflow). The key reaches only that container; the token is masked.
+inputs:
+  app-id:
+    description: The scorecard App's id (vars.SCORECARD_APP_ID).
+    required: true
+  private-key:
+    description: The App's private key (secrets.SCORECARD_APP_KEY in the scorecard environment).
+    required: true
+  repository:
+    description: The one repository the token is for (owner/name).
+    required: true
+  permissions:
+    description: Space-separated name=level pairs, such as contents=read.
+    required: true
+outputs:
+  token:
+    description: The installation token, masked.
+    value: ${{ steps.mint.outputs.token }}
+  slug:
+    description: The App's slug (its comments are authored by `<slug>[bot]`).
+    value: ${{ steps.mint.outputs.slug }}
+runs:
+  using: composite
+  steps:
+    - id: mint
+      shell: bash
+      env:
+        APP_ID: ${{ inputs.app-id }}
+        APP_KEY: ${{ inputs.private-key }}
+        TARGET: ${{ inputs.repository }}
+        WANT: ${{ inputs.permissions }}
+      run: |
+        set -euo pipefail
+        fail() { echo "::error::app-token: $1"; exit 1; }
+        [[ "$APP_ID" =~ ^[1-9][0-9]{0,9}$ ]] || fail "the App id (repository variable SCORECARD_APP_ID) is not set or not a number"
+        [ -n "$APP_KEY" ] || fail "the App key (SCORECARD_APP_KEY in the scorecard environment) is not set"
+        [[ "$TARGET" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || fail "unexpected repository name"
+        case "/$TARGET/" in */./*|*/../*) fail "unexpected repository name";; esac
+        [[ "$BUILDER_IMAGE" =~ ^[a-z0-9./_-]+@sha256:[0-9a-f]{64}$ && ! "$BUILDER_IMAGE" =~ @sha256:0{64}$ ]] || fail "BUILDER_IMAGE is not a pinned builder image"
+        flags=()
+        for p in $WANT; do
+          [[ "$p" =~ ^[a-z_]+=(read|write)$ ]] || fail "unexpected permission $p"
+          flags+=(--permission "$p")
+        done
+        [ "${#flags[@]}" -gt 0 ] || fail "no permissions named"
+        dir=$(mktemp -d "$RUNNER_TEMP/app-token.XXXXXX")
+        trap 'rm -rf "$dir"' EXIT
+        env -i PATH="$PATH" HOME="$HOME" GOLDEN_ROAD_APP_KEY="$APP_KEY" GITHUB_API_URL="$GITHUB_API_URL" \
+          docker run --rm --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --read-only --tmpfs /tmp --user "$(id -u):$(id -g)" \
+            -e GOLDEN_ROAD_APP_KEY -e GITHUB_API_URL -v "$dir:/out" "$BUILDER_IMAGE" \
+            golden-road app-token --app-id "$APP_ID" --repo "$TARGET" "${flags[@]}" --output /out/token.json
+        token=$(jq -r '.token // ""' "$dir/token.json" 2>/dev/null) || fail "the token file could not be read"
+        [[ "$token" =~ ^ghs_[A-Za-z0-9_]{20,255}$ ]] || fail "the token has an unexpected form"
+        slug=$(jq -r '.app_slug // ""' "$dir/token.json" 2>/dev/null) || fail "the token file could not be read"
+        [[ "$slug" =~ ^[a-z0-9][a-z0-9-]{0,38}$ ]] || fail "the App slug has an unexpected form"
+        echo "::add-mask::$token"
+        { echo "token=$token"; echo "slug=$slug"; } >> "$GITHUB_OUTPUT"

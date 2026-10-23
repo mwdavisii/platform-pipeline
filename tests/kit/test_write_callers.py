@@ -160,3 +160,58 @@ def test_a_job_that_calls_the_platform_workflow_is_the_platforms_even_when_quote
     (app / ".github/workflows/ci.yml").write_text("jobs:\n  x:\n    uses: 'example-org/platform-pipeline/.github/workflows/golden-road.yml@v1'  # old pin\n")
     code, doc = write(skill, app)
     assert code == 0 and "ci.yml" in doc["written"]
+
+
+# ---- central review: the bundle may carry no scorecard caller ----
+
+def central_bundle(tmp_path):
+    """The skill as a central-mode configure.py leaves it: no templates/workflows/scorecard.yml. Returns (skill, the platform's scorecard.yml text)."""
+    skill = configured(tmp_path)
+    template = skill / "templates/workflows/scorecard.yml"
+    text = template.read_text().replace("__APP_NAME__", "notes-api")
+    template.unlink()
+    return skill, text
+
+
+def test_a_bundle_without_the_scorecard_template_writes_three_callers_and_removes_the_platform_s_scorecard_caller(tmp_path, app):
+    skill, platform_scorecard = central_bundle(tmp_path)
+    (app / ".github/workflows").mkdir(parents=True)
+    (app / ".github/workflows/scorecard.yml").write_text(platform_scorecard)
+    code, doc = write(skill, app)
+    assert code == 0, doc
+    assert doc["written"] == ["ci.yml", "promote.yml", "security-scans.yml"] and doc["removed"] == ["scorecard.yml"]
+    assert not (app / ".github/workflows/scorecard.yml").exists()
+    assert sorted(p.name for p in (app / ".github/workflows").iterdir()) == ["ci.yml", "promote.yml", "security-scans.yml"]
+    code, doc = write(skill, app)
+    assert code == 0 and doc["written"] == [] and doc["removed"] == [] and doc["unchanged"] == ["ci.yml", "promote.yml", "security-scans.yml"]
+
+
+def test_a_user_owned_scorecard_yml_is_left_alone_when_the_bundle_has_no_template(tmp_path, app):
+    skill, _ = central_bundle(tmp_path)
+    (app / ".github/workflows").mkdir(parents=True)
+    (app / ".github/workflows/scorecard.yml").write_text("name: mine\non: push\njobs: {}\n")
+    code, doc = write(skill, app)
+    assert code == 0 and doc["removed"] == [] and (app / ".github/workflows/scorecard.yml").read_text() == "name: mine\non: push\njobs: {}\n"
+
+
+def test_a_linked_scorecard_yml_is_never_removed_through_the_link(tmp_path, app):
+    skill, text = central_bundle(tmp_path)
+    (tmp_path / "target.yml").write_text(text)
+    (app / ".github/workflows").mkdir(parents=True)
+    (app / ".github/workflows/scorecard.yml").symlink_to(tmp_path / "target.yml")
+    code, doc = write(skill, app)
+    assert code == 3 and doc["status"] == "error" and (tmp_path / "target.yml").read_text() == text
+    assert not (app / ".github/workflows/ci.yml").exists(), "nothing was written"
+
+
+def test_a_full_bundle_still_writes_four(tmp_path, app):
+    code, doc = write(configured(tmp_path), app)
+    assert code == 0 and doc["written"] == NAMES and doc["removed"] == []
+
+
+@pytest.mark.parametrize("missing", ["ci.yml", "promote.yml", "security-scans.yml"])
+def test_a_bundle_missing_a_required_template_exits_3_and_writes_nothing(tmp_path, app, missing):
+    skill = configured(tmp_path)
+    (skill / "templates/workflows" / missing).unlink()
+    code, doc = write(skill, app)
+    assert code == 3 and missing in doc["message"] and not (app / ".github").exists()

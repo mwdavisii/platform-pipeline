@@ -55,3 +55,10 @@ def test_a_count_above_twenty_is_valid():
     doc = copy.deepcopy(EVENT)
     doc["signals"][0]["count"] = 35
     assert validate("re-review-event.v1", doc) == []
+
+
+def test_t21_is_a_valid_trigger_signal():
+    doc = copy.deepcopy(EVENT)
+    doc["signals"].append({"id": "T-21", "kind": "trigger", "level": "security_review",
+                           "summary": "Registered as low/internal; this change needs at least moderate/internal", "count": 1})
+    assert validate("re-review-event.v1", doc) == []

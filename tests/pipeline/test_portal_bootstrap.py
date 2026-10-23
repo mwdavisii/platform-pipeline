@@ -31,9 +31,10 @@ def test_the_portal_lock_pins_every_direct_dependency_with_hashes():
 
 
 def test_the_portal_s_vendored_schemas_are_the_contracts():
-    for name in ("intake.v2.json", "registration-draft.v1.json", "identity-link.v1.json"):
+    names = ("builder-spec.v1.json", "identity-link.v1.json", "intake.v2.json", "registration-draft.v1.json", "registration-evidence.v1.json", "registration-rules.v1.json")
+    for name in names:
         assert (PORTAL / "portal/schemas" / name).read_bytes() == (ROOT / "src/contracts/schemas" / name).read_bytes(), name
-    assert sorted(p.name for p in (PORTAL / "portal/schemas").glob("*.json")) == ["identity-link.v1.json", "intake.v2.json", "registration-draft.v1.json"]
+    assert sorted(p.name for p in (PORTAL / "portal/schemas").glob("*.json")) == sorted(names)
 
 
 def test_the_start_here_paste_block_is_the_agents_readme_block_word_for_word():

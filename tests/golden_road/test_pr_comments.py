@@ -179,3 +179,10 @@ def test_markers_match_the_renderers():
     assert pc.MARKERS["scorecard"] == report_md.MARKER
     for tool in ("semgrep", "trivy"):
         assert sr.markdown(tool, [], "error", None).splitlines()[0] == pc.MARKERS[tool]
+
+
+def test_scorecard_comment_parses_a_t21_reason_with_its_registered_and_needed_values():
+    summary = "Registered as low/internal; this change needs at least moderate/internal (signals: write_roles, other_egress)"
+    reasons = [{"trigger": "T-21", "level": "security_review", "summary": summary, "refs": []}]
+    text = report_md.render(reporters._card(reasons=reasons, level="security_review"), reporters.TEXTS, reporters.NAMES, reporters.BLOCKING)
+    assert [(r["trigger"], r["summary"]) for r in pc.parse_scorecard(text)["reasons"]] == [("T-21", summary)]

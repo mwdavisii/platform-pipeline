@@ -1,0 +1,81 @@
+# Central review (the poller): every five minutes (GitHub's minimum), on main only, it lists the open pull requests of every
+# repo registered in intake/, marks forks and red Gate 1 heads on the PR, and starts one scorecard-assess run per ready head, up
+# to config central.max_in_flight. Inert until the scorecard App exists: without the repository variable SCORECARD_APP_ID no
+# runner starts, and without config central the poll does nothing. The schedule is this cron; change it with a factory PR.
+name: scorecard-poll
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: scorecard-poll
+  cancel-in-progress: false
+
+env:
+  BUILDER_IMAGE: ghcr.io/mwdavisii/golden-road-builder@sha256:827001dcbad38a1258a92e65f24993af36c797deda70a2462e7dfce07c59fdca
+  ASSESS_WORKFLOW: scorecard-assess.yml
+
+jobs:
+  poll:
+    # A job-level `if` can't read environment variables, so the App id is a repository variable (it is not a secret).
+    if: github.ref == 'refs/heads/main' && vars.SCORECARD_APP_ID != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: scorecard
+    permissions:
+      contents: read
+      packages: read
+      # Starts scorecard-assess with workflow_dispatch and counts its runs in flight (GITHUB_TOKEN may do both).
+      actions: write
+    steps:
+      - name: Refuse the placeholder builder image
+        run: |
+          set -euo pipefail
+          if [[ ! "$BUILDER_IMAGE" =~ ^[a-z0-9./_-]+@sha256:[0-9a-f]{64}$ || "$BUILDER_IMAGE" =~ @sha256:0{64}$ ]]; then
+            echo "::error::BUILDER_IMAGE in scorecard.yml is not a pinned builder image. Release the builder image and pin its digest first."
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: factory
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Pull the builder image and log out
+        run: |
+          set -euo pipefail
+          docker pull -q "$BUILDER_IMAGE" > /dev/null
+          docker logout ghcr.io
+
+      # The App key goes to this one step, and from it only into the container, under env -i, as an environment variable.
+      - name: Poll the registered repositories
+        env:
+          APP_ID: ${{ vars.SCORECARD_APP_ID }}
+          APP_KEY: ${{ secrets.SCORECARD_APP_KEY }}
+          FACTORY_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$APP_ID" =~ ^[1-9][0-9]{0,9}$ ]] || { echo "::error::the repository variable SCORECARD_APP_ID is not an App id"; exit 1; }
+          mkdir -p out
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          set +e
+          env -i PATH="$PATH" HOME="$HOME" SCORECARD_APP_ID="$APP_ID" GOLDEN_ROAD_APP_KEY="$APP_KEY" GITHUB_TOKEN="$FACTORY_TOKEN" GITHUB_API_URL="$GITHUB_API_URL" \
+            docker run --rm --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --read-only --tmpfs /tmp --user "$(id -u):$(id -g)" \
+              -e SCORECARD_APP_ID -e GOLDEN_ROAD_APP_KEY -e GITHUB_TOKEN -e GITHUB_API_URL -v "$PWD/factory:/factory:ro" -v "$PWD/out:/out" "$BUILDER_IMAGE" \
+              scorecard poll --factory /factory --factory-repo "$GITHUB_REPOSITORY" --workflow "$ASSESS_WORKFLOW" --ref main --run-url "$run_url" --out /out/poll.json
+          rc=$?
+          set -e
+          if [ -s out/poll.json ]; then
+            { echo "### Scorecard poll"; echo; jq -r '"central: \(.central)", "", (.actions // [] | .[] | "- \(.repo)#\(.pr // "?") \(.action): \(.reason)"), (.errors // [] | .[] | "- error: \(.)"), (.per_app // [] | if length > 0 then "- per-app, not polled: " + join(", ") else empty end)' out/poll.json; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$rc"

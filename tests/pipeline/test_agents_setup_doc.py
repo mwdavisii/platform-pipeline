@@ -352,7 +352,8 @@ def test_the_exact_commands_the_runs_and_the_fixes_depend_on():
 
 def test_the_new_platform_keys_the_checks_allow_are_exactly_the_ones_configure_writes_by_default():
     from helpers import CONFIGURE_KEYS
-    written = set(CONFIGURE_KEYS) - {"org", "approved_models_url", "portal_url"}  # org was already there; the models link and the portal address have no default
+    # org was already there; the models link and the portal address have no default; the two scorecard_* keys are written only by --scorecard-mode central
+    written = set(CONFIGURE_KEYS) - {"org", "approved_models_url", "portal_url", "scorecard_mode", "scorecard_app_id"}
     thirteen = step_13()
     for text in (thirteen[thirteen.index("### 13.2"):thirteen.index("### 13.3")], sub("14.1")):
         sentence = re.search(r"diff only adds ([^.]*)\.", " ".join(text.split())).group(1)

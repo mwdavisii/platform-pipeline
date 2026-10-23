@@ -28,8 +28,8 @@
     "coverage_threshold": {"type": "number", "minimum": 0, "maximum": 100},
     "triggers": {
       "type": "object", "additionalProperties": false,
-      "required": ["T-1", "T-2", "T-3", "T-4", "T-5", "T-6", "T-7", "T-8", "T-9", "T-10", "T-11", "T-12", "T-14", "T-15", "T-16", "T-17", "T-18", "T-19"],
-      "patternProperties": {"^T-(1[0-2]|1[4-9]|[1-9])$": {"$ref": "#/$defs/trigger_level"}}
+      "required": ["T-1", "T-2", "T-3", "T-4", "T-5", "T-6", "T-7", "T-8", "T-9", "T-10", "T-11", "T-12", "T-14", "T-15", "T-16", "T-17", "T-18", "T-19", "T-21"],
+      "patternProperties": {"^T-(1[0-2]|1[4-9]|21|[1-9])$": {"$ref": "#/$defs/trigger_level"}}
     },
     "large_change": {
       "type": "object", "additionalProperties": false, "required": ["lines", "files"],
@@ -163,7 +163,12 @@
           }
         }
       }
-    }
+    },
+    "central": {"type": "object", "additionalProperties": false, "required": ["max_in_flight", "assess_timeout_minutes"],
+      "description": "Central review: the factory's scorecard-poll and scorecard-assess workflows. Absent: the poller does nothing. The schedule is the cron in scorecard-poll.yml.",
+      "properties": {"max_in_flight": {"type": "integer", "minimum": 1, "maximum": 20},
+                     "assess_timeout_minutes": {"type": "integer", "minimum": 340, "maximum": 1440,
+                                                "description": "A queued check older than this is picked up again; above the assess workflow's job timeouts combined (310)."}}}
   },
   "$defs": {
     "asvs_level": {"enum": [1, 2, 3]},

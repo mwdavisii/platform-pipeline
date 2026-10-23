@@ -80,3 +80,35 @@ def test_gate2_single_approver_is_false_by_default_and_in_the_platform_file():
 def test_gate2_single_approver_must_be_a_strict_boolean(value):
     with pytest.raises(ValueError):
         gate2_single_approver({"gate2_single_approver": value})
+
+
+# ---- central review: the scorecard mode ----
+
+def test_scorecard_mode_defaults_to_per_app():
+    from builder.config import scorecard_mode
+    assert scorecard_mode({}) == "per-app"
+    assert scorecard_mode({"scorecard_mode": "central"}) == "central"
+    assert "scorecard_mode" not in load_platform()
+    root = json.loads((Path(__file__).resolve().parents[2] / "platform/platform.json").read_text())
+    assert "scorecard_mode" not in root and "scorecard_app_id" not in root  # per-app when committed; configure.py --scorecard-mode central records it
+
+
+def test_central_mode_needs_a_positive_app_id():
+    from builder.config import scorecard_app_id
+    assert scorecard_app_id({"scorecard_mode": "central", "scorecard_app_id": 5}) == 5
+    for bad in ({"scorecard_app_id": 0}, {"scorecard_app_id": True}, {"scorecard_app_id": "5"}, {"scorecard_app_id": -1}, {"scorecard_app_id": 2**31}, {}):
+        with pytest.raises(ValueError):
+            scorecard_app_id({"scorecard_mode": "central", **bad})
+
+
+def test_per_app_mode_has_no_app_id():
+    from builder.config import scorecard_app_id
+    assert scorecard_app_id({}) is None
+    assert scorecard_app_id({"scorecard_mode": "per-app", "scorecard_app_id": 5}) is None
+
+
+@pytest.mark.parametrize("value", ["", "Central", "both", None, True, 1])
+def test_an_unknown_mode_is_refused(value):
+    from builder.config import scorecard_mode
+    with pytest.raises(ValueError):
+        scorecard_mode({"scorecard_mode": value})

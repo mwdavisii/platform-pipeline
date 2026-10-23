@@ -1,0 +1,11 @@
+# Security's floor for portal registrations. The portal's collector reads it from main. factory-check validates it.
+schema: registration-rules/v1
+no_spec: {tier: high, data_classification: restricted}
+classification_tier: {public: low, internal: low, restricted: high, phi: high}   # the tier a classification needs at least
+raise_to:                       # each signal raises the floor tier to at least this
+  write_roles: moderate
+  secret_env: moderate
+  model_gateway_egress: moderate
+  other_egress: moderate
+  many_dependencies: moderate   # more than many_dependencies_over
+many_dependencies_over: 50

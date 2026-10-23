@@ -112,10 +112,10 @@ def test_no_sample_is_a_live_record():
 def assert_codeowners_protect_the_records(factory):
     lines = [l.split() for l in (Path(factory) / ".github/CODEOWNERS").read_text().splitlines() if l.strip() and not l.startswith("#")]
     owners = {line[0]: line[1:] for line in lines}
-    assert set(owners) == {"*", "/intake/", "/suppressions/", "/na/"}
+    assert set(owners) == {"*", "/intake/", "/suppressions/", "/na/", "/config/registration.yaml"}
     assert all(o for o in owners.values())
     if all(o.count("/") == 1 for os_ in owners.values() for o in os_):  # every owner is an @org/team: security must be a different team
-        for path in ("/intake/", "/suppressions/", "/na/"):
+        for path in ("/intake/", "/suppressions/", "/na/", "/config/registration.yaml"):
             assert owners[path] != owners["*"], f"{path} needs the security team, not only platform review"
     else:  # owners are users (a personal account, or single-approver mode): one set of people may own everything, but every path must be listed
         assert not any("/" in o[1:] for os_ in owners.values() for o in os_)
@@ -207,8 +207,9 @@ def test_the_intake_action_is_one_bash_step_with_no_actions_of_its_own():
     doc = yaml.safe_load(ACTION.read_text())
     assert doc["runs"]["using"] == "composite"
     [s] = doc["runs"]["steps"]
-    assert s["shell"] == "bash" and "uses" not in s and s["env"] == {"DEST": "${{ inputs.path }}"}
-    assert doc["inputs"] == {"path": {"description": doc["inputs"]["path"]["description"], "required": False, "default": "factory"}}
+    assert s["shell"] == "bash" and "uses" not in s and s["env"] == {"DEST": "${{ inputs.path }}", "REPO": "${{ inputs.repository }}"}
+    assert doc["inputs"] == {"path": {"description": doc["inputs"]["path"]["description"], "required": False, "default": "factory"},
+                             "repository": {"description": doc["inputs"]["repository"]["description"], "required": False, "default": "${{ github.repository }}"}}
     assert doc["outputs"]["path"]["value"] == "${{ steps.copy.outputs.path }}"
     assert "${{" not in s["run"] and s["run"].lstrip().startswith("set -euo pipefail")
 
@@ -231,7 +232,7 @@ def run_action(tmp_path, repo="o/app", dest="factory", factory=None):
     work = tmp_path / "work"
     work.mkdir(exist_ok=True)
     [s] = yaml.safe_load(ACTION.read_text())["runs"]["steps"]
-    env = {"PATH": "/usr/bin:/bin", "DEST": dest, "GITHUB_REPOSITORY": repo, "GITHUB_ACTION_PATH": str(factory / ".github/actions/intake"),
+    env = {"PATH": "/usr/bin:/bin", "DEST": dest, "REPO": repo, "GITHUB_ACTION_PATH": str(factory / ".github/actions/intake"),
            "GITHUB_OUTPUT": str(tmp_path / "output")}
     out = subprocess.run(["bash", "-c", s["run"]], cwd=work, capture_output=True, text=True, env=env)
     return out, work / dest
@@ -247,6 +248,12 @@ def test_the_action_copies_only_the_calling_repo_s_records(tmp_path):
     assert tree(dest) == ["config/scorecard.yaml", "intake/o/app.yaml", "na/o/app.yaml", "suppressions/o/app/s1.json"]
     assert (dest / "intake/o/app.yaml").read_text() == "app intake\n"
     assert (tmp_path / "output").read_text() == "path=factory\n"
+
+
+def test_the_action_copies_the_named_repository_s_records(tmp_path):
+    out, dest = run_action(tmp_path, repo="o/other")
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert tree(dest) == ["config/scorecard.yaml", "intake/o/other.yaml", "na/o/other.yaml", "suppressions/o/other/s2.json"]
 
 
 def test_an_app_with_no_records_gets_only_the_config(tmp_path):
@@ -584,8 +591,8 @@ def test_the_documented_pin_command_leaves_no_placeholder_digest_anywhere(tmp_pa
     ref = "ghcr.io/acme/golden-road-builder@sha256:" + "ab" * 32
     root = pin_everywhere(tmp_path, text, {"<you>": "acme", "<digest>": "ab" * 32})
     assert_pinned_everywhere(root, ref, text)
-    # the factory has two workflows that run the image, and the pin reaches both
-    for name in ("scorecard.yml", "factory-check.yml"):
+    # the factory has these workflows that run the image, and the pin reaches all of them
+    for name in ("scorecard.yml", "scorecard-poll.yml", "scorecard-assess.yml", "factory-check.yml"):
         assert ref in (root / "bootstrap/scorecard-factory/.github/workflows" / name).read_text()
 
 
@@ -655,3 +662,20 @@ def test_the_poc_doc_creates_main_review_before_it_replaces_main():
     assert post < put
     assert 'select(.source_type=="Repository"' in step and "configure.py" in step
     assert "to be confirmed live" in step and "fails closed" in step
+
+
+def test_the_factory_s_registration_rules_are_valid_and_security_owns_them():
+    from scorecard.config import load_registration_rules
+    rules = load_registration_rules(FACTORY)
+    assert rules["no_spec"] == {"tier": "high", "data_classification": "restricted"} and rules["many_dependencies_over"] == 50
+    owners = (FACTORY / ".github/CODEOWNERS").read_text()
+    if "ORG_PLACEHOLDER" in owners or re.search(r"^/config/registration\.yaml\s+@\S+/\S+", owners, re.M):  # team owners: the security team
+        assert re.search(r"^/config/registration\.yaml\s+.*security", owners, re.M)
+    else:  # a configured single-owner tree names the owner login; the path must still have an explicit owner
+        assert re.search(r"^/config/registration\.yaml\s+@\S+", owners, re.M)
+
+
+def test_the_readme_names_the_registration_rules_and_the_0_3_11_pin_rule():
+    text = " ".join((FACTORY / "README.md").read_text().split())
+    assert "`config/registration.yaml`" in text and "`registration-rules/v1`" in text
+    assert "Builder 0.3.11 requires `config/registration.yaml`" in text and "same pull request" in text

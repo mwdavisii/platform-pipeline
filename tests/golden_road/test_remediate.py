@@ -196,8 +196,8 @@ def test_scorecard_levels():
 
 
 def test_the_re_review_triggers_are_reviewer_items_with_nothing_to_fix():
-    doc = run([check("scorecard / level: elevated", "pass", "SUCCESS")], {"scorecard": scorecard_comment(("T-17", "T-18", "T-19"))})
-    for trigger in ("T-17", "T-18", "T-19"):
+    doc = run([check("scorecard / level: elevated", "pass", "SUCCESS")], {"scorecard": scorecard_comment(("T-17", "T-18", "T-19", "T-21"))})
+    for trigger in ("T-17", "T-18", "T-19", "T-21"):
         item = only(doc, rule_id=trigger)
         assert item["owner"] == "reviewer" and item["category"] == "needs-human"
         assert item["guidance"].endswith(remediate.TRIGGER_NOTES[trigger])
@@ -316,3 +316,8 @@ def test_rerun_commands_only_for_platform_workflows():
 def test_drift_evidence_has_each_rule_id_unescaped_once(valid_finding):
     item = only(run([check(DRIFT)], {"drift": drift_comment(valid_finding, rule="builder.a_b-c")}), category="fix")
     assert "builder.a_b-c at AGENTS.md:3" in item["evidence"]
+
+
+def test_t21_says_the_registration_is_raised_in_the_portal_after_merging():
+    assert "after merging, ask for the registration to be raised in the portal" in remediate.TRIGGER_NOTES["T-21"]
+    assert remediate.TRIGGER_NOTES["T-21"].endswith("nothing to fix in code.")

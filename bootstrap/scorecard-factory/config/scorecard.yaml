@@ -34,6 +34,7 @@ triggers:
   T-17: elevated
   T-18: elevated
   T-19: elevated
+  T-21: security_review
 
 # T-19 fires above either limit: changed lines (added plus removed) or changed files, from the base and head diff.
 large_change: {lines: 1000, files: 40}

@@ -35,7 +35,7 @@ Create an OAuth2/OpenID provider and an application for the portal:
 | Repository permissions | Metadata: read. Contents: read. Actions: read. Checks: read. | Contents: write. Pull requests (`pull_requests`): write. Metadata: read. Checks: read. Actions (`actions`): read (to trace a check run to its workflow run). Administration (`administration`): read (only to read the bypass lists the writer checks). |
 | Organization permissions | Members (`members`): read | none |
 | Repositories | all the platform repositories | **selected: `mwdavisii/scorecard-factory` only** |
-| Note | Contents, Actions and Checks read are for the planned collectors (the minimal collector uses only repository admins). Members read has no effect on a personal account (there is no organization). | |
+| Note | Contents read is used by the evidence collector: it reads each registered repo's default branch and the factory's `config/registration.yaml`. Actions and Checks read are for the planned collectors. Members read has no effect on a personal account (there is no organization). | |
 | User authorization | the read App's OAuth client signs a person's GitHub login in. Callback URL: `https://viber.mwdavisii.com/link/github/callback` | none; no OAuth, no webhook |
 
 Generate one private key for each. Note each App's id, and the id of each installation (the number at the end of the installation's settings URL). Put the four ids in `kustomization.yaml`, the read App's OAuth client id as `PORTAL_GITHUB_OAUTH_CLIENT_ID`, and everything secret in the Secrets below. Turn webhooks off on both.
@@ -59,13 +59,14 @@ The builder's baseline policy admits the web pods' port from the edge named in t
 | Variable | Used by | Value |
 |---|---|---|
 | `PORTAL_BASE_URL` | web | `https://viber.mwdavisii.com` |
-| `PORTAL_ORG` | web, writer | `mwdavisii` |
+| `PORTAL_ORG` | web, writer, collector | `mwdavisii` |
 | `PORTAL_GITHUB_HOST` | web, writer, collector | `github.com` |
 | `PORTAL_ROLE_GROUPS` | web, writer | `{"admin": ["golden-road-admins"], "ops": ["golden-road-ops"]}` |
 | `PORTAL_OIDC_ISSUER` | web | **REPLACE**: Authentik issuer URL |
 | `PORTAL_OIDC_CLIENT_ID` | web | **REPLACE** |
 | `PORTAL_GITHUB_OAUTH_CLIENT_ID` | web | **REPLACE**: the read App's OAuth client id |
 | `PORTAL_READ_APP_ID`, `PORTAL_READ_INSTALLATION_ID` | collector | **REPLACE** |
+| `PORTAL_MODEL_GATEWAY_HOSTS` | collector | **REPLACE**: the platform's `model_gateway_hosts` (`platform/platform.json`), comma-separated. A host that is missing here is counted as other egress, which raises the floor the same way, so a mistake fails safe. It must equal the platform's `model_gateway_hosts`: the scorecard (T-21) reads `platform.json`, so a difference makes the portal's floor and the scorecard's floor disagree |
 | `PORTAL_WRITE_APP_ID`, `PORTAL_WRITE_INSTALLATION_ID` | writer | **REPLACE** |
 
 ### Secrets (`secrets.example.yaml`, applied by you, never by the kit)
@@ -172,5 +173,5 @@ curl -si https://viber.mwdavisii.com/ -H 'X-Platform-Roles: nobody' | head -1   
 - **Unconfigured mode.** With a missing or invalid web setting the pod starts and reports healthy, but serves only 503 and `/healthz` says the portal is not configured, naming the settings (never values). Confirm `/healthz` does NOT report unconfigured; if it does, fix the named settings in the Deployment's environment and Secrets and restart.
 - **Sign in** at `https://viber.mwdavisii.com/`: you reach Authentik and come back through `/auth/callback`; the people page is for `golden-road-admins` members only.
 - **Writer.** `kubectl -n golden-road-portal logs deploy/golden-road-portal-writer`. Until the scorecard factory's `main` ruleset is split into a checks ruleset and a review-only ruleset (`main-review`, the one ruleset the write App may bypass, by pull request only), the writer prints `writer: refusing to start: ...` with the reasons and exits 3, and the pod restarts in a loop. That is the safe outcome: do not weaken the check to make it pass. Fix the factory's rulesets (the factory's own docs), and the next restart runs. Exit code 2 means a missing or bad setting or key: the message names the variable and never prints a key.
-- **Collector.** Its log line `collectors: repo_admins: N rows` appears every five minutes. A `failed: 401` or `404` means the read App's id, installation id or key is wrong.
+- **Collector.** Its log lines `collectors: repo_admins: N rows` and `collectors: evidence: N computed, M waiting` appear every five minutes (`M waiting (rules_missing)` means the factory has no `config/registration.yaml` on its default branch yet). A `failed: 401` or `404` means the read App's id, installation id or key is wrong.
 - **Network.** From the writer pod nothing but Postgres, DNS, `api.github.com` and `github.com` answers; the web pod reaches only Postgres, DNS, GitHub and the issuer host. `cilium-dbg` or Hubble shows drops if a host is missing.

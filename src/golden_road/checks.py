@@ -31,6 +31,14 @@ DEFAULT_RETRY_SECONDS = 120
 _SEVERITY = {"success": 0, "pending": 1, "missing": 2, "failure": 3}
 
 
+class APIError(InputError):
+    """A GitHub API failure that carries the HTTP status, so a caller can tell a 404 from a 502."""
+
+    def __init__(self, message, status=None):
+        super().__init__(message)
+        self.status = status
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     """The token must never ride a redirect to another host, so no redirect is followed."""
 
@@ -114,12 +122,14 @@ class GitHubAPI:
         return (parts.scheme == self._base.scheme and parts.netloc.lower() == self._base.netloc.lower()
                 and (parts.path + "/").startswith(self._base.path + "/"))
 
+    def _headers(self) -> dict:
+        return {"Authorization": f"Bearer {self.token}", "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28"}
+
     def _get(self, url: str):
         if not self._inside_base(url):
             raise InputError("refusing to follow a GitHub API link to another host")
-        headers = {"Authorization": f"Bearer {self.token}", "Accept": "application/vnd.github+json",
-                   "X-GitHub-Api-Version": "2022-11-28"}
-        request = urllib.request.Request(url, headers=headers)
+        request = urllib.request.Request(url, headers=self._headers())
         deadline = self.deadline if self.deadline is not None else self.clock() + DEFAULT_RETRY_SECONDS
         delay = 1
         while True:
@@ -130,8 +140,8 @@ class GitHubAPI:
                 break
             except urllib.error.HTTPError as exc:
                 if not (exc.code >= 500 or exc.code == 429):
-                    raise InputError(f"GitHub API returned {exc.code}") from exc
-                failure = InputError(f"GitHub API returned {exc.code}")
+                    raise APIError(f"GitHub API returned {exc.code}", exc.code) from exc
+                failure = APIError(f"GitHub API returned {exc.code}", exc.code)
                 cause: BaseException = exc
             except (urllib.error.URLError, OSError) as exc:
                 failure = InputError(f"GitHub API unreachable: {type(exc).__name__}")
@@ -143,6 +153,32 @@ class GitHubAPI:
             delay = min(delay * 2, MAX_BACKOFF)
         try:
             return json.loads(body), link
+        except (ValueError, RecursionError) as exc:
+            raise InputError("GitHub API returned invalid JSON") from exc
+
+    def get(self, path: str):
+        return self._get(self.api_url + path)[0]
+
+    def send(self, method: str, path: str, body: dict | None = None):
+        """One POST, PATCH or PUT, never retried: a POST that reached GitHub must not be made twice. The JSON answer, or None."""
+        if method not in ("POST", "PATCH", "PUT"):
+            raise InputError(f"unsupported method {method!r}")
+        url = f"{self.api_url}{path}"
+        if not self._inside_base(url):
+            raise InputError("refusing to send to a URL outside the GitHub API")
+        request = urllib.request.Request(url, data=json.dumps(body or {}).encode("utf-8"), method=method,
+                                         headers={**self._headers(), "Content-Type": "application/json"})
+        try:
+            with self.opener(request, timeout=30) as response:
+                raw = response.read(5_000_000)
+        except urllib.error.HTTPError as exc:
+            raise APIError(f"GitHub API returned {exc.code}", exc.code) from exc
+        except (urllib.error.URLError, OSError) as exc:
+            raise InputError(f"GitHub API unreachable: {type(exc).__name__}") from exc
+        if not raw.strip():
+            return None
+        try:
+            return json.loads(raw)
         except (ValueError, RecursionError) as exc:
             raise InputError("GitHub API returned invalid JSON") from exc
 

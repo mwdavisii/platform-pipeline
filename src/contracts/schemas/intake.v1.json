@@ -12,6 +12,7 @@
     "tier": {"enum": ["low", "moderate", "high"]},
     "purpose": {"type": "string", "minLength": 10, "maxLength": 4000},
     "owner": {"type": "string", "minLength": 1, "not": {"pattern": "[\\r\\n]"}},
-    "data_classification": {"enum": ["public", "internal", "restricted", "phi"]}
+    "data_classification": {"enum": ["public", "internal", "restricted", "phi"]},
+    "scorecard": {"enum": ["per-app", "central"], "description": "Who runs this repo's scorecard: the app's own caller workflow (per-app, the default when absent) or the factory's poller (central). The poller assesses only repos marked central."}
   }
 }

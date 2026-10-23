@@ -25,7 +25,7 @@ def test_sample_config_loads(config):
         {"blocking": ["V8"]},
         {"coverage_threshold": 170},
         {"triggers": {"T-1": "security_review"}},
-        {"triggers": {**{f"T-{n}": "elevated" for n in (1,2,3,4,5,6,7,8,9,10,11,12,14,15,16,17,18,19)}, "T-9": "standard"}},  # a trigger that fires can't leave the level at standard
+        {"triggers": {**{f"T-{n}": "elevated" for n in (1,2,3,4,5,6,7,8,9,10,11,12,14,15,16,17,18,19,21)}, "T-9": "standard"}},  # a trigger that fires can't leave the level at standard
         {"gate1_checks": [{"name": "drift"}]},
         {"patterns": {"skip_markers": ["("], "suppression_markers": [], "injection": [], "platform_import": [], "test_function": []}},
         {"unknown_key": 1},
@@ -287,6 +287,7 @@ def test_an_api_key_header_is_accepted(factory):
 def test_sample_config_has_the_re_review_settings(config):
     assert config["large_change"] == {"lines": 1000, "files": 40}
     assert {config["triggers"][t] for t in ("T-17", "T-18", "T-19")} == {"elevated"}
+    assert config["triggers"]["T-21"] == "security_review"
 
 
 @pytest.mark.parametrize("edit", [
@@ -299,6 +300,7 @@ def test_sample_config_has_the_re_review_settings(config):
     lambda d: d["triggers"].pop("T-17"),
     lambda d: d["triggers"].pop("T-18"),
     lambda d: d["triggers"].pop("T-19"),
+    lambda d: d["triggers"].pop("T-21"),
     lambda d: d["triggers"].update({"T-20": "elevated"}),
 ])
 def test_the_re_review_settings_are_required_and_checked(factory, edit):
@@ -359,3 +361,82 @@ def test_intake_v2_approved_by_the_person_who_registered_it_is_an_input_error(fa
     (factory / "intake" / "acme" / "notes.yaml").write_text(same)
     with pytest.raises(InputError, match="approved_by"):
         load_intake(factory, "acme/notes")
+
+
+FLOORED = V2 + 'evidence_commit: "' + "e" * 40 + '"\nfloor_tier: moderate\nfloor_classification: internal\n'
+OVERRIDDEN = FLOORED.replace("tier: moderate\npurpose", "tier: low\npurpose") + (
+    "floor_override:\n  by: p_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n  at: \"2026-10-23T12:00:00Z\"\n"
+    "  reason: The spec over-declares egress; checked with the team.\n")
+
+
+@pytest.mark.parametrize("text", [V2, FLOORED, OVERRIDDEN])
+def test_intake_v2_with_and_without_the_floor_fields_loads(factory, text):
+    (factory / "intake/acme/notes.yaml").write_text(text)
+    assert load_intake(factory, "acme/notes")["tier"] in ("low", "moderate")
+
+
+@pytest.mark.parametrize("text, needle", [
+    (FLOORED.replace("floor_classification: internal\n", ""), "all three"),
+    (FLOORED.replace("tier: moderate\npurpose", "tier: low\npurpose"), "below the floor"),
+    (FLOORED.replace("data_classification: internal", "data_classification: public"), "below the floor"),
+    (OVERRIDDEN.replace("\n  by: p_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "\n  by: p_" + "d" * 32), "approved_by"),
+    (OVERRIDDEN.replace('\n  at: "2026-10-23T12:00:00Z"', '\n  at: "2026-10-24T12:00:00Z"'), "approved_at"),
+    (OVERRIDDEN.replace("tier: low\npurpose", "tier: moderate\npurpose"), "not below the floor"),
+    (V2 + "floor_override:\n  by: p_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n  at: \"2026-10-23T12:00:00Z\"\n  reason: " + "r" * 40 + "\n", "without a floor"),
+])
+def test_an_intake_v2_floor_that_does_not_hold_is_an_input_error(factory, text, needle):
+    (factory / "intake/acme/notes.yaml").write_text(text)
+    with pytest.raises(InputError, match=needle):
+        load_intake(factory, "acme/notes")
+
+
+from scorecard.config import load_registration_rules  # noqa: E402
+
+
+def test_the_registration_rules_load(factory):
+    assert load_registration_rules(factory)["no_spec"] == {"tier": "high", "data_classification": "restricted"}
+
+
+@pytest.mark.parametrize("edit, needle", [
+    (lambda t: t.replace("phi: high", "phi: low"), "must not decrease"),
+    (lambda t: t.replace("many_dependencies_over: 50", "many_dependencies_over: 50\nextra: 1"), "registration-rules.v1"),
+    (lambda t: t + "no_spec: {tier: low, data_classification: public}\n", "duplicate key"),
+    (lambda t: "", "registration-rules.v1"),
+])
+def test_bad_registration_rules_are_an_input_error(factory, edit, needle):
+    path = factory / "config/registration.yaml"
+    path.write_text(edit(path.read_text()))
+    with pytest.raises(InputError, match=needle):
+        load_registration_rules(factory)
+
+
+def test_missing_registration_rules_are_an_input_error(factory):
+    (factory / "config/registration.yaml").unlink()
+    with pytest.raises(InputError, match="registration.yaml"):
+        load_registration_rules(factory)
+
+
+def test_registration_rules_over_the_portal_s_read_cap_are_an_input_error(factory):
+    path = factory / "config/registration.yaml"
+    path.write_text(path.read_text() + "#" * 70000 + "\n")
+    with pytest.raises(InputError, match="65536"):
+        load_registration_rules(factory)
+    path.write_text("#" * (65536 - 1) + "\n")
+    with pytest.raises(InputError, match="registration-rules.v1"):  # at the cap it is read, and then it is not valid rules
+        load_registration_rules(factory)
+
+
+@pytest.mark.parametrize("line, ok", [
+    ("scorecard: central", True), ("scorecard: 'central'", False), ('scorecard: "central"', False),
+    ("scorecard: central  # migrated", False), ("scorecard:   central", False),
+])
+def test_the_central_mark_is_one_exact_line_that_the_workflows_grep_reads_the_same_way(factory, line, ok):
+    """The poller reads the YAML; scorecard-assess greps the line. A mark only one of them accepts would make every assess run
+    fail before writing, so factory-check accepts the central mark only as the exact line `scorecard: central`."""
+    path = factory / "intake/acme/notes.yaml"
+    path.write_text(path.read_text().rstrip("\n") + "\n" + line + "\n")
+    if ok:
+        assert load_intake(factory, "acme/notes")["scorecard"] == "central"
+    else:
+        with pytest.raises(InputError, match="scorecard: central"):
+            load_intake(factory, "acme/notes")

@@ -542,3 +542,61 @@ def test_wait_bounds_retries_by_its_own_timeout():
     with pytest.raises(InputError):
         wait(api, REPO, SHA, [R("x")], timeout=20, interval=5, sleep=clock.sleep, clock=clock)
     assert clock.t <= 20 + 1
+
+
+# ---- writes (central review) ----
+import urllib.error  # noqa: E402
+
+from golden_road.checks import APIError  # noqa: E402
+
+
+class Recorder:
+    def __init__(self, body=b'{"id": 5}', code=None):
+        self.requests, self.body, self.code = [], body, code
+
+    def __call__(self, req, timeout):
+        self.requests.append(req)
+        if self.code:
+            raise urllib.error.HTTPError(req.full_url, self.code, "x", {}, None)
+        resp = FakeResponse({})
+        resp.body = self.body
+        return resp
+
+
+def test_send_posts_json_with_the_token_and_returns_the_body():
+    rec = Recorder()
+    api = GitHubAPI("https://api.github.com", "tok", opener=rec)
+    assert api.send("POST", "/repos/o/r/check-runs", {"name": "n"}) == {"id": 5}
+    [req] = rec.requests
+    assert req.get_method() == "POST" and req.full_url == "https://api.github.com/repos/o/r/check-runs"
+    assert json.loads(req.data) == {"name": "n"} and req.headers["Authorization"] == "Bearer tok"
+
+
+def test_send_returns_none_for_an_empty_answer():
+    assert GitHubAPI("https://api.github.com", "t", opener=Recorder(body=b"")).send("POST", "/x", {}) is None
+
+
+def test_send_never_retries_and_reports_the_status():
+    rec = Recorder(code=502)
+    with pytest.raises(APIError) as err:
+        GitHubAPI("https://api.github.com", "t", opener=rec).send("POST", "/x", {})
+    assert err.value.status == 502 and len(rec.requests) == 1
+
+
+@pytest.mark.parametrize("method", ["GET", "DELETE", "post"])
+def test_send_refuses_other_methods(method):
+    with pytest.raises(InputError):
+        GitHubAPI("https://api.github.com", "t", opener=Recorder()).send(method, "/x", {})
+
+
+def test_send_refuses_paths_that_leave_the_api_base():
+    rec = Recorder()
+    with pytest.raises(InputError):
+        GitHubAPI("https://api.github.com", "t", opener=rec).send("POST", "@evil.example/x", {})
+    assert rec.requests == []
+
+
+def test_get_errors_carry_the_status():
+    with pytest.raises(APIError) as err:
+        GitHubAPI("https://api.github.com", "t", opener=Recorder(code=404)).get("/repos/o/r/installation")
+    assert err.value.status == 404

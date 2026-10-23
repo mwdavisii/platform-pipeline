@@ -117,6 +117,11 @@ def push_tree(tmp_path, view_output, readme="demo\n", args=(), env=None, owner_t
     script = tree / "scripts/push-bootstrap.sh"
     script.write_text((ROOT / "scripts/push-bootstrap.sh").read_text())
     script.chmod(0o755)
+    # The script pushes only what git tracks under bootstrap/<name>, so the synthesized tree is a real, committed repo.
+    git = ["/usr/bin/git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false"]
+    subprocess.run([*git, "init", "-q", "-b", "main"], cwd=tree, check=True)
+    subprocess.run([*git, "add", "-A"], cwd=tree, check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "tree"], cwd=tree, check=True)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     calls = tmp_path / "calls"
@@ -131,7 +136,9 @@ case "$*" in
 esac
 exit 0
 """)
-    (bin_dir / "git").write_text(f"#!/bin/sh\necho \"git $*\" >> '{calls}'\nexit 0\n")
+    # ls-files reads the real tree (what gets pushed); every other git call is logged and stubbed.
+    (bin_dir / "git").write_text(f"#!/bin/sh\ncase \" $* \" in *\" ls-files \"*) exec /usr/bin/git \"$@\";; esac\n"
+                                 f"echo \"git $*\" >> '{calls}'\nexit 0\n")
     for stub in bin_dir.iterdir():
         stub.chmod(0o755)
     out = subprocess.run([str(script), "org", "demo", *args], capture_output=True, text=True,
@@ -347,10 +354,10 @@ def test_personal_poc_doc_covers_the_scans_codeql_dependabot_and_the_known_gap()
                    "GOLDEN_ROAD_SCANS_TRIVY", "rulesets --input .github/rulesets/main.json", "Base-image findings", "Gate 1 on a push"):
         assert needle in text, needle
     steps = [int(m) for m in re.findall(r"^## (\d+)\.", text, re.M)]
-    assert steps == list(range(0, 16))
+    assert steps == list(range(0, 17))
     # the scans repo is published before hello-app is pushed, and the builder is released again only after both exist
     assert text.index("## 4. Publish `security-scans`") < text.index("## 5. Create `hello-app`") < text.index("## 11.") < text.index("## 12.")
-    assert text.index("## 13. Risk scorecard") < text.index("## 14. ")
+    assert text.index("## 13. Risk scorecard") < text.index("## 14. ") < text.index("## 16. Central AI review") < text.index("## PoC gaps to record")
 
 
 def test_enforcement_doc_has_neutral_rows_for_the_scans_and_the_forgery_gap():

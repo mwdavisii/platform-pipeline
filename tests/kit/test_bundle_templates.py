@@ -19,6 +19,15 @@ def test_the_caller_templates_are_hello_app_s_with_the_app_name_left_open():
     assert "app_name: __APP_NAME__" in (templates / "ci.yml").read_text()
 
 
+def test_the_bundle_carries_the_callers_the_platform_mode_needs():
+    """Per app (the committed mode) the bundle has all four; configure.py --scorecard-mode central removes scorecard.yml from it,
+    and doctor's list for that mode is the three that remain."""
+    from builder.config import load_platform
+
+    assert sorted(p.name for p in (SKILL / "templates/workflows").iterdir()) == sorted(doctor.callers_for(load_platform()))
+    assert sorted(doctor.callers_for({"scorecard_mode": "central", "scorecard_app_id": 5})) == sorted(set(doctor.CALLERS) - {"scorecard.yml"})
+
+
 def test_the_bundle_has_no_intake_issue_template():
     assert not (SKILL / "templates/intake-issue.md").exists()
 

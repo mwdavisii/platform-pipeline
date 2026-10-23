@@ -8,6 +8,7 @@ from golden_road.io import InputError
 from .asvs import in_any
 from .levels import floor as intake_floor
 from .levels import effective_classification, highest
+from .signals.registration import below_floor
 
 TRIGGER_FOR_VC = {"VC-1": "T-3", "VC-2": "T-4", "VC-3": "T-5", "VC-4": "T-6", "VC-INJ": "T-7", "VC-5": "T-9", "VC-6": "T-10"}
 SUMMARIES = {
@@ -29,6 +30,7 @@ SUMMARIES = {
     "T-17": "Resource tier raised",
     "T-18": "App type changed: new base image and runtime",
     "T-19": "Large change",
+    "T-21": "Registered below what this change needs",
 }
 MAX_REFS = 20
 
@@ -58,13 +60,15 @@ def _finding_ref(finding: dict) -> dict:
 
 def decide(*, config: dict, intake: dict | None, spec_classification: str | None, results: list[dict], findings: list[dict],
            covered: int, total: int, flags: dict, lookup_failures: list[dict], pr_text_hits: list[dict],
-           problems: list[dict] = (), change_size: dict | None = None) -> tuple[str, str, list[dict]]:
+           problems: list[dict] = (), change_size: dict | None = None, registration: dict | None = None) -> tuple[str, str, list[dict]]:
     """Return (level, floor, reasons). `findings` are already suppression-filtered; agent findings carry re-verified evidence.
 
     `covered` and `total` are the raw coverage counts over the agent's set; T-11 compares them unrounded, and no agent set to
     judge (total 0) fires it. The data classification is the more sensitive of the intake's and the builder-spec's.
     `change_size` is `{lines, files}` from the base and head diff, or None when it couldn't be measured (that is a T-14 problem,
-    and T-19 doesn't fire).
+    and T-19 doesn't fire). `registration` is the floor computed from the merge tree ({tier, data_classification, rules}), or None
+    when there is nothing to compare (no intake, or the rules or the tree couldn't be read: a T-14 problem); T-21 fires when the
+    intake's tier or data classification is below it.
     """
     fired: dict[str, list[dict]] = {}
 
@@ -110,6 +114,11 @@ def decide(*, config: dict, intake: dict | None, spec_classification: str | None
     if change_size and (change_size["lines"] > limits["lines"] or change_size["files"] > limits["files"]):
         fire("T-19", {"source": "the base and head diff"})
 
+    if intake is not None and registration and below_floor(intake["tier"], intake["data_classification"],
+                                                           registration["tier"], registration["data_classification"]):
+        for rule in registration["rules"] or ["the computed registration floor"]:
+            fire("T-21", {"source": rule})
+
     reasons = []
     for trigger in sorted(fired, key=lambda t: int(t[2:])):
         level = config["triggers"][trigger]
@@ -123,9 +132,16 @@ def decide(*, config: dict, intake: dict | None, spec_classification: str | None
         if trigger == "T-19":
             lines, files = change_size["lines"], change_size["files"]
             summary += f": {lines} line{'s' * (lines != 1)} in {files} file{'s' * (files != 1)}"
+        if trigger == "T-21":
+            summary = (f"Registered as {intake['tier']}/{intake['data_classification']}; this change needs at least "
+                       f"{registration['tier']}/{registration['data_classification']}")
+            if registration["rules"]:
+                summary += f" (signals: {', '.join(registration['rules'])})"
         if trigger == "T-12" and flags["ignored"]:
             summary += "; the agent answered requirements it was not asked about"
-        if len(refs) > MAX_REFS:
+        if trigger == "T-21":
+            pass  # the summary already names the signals
+        elif len(refs) > MAX_REFS:
             summary += f" (showing {MAX_REFS} of {len(refs)})"
         elif len(refs) > 1:
             summary += f" ({len(refs)} items)"

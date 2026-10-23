@@ -117,3 +117,14 @@ def test_dockerignore_nested_secrets_absent_from_a_real_image(make_app):
     files = eval(out.stdout)  # noqa: S307 - our own printed list of strings
     assert "keep.txt" in files and "certs/ca.crt" in files
     assert not [f for f in files if f.endswith((".env", ".key", ".npmrc"))]
+
+
+def test_the_builder_requirements_pin_pyjwt_and_cryptography_with_hashes():
+    """golden-road app-token (central review) signs RS256 App JWTs in the image: pinned with hashes, like the rest."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2] / "images/builder"
+    assert "pyjwt[crypto]" in (root / "requirements.in").read_text().lower()
+    lines = (root / "requirements.txt").read_text().splitlines()
+    for name in ("pyjwt==", "cryptography==", "cffi==", "pycparser=="):
+        at = next(i for i, line in enumerate(lines) if line.startswith(name))
+        assert lines[at].endswith("\\") and lines[at + 1].strip().startswith("--hash=sha256:")

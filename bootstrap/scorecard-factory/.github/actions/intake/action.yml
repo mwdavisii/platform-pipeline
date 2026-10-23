@@ -7,6 +7,10 @@ inputs:
     description: The directory to create in the workspace. It must not exist yet.
     required: false
     default: factory
+  repository:
+    description: The app repository whose records are copied (owner/name). The per-app workflow leaves it at the calling repository; scorecard-assess passes the PR's repository.
+    required: false
+    default: ${{ github.repository }}
 outputs:
   path:
     description: The directory holding config/, intake/, na/ and suppressions/ for this repository only.
@@ -18,13 +22,14 @@ runs:
       shell: bash
       env:
         DEST: ${{ inputs.path }}
+        REPO: ${{ inputs.repository }}
       run: |
         set -euo pipefail
         [[ "$DEST" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "::error::intake: path must be a plain directory name"; exit 1; }
         { [ ! -e "$DEST" ] && [ ! -L "$DEST" ]; } || { echo "::error::intake: $DEST already exists"; exit 1; }
-        [[ "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "::error::intake: unexpected repository name"; exit 1; }
-        owner="${GITHUB_REPOSITORY%%/*}"
-        name="${GITHUB_REPOSITORY#*/}"
+        [[ "$REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "::error::intake: unexpected repository name"; exit 1; }
+        owner="${REPO%%/*}"
+        name="${REPO#*/}"
         case "$owner" in .|..) echo "::error::intake: unexpected repository name"; exit 1;; esac
         case "$name" in .|..) echo "::error::intake: unexpected repository name"; exit 1;; esac
         # This file is .github/actions/intake/action.yml in the factory, so the factory's root is three levels up.

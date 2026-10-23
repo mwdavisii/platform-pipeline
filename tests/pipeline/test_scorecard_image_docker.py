@@ -94,7 +94,7 @@ def _id(flag):
 
 def test_the_agent_step_and_scorecard_run_in_the_image(builder_image, tmp_path):
     """The agent step's own script with the real image and docker client, forced to --network none: the gateway is unreachable, so the
-    assessment is incomplete and the scorecard is `elevated` with T-14 (AC-10), end to end."""
+    assessment is incomplete (T-14, AC-10), end to end; T-21 also fires because the fixture app has no builder-spec.json."""
     merge, base, head = merge_checkout(tmp_path)
     factory = tmp_path / "factory"
     shutil.copytree(FIXTURE_FACTORY, factory)
@@ -134,7 +134,10 @@ def test_the_agent_step_and_scorecard_run_in_the_image(builder_image, tmp_path):
                          capture_output=True, text=True)
     assert run.returncode == 0, run.stderr
     card = json.loads((tmp_path / "out/scorecard.json").read_text())
-    assert card["level"] == "elevated" and "T-14" in card["triggers_fired"]
+    # T-14: the gateway is unreachable. T-21: this fixture app has no builder-spec.json, so the floor computed from the PR is the
+    # no-spec one (high/restricted), above its moderate/internal registration, which takes the level to security_review.
+    assert card["level"] == "security_review" and {"T-14", "T-21"} <= set(card["triggers_fired"]), card["triggers_fired"]
+    assert any("signals: no_spec" in r["summary"] for r in card["reasons"] if r["trigger"] == "T-21")
     assert (tmp_path / "out/comment.md").read_text().startswith("<!-- golden-road:scorecard -->\n")
     for text in (out.stdout, out.stderr, run.stdout, run.stderr,
                  *((tmp_path / "out" / name).read_text() for name in ("assessment.json", "scorecard.json", "scorecard.md", "comment.md", "github.json", "re-review-event.json"))):

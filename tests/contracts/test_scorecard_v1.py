@@ -92,7 +92,7 @@ def test_optional_sections_may_be_absent_or_null():
     assert validate("scorecard.v1", doc) == []
 
 
-@pytest.mark.parametrize("trigger", ["T-17", "T-18", "T-19"])
+@pytest.mark.parametrize("trigger", ["T-17", "T-18", "T-19", "T-21"])
 def test_the_re_review_triggers_are_valid_trigger_ids(trigger):
     doc = copy.deepcopy(SCORECARD)
     doc["reasons"][0]["trigger"] = trigger

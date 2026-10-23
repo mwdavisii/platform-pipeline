@@ -95,6 +95,29 @@ def show(repo, sha: str, path: str) -> str | None:
     return _git(repo, "cat-file", "blob", spec).stdout.decode("utf-8", "replace")
 
 
+REGULAR_MODES = (b"100644", b"100755")
+
+
+def stored_file(repo, sha: str, path: str, cap: int) -> bytes | None:
+    """The stored bytes of a root file at a commit (never the working tree, which .gitattributes can re-encode), or None if there is
+    no such entry. Raises Unreadable for a symlink (120000), a submodule (160000), a directory, or a blob over `cap` bytes. The
+    blob is read by its object ID with `cat-file blob`, which runs no filter, driver or textconv."""
+    out = _git(repo, "ls-tree", "-z", _sha(sha), "--", path).stdout
+    if not out:
+        return None
+    meta, _, name = out.rstrip(b"\0").partition(b"\t")
+    mode, _, rest = meta.partition(b" ")
+    kind, _, blob = rest.partition(b" ")
+    if os.fsdecode(name) != path:
+        return None
+    if mode not in REGULAR_MODES or kind != b"blob":
+        raise Unreadable(f"{path} is not a regular file")
+    blob_id = _sha(blob.decode())
+    if int(_git(repo, "cat-file", "-s", blob_id).stdout.strip()) > cap:
+        raise Unreadable(f"{path} is larger than {cap} bytes")
+    return _git(repo, "cat-file", "blob", blob_id).stdout
+
+
 def added_lines(repo, base: str, head: str, path: str) -> list[tuple[int, str]]:
     """(line number in head, text) for every line the change adds to `path`."""
     out = _git(repo, *_DIFF, "-U0", _sha(base), _sha(head), "--", path).stdout.decode("utf-8", "replace")

@@ -281,3 +281,15 @@ def test_fixtures_are_built_with_a_hermetic_git():
     assert "GIT_DIR" not in out and "GIT_WORK_TREE" not in out and "GIT_EXTERNAL_DIFF" not in out
     assert GIT_ENV["GIT_CONFIG_GLOBAL"] == "/dev/null" and GIT_ENV["GIT_CONFIG_SYSTEM"] == "/dev/null"
     assert "core.hooksPath=/dev/null" in GIT
+
+
+def test_a_factory_without_registration_rules_is_refused(tmp_path):
+    import shutil
+
+    from scorecard.golden import make_factory
+
+    config = tmp_path / "config"
+    config.mkdir()
+    shutil.copyfile(CONFIG, config / "scorecard.yaml")
+    with pytest.raises(InputError, match="registration rules"):
+        make_factory({"intake": None}, config / "scorecard.yaml", tmp_path / "factory")

@@ -267,3 +267,44 @@ def test_every_configurable_trigger_has_a_summary(config):
 def test_t19_summary_pluralizes(config, size, text):
     _, _, reasons = _decide(config, change_size=size)
     assert reasons[0]["summary"] == text
+
+
+REGISTRATION = {"tier": "moderate", "data_classification": "internal", "rules": ["write_roles", "other_egress"]}
+
+
+@pytest.mark.parametrize("intake, fires", [
+    ({"tier": "low", "data_classification": "internal"}, True),
+    ({"tier": "moderate", "data_classification": "public"}, True),
+    ({"tier": "moderate", "data_classification": "internal"}, False),
+    ({"tier": "high", "data_classification": "phi"}, False),
+])
+def test_t21_fires_when_the_registration_is_below_the_floor(config, intake, fires):
+    _, _, reasons = _decide(config, intake=intake, registration=REGISTRATION)
+    assert [t for t in _triggers(reasons) if t == "T-21"] == (["T-21"] if fires else [])
+
+
+def test_t21_names_the_registered_and_needed_values_and_the_rules_that_fired(config):
+    level, _, reasons = _decide(config, intake={"tier": "low", "data_classification": "internal"}, registration=REGISTRATION)
+    [reason] = [r for r in reasons if r["trigger"] == "T-21"]
+    assert reason["summary"] == "Registered as low/internal; this change needs at least moderate/internal (signals: write_roles, other_egress)"
+    assert reason["refs"] == [{"source": "write_roles"}, {"source": "other_egress"}] and reason["total"] == 2
+    assert reason["level"] == "security_review" and level == "security_review"
+
+
+def test_t21_without_rules_names_only_the_values(config):
+    _, _, reasons = _decide(config, intake={"tier": "low", "data_classification": "public"},
+                            registration={"tier": "low", "data_classification": "internal", "rules": []})
+    [reason] = reasons
+    assert reason["summary"] == "Registered as low/public; this change needs at least low/internal" and reason["refs"]
+
+
+def test_t21_takes_its_level_from_the_config(config):
+    config["triggers"]["T-21"] = "elevated"
+    level, _, reasons = _decide(config, intake={"tier": "low", "data_classification": "internal"}, registration=REGISTRATION)
+    assert [(r["trigger"], r["level"]) for r in reasons] == [("T-21", "elevated")] and level == "elevated"
+
+
+def test_t21_does_not_fire_without_an_intake_record_or_a_floor(config):
+    _, _, reasons = _decide(config, intake=None, registration=REGISTRATION)
+    assert _triggers(reasons) == ["T-8"]
+    assert _decide(config, registration=None) == ("standard", "standard", [])

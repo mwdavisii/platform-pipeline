@@ -19,6 +19,7 @@ from golden_road.io import InputError
 from .agent.prompt import PROMPTS
 
 MAX_YAML_BYTES = 1_000_000
+MAX_RULES_BYTES = 65536  # config/registration.yaml: the portal's collector reads no more
 # Runner credentials that must never reach the review agent's process (SEC-2), so they can't name the gateway credential either.
 RUNNER_TOKENS = ("GITHUB_TOKEN", "GH_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "ACTIONS_RUNTIME_TOKEN",
                  "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_CACHE_URL", "ACTIONS_RESULTS_URL")
@@ -221,6 +222,56 @@ def load_intake(factory, repo: str) -> dict | None:
         raise InputError(f"{path} is for {doc['repo']}, not {repo}")
     if schema == "intake.v2" and doc["approved_by"] == doc["registered_by"]:
         raise InputError(f"{path} is not valid: approved_by is the person who registered it (nobody approves their own registration)")
+    if schema == "intake.v2":
+        _check_floor(path, doc)
+    # scorecard-assess greps this exact line (the poller reads the YAML); any other spelling would split the two.
+    if doc.get("scorecard") == "central" and "scorecard: central" not in path.read_text(encoding="utf-8").splitlines():
+        raise InputError(f"{path} is not valid: the central mark must be the exact line `scorecard: central` (no quotes, comment or extra spaces)")
+    return doc
+
+
+TIER_ORDER = ("low", "moderate", "high")
+CLASSIFICATION_ORDER = ("public", "internal", "restricted", "phi")
+FLOOR_FIELDS = ("evidence_commit", "floor_tier", "floor_classification")
+
+
+def _check_floor(path, doc: dict) -> None:
+    """An intake/v2 record's floor holds inside the record: all three floor fields or none, nothing below the floor without the
+    approver's override, and no override when nothing is below it."""
+    present = [f for f in FLOOR_FIELDS if f in doc]
+    override = doc.get("floor_override")
+    if present and len(present) != len(FLOOR_FIELDS):
+        raise InputError(f"{path} is not valid: it must have all three of {', '.join(FLOOR_FIELDS)}, or none")
+    if not present:
+        if override is not None:
+            raise InputError(f"{path} is not valid: floor_override is an override without a floor")
+        return
+    below = (TIER_ORDER.index(doc["tier"]) < TIER_ORDER.index(doc["floor_tier"])
+             or CLASSIFICATION_ORDER.index(doc["data_classification"]) < CLASSIFICATION_ORDER.index(doc["floor_classification"]))
+    if below and override is None:
+        raise InputError(f"{path} is not valid: the tier or data_classification is below the floor without floor_override")
+    if override is not None and not below:
+        raise InputError(f"{path} is not valid: it has floor_override but the record is not below the floor")
+    if override is not None:
+        if override["by"] != doc["approved_by"]:
+            raise InputError(f"{path} is not valid: floor_override.by must be approved_by")
+        if override["at"] != doc["approved_at"]:
+            raise InputError(f"{path} is not valid: floor_override.at must be approved_at")
+
+
+def load_registration_rules(factory) -> dict:
+    """Security's floor rules for portal registrations (config/registration.yaml, registration-rules/v1)."""
+    path = Path(factory) / "config" / "registration.yaml"
+    try:
+        too_big = path.stat().st_size > MAX_RULES_BYTES
+    except OSError:
+        too_big = False  # missing or unreadable: _checked reports it
+    if too_big:  # the portal's collector reads at most this much, so a bigger file would pass here and wait there
+        raise InputError(f"{path} is larger than {MAX_RULES_BYTES} bytes")
+    doc = _checked(path, "registration-rules.v1")
+    tiers = [TIER_ORDER.index(doc["classification_tier"][c]) for c in CLASSIFICATION_ORDER]
+    if tiers != sorted(tiers):
+        raise InputError(f"{path} classification_tier must not decrease from public to phi")
     return doc
 
 

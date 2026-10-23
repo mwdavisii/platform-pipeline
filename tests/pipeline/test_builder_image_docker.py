@@ -75,3 +75,8 @@ def test_package_version_guide_and_doctor(builder_image):
     guide = run(builder_image, "builder", "guide")
     assert guide.returncode == 0 and json.loads(guide.stdout)["builder_version"] == constant
     assert run(builder_image, "golden-road", "doctor", "--help").returncode == 0
+
+
+def test_the_image_mints_an_app_jwt(builder_image):
+    assert run(builder_image, "python", "-c", "import jwt, cryptography").returncode == 0
+    assert run(builder_image, "golden-road", "app-token", "--help").returncode == 0

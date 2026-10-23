@@ -3,6 +3,10 @@
 Per batch: at most `max_turns` model calls (the second-to-last turn adds a submit-now nudge, the last forces the submit tool) and one correction for an invalid submission; after that the batch's
 requirements are left out of the assessment, so `scorecard run` makes them `needs_human` and fires T-14. A spent token
 or time budget, or a gateway that refuses the credential, stops the run: every batch not yet done is left out the same way.
+A batch that fails on an invalid submission gives the reason "invalid output after one correction (<kind>)", where kind is
+one of too_long, not_json, schema, coverage, finding (the last invalid submission's), plus ", reply cut off at max_tokens_per_call"
+when the provider said that reply hit the output cap; a cut-off submission means `max_tokens_per_call` is too low. The correction sent
+to the model says so too. Only these fixed strings reach the stats, never the error text, which can quote model-supplied values.
 The model never sees the PR's title, body, comments, or commit messages (SEC-4), and nothing it says is logged.
 """
 
@@ -48,11 +52,25 @@ class Stop(Exception):
     """The run can't make more model calls (budget, time, or a refused credential)."""
 
 
+def _invalid(kind: str, cut: bool) -> str:
+    """The failure reason: fixed strings only (the kind is code-written; the error text, which can quote the model, is not used)."""
+    return f"invalid output after one correction ({kind}{', reply cut off at max_tokens_per_call' if cut else ''})"
+
+
+def _cut_note(cut: bool, budget: Budget) -> str:
+    if not cut:
+        return ""
+    return (f" Your reply was cut off at the output limit of {budget.per_call} tokens: submit a shorter submission "
+            "(shorter justifications and evidence, only the findings that matter).")
+
+
 def run_batch(client: ModelClient, tools: RepoTools, budget: Budget, *, system: str, user: str, batch_ids: list[str],
               max_turns: int, now: str) -> tuple[list[dict], list[dict]]:
     specs = [*SPECS, _submit_spec()]
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-    corrected = pending = False  # pending: the last reply was answered with a correction the model has not yet had a call to act on
+    corrected = pending = False
+    kind, cut = None, False  # the kind of the last invalid submission, and whether that reply hit the output cap
+    # pending: the last reply was answered with a correction the model has not yet had a call to act on
     for turn in range(max_turns):
         left_calls = max_turns - turn
         if left_calls == NUDGE_AT and turn > 0:  # a user message may follow tool results; after another user message it joins that one
@@ -88,10 +106,11 @@ def run_batch(client: ModelClient, tools: RepoTools, budget: Budget, *, system: 
             try:
                 return parse_batch(message.get("content") or "", batch_ids, now=now)
             except InvalidOutput as exc:
+                kind, cut = exc.kind, done.truncated
                 if corrected:
-                    raise BatchFailed("invalid output after one correction") from None
+                    raise BatchFailed(_invalid(kind, cut)) from None
                 corrected = pending = True
-                messages.append({"role": "user", "content": f"error: {exc}. Call {SUBMIT_NAME} with a corrected submission."})
+                messages.append({"role": "user", "content": f"error: {exc}. Call {SUBMIT_NAME} with a corrected submission.{_cut_note(cut, budget)}"})
                 continue
         rejected = False
         for call in calls:
@@ -102,17 +121,18 @@ def run_batch(client: ModelClient, tools: RepoTools, budget: Budget, *, system: 
                 try:
                     return parse_batch(arguments, batch_ids, now=now)
                 except InvalidOutput as exc:
+                    kind, cut = exc.kind, done.truncated
                     if corrected:
-                        raise BatchFailed("invalid output after one correction") from None
+                        raise BatchFailed(_invalid(kind, cut)) from None
                     corrected = rejected = pending = True
-                    reply = f"error: {exc}. Call {SUBMIT_NAME} again with a corrected submission."
+                    reply = f"error: {exc}. Call {SUBMIT_NAME} again with a corrected submission.{_cut_note(cut, budget)}"
             else:
                 reply = tools.call(name, arguments)
             messages.append({"role": "tool", "tool_call_id": call["id"], "content": reply})
         if skipped:
             messages[-1]["content"] += f"\n[note: only the first {MAX_CALLS_PER_TURN} tool calls of your last reply were run; {skipped} were dropped]"
     if pending:
-        raise BatchFailed("invalid output after one correction")
+        raise BatchFailed(_invalid(kind, cut))
     raise BatchFailed(f"no valid submission within {max_turns} model calls")
 
 

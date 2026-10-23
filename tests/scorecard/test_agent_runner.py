@@ -26,16 +26,18 @@ GOOD = {"results": [{"asvs_id": IDS[0], "status": "pass", "confidence": "high", 
 class Scripted:
     """Returns the scripted replies in order (an exception is raised), then repeats the last one."""
 
-    def __init__(self, *replies, tokens=100):
-        self.replies, self.tokens, self.sent, self.choices = list(replies), tokens, [], []
+    def __init__(self, *replies, tokens=100, truncated=False):
+        self.replies, self.tokens, self.sent, self.choices, self.truncated = list(replies), tokens, [], [], truncated
 
     def complete(self, messages, tools, *, max_tokens, tool_choice=None):
         self.sent.append(copy.deepcopy(messages))
         self.choices.append(tool_choice)
+        cuts = self.truncated if isinstance(self.truncated, list) else [self.truncated]  # a list is per reply, the last repeating
+        cut = cuts.pop(0) if len(cuts) > 1 else cuts[0]
         reply = self.replies.pop(0) if len(self.replies) > 1 else self.replies[0]
         if isinstance(reply, Exception):
             raise reply
-        return Completion(message=reply, tokens=self.tokens)
+        return Completion(message=reply, tokens=self.tokens, truncated=cut)
 
 
 def submit(doc):
@@ -78,7 +80,7 @@ def test_one_correction_then_the_batch_fails(tools, config):
     assert model.sent[1][-1]["content"].startswith("error: requirements not answered: v5.0.0-8.2.2")
     with pytest.raises(BatchFailed) as caught:
         batch(Scripted(submit(bad), submit(bad), submit(GOOD)), tools, config)
-    assert str(caught.value) == "invalid output after one correction"
+    assert str(caught.value) == "invalid output after one correction (coverage)"
 
 
 @pytest.mark.parametrize("reply", [
@@ -347,3 +349,87 @@ def test_pr_prose_and_commit_messages_never_reach_the_model(prepared):
     sent = json.dumps(model.sent)
     assert not any(m in sent for m in ("commit-marker-7f3a", "title-marker-91c2", "body-marker-55d0"))
     assert "Stores short team notes" in sent  # the intake purpose is trusted context
+
+
+CUT = "Your reply was cut off at the output limit of"
+
+
+def test_the_correction_names_the_cut_off_only_when_the_reply_was_truncated(tools, config):
+    for reply in (tool_call("submit_assessment", "{not json"), {"role": "assistant", "content": "{not json"}):
+        cut, plain = Scripted(reply, submit(GOOD), truncated=True), Scripted(reply, submit(GOOD))
+        batch(cut, tools, config)
+        batch(plain, tools, config)
+        limit = config["agent"]["budget"]["max_tokens_per_call"]
+        assert f"{CUT} {limit} tokens: submit a shorter submission" in cut.sent[1][-1]["content"]
+        assert CUT not in plain.sent[1][-1]["content"]
+
+
+@pytest.mark.parametrize("reply, kind", [
+    (tool_call("submit_assessment", "{not json"), "not_json"),
+    (submit({"results": [], "findings": []}), "coverage"),
+    (submit({**GOOD, "level": "standard"}), "schema"),
+    ({"role": "assistant", "content": "prose"}, "not_json"),
+])
+def test_the_failure_reason_names_the_kind_and_the_cut_off(tools, config, reply, kind):
+    with pytest.raises(BatchFailed) as caught:
+        batch(Scripted(reply), tools, config)
+    assert str(caught.value) == f"invalid output after one correction ({kind})"
+    with pytest.raises(BatchFailed) as caught:
+        batch(Scripted(reply, truncated=True), tools, config)
+    assert str(caught.value) == f"invalid output after one correction ({kind}, reply cut off at max_tokens_per_call)"
+
+
+def test_the_pending_correction_reason_uses_the_kind_that_triggered_it(tools, config):
+    with pytest.raises(BatchFailed) as caught:
+        batch(Scripted(tool_call("submit_assessment", "{not json")), tools, config, max_turns=1)
+    assert str(caught.value) == "invalid output after one correction (not_json)"
+    with pytest.raises(BatchFailed) as caught:
+        batch(Scripted(tool_call("submit_assessment", "{not json"), truncated=True), tools, config, max_turns=1)
+    assert str(caught.value) == "invalid output after one correction (not_json, reply cut off at max_tokens_per_call)"
+
+
+def test_the_last_invalid_submissions_kind_is_reported(tools, config):
+    with pytest.raises(BatchFailed) as caught:
+        batch(Scripted(tool_call("submit_assessment", "{not json"), submit({"results": [], "findings": []})), tools, config)
+    assert str(caught.value) == "invalid output after one correction (coverage)"
+
+
+def test_the_failure_reason_never_carries_model_text(tools, config):
+    secret = "SECRET-MODEL-TEXT"
+    with pytest.raises(BatchFailed) as caught:
+        batch(model := Scripted(submit({**GOOD, secret: secret}), truncated=True), tools, config)
+    assert secret in model.sent[1][-1]["content"]  # the quoting error text did go back to the model
+    assert secret not in str(caught.value) and str(caught.value).startswith("invalid output after one correction (schema")
+    sneaky = {"results": [{**GOOD["results"][0], "asvs_id": secret}], "findings": []}
+    with pytest.raises(BatchFailed) as caught:
+        batch(model := Scripted(submit(sneaky)), tools, config)
+    assert secret in model.sent[1][-1]["content"] and secret not in str(caught.value)
+
+
+def test_a_cut_off_first_reply_and_a_complete_second_reply_give_no_suffix(tools, config):
+    model = Scripted(tool_call("submit_assessment", "{not json"), tool_call("submit_assessment", "{still not json"), truncated=[True, False])
+    with pytest.raises(BatchFailed) as caught:
+        batch(model, tools, config)
+    assert CUT in model.sent[1][-1]["content"]
+    assert str(caught.value) == "invalid output after one correction (not_json)"
+
+
+def test_a_complete_first_reply_and_a_cut_off_second_reply_give_the_suffix(tools, config):
+    model = Scripted(tool_call("submit_assessment", "{not json"), tool_call("submit_assessment", "{still not json"), truncated=[False, True])
+    with pytest.raises(BatchFailed) as caught:
+        batch(model, tools, config)
+    assert CUT not in model.sent[1][-1]["content"]
+    assert str(caught.value) == "invalid output after one correction (not_json, reply cut off at max_tokens_per_call)"
+
+
+def test_assess_reports_the_cut_off_in_the_failed_batches(prepared):
+    p = prepared()
+    bad = {"ref": "F1", "rule_id": "authz/missing-owner-check", "category": "injection", "severity": "high", "confidence": "high",
+           "location": {"kind": "line", "file": "app.py", "start_line": 8}, "evidence": [NOTES_EVIDENCE], "title": "t",
+           "rationale": "r", "fix": {"summary": "s", "steps": []},
+           "standards": [{"framework": "cwe", "id": "CWE-639"}, {"framework": "asvs-5.0", "id": "v5.0.0-8.2.2"}]}
+    answers = {"v5.0.0-8.2.2": {"finding_refs": ["F1"]}}
+    for cut, suffix in ((True, ", reply cut off at max_tokens_per_call"), (False, "")):
+        doc, stats = assess(p, OracleModel(default=PASS, answers=answers, findings=[bad], truncated=cut))
+        assert doc["complete"] is False
+        assert {f["reason"] for f in stats["failed_batches"]} == {f"invalid output after one correction (finding{suffix})"}

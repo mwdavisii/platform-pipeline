@@ -64,3 +64,18 @@ def test_an_injection_finding_with_only_the_vc_standard_is_valid():
     inj = {**FINDING, "rule_id": "VC-INJ/reviewer-directive", "category": "injection", "standards": [{"framework": "golden-road-vc", "id": "VC-INJ"}]}
     _, findings = parse_batch(json.dumps(batch(results=[result(IDS[0]), result(IDS[1])], findings=[inj])), IDS, now=NOW)
     assert findings[0]["category"] == "injection"
+
+
+@pytest.mark.parametrize("doc, kind", [
+    ("x" * 400_001, "too_long"),
+    (None, "too_long"),
+    ("{", "not_json"),
+    ("[]", "schema"),
+    (json.dumps(batch(results=[result(IDS[0])])), "coverage"),
+    (json.dumps(batch(findings=[FINDING, FINDING])), "coverage"),
+    (json.dumps(batch(findings=[{**FINDING, "category": "injection"}])), "finding"),
+])
+def test_invalid_output_has_a_code_written_kind(doc, kind):
+    with pytest.raises(InvalidOutput) as caught:
+        parse_batch(doc, IDS, now=NOW)
+    assert caught.value.kind == kind

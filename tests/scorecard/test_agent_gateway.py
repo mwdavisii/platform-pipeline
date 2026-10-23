@@ -715,3 +715,13 @@ def test_tool_choice_is_forced_only_when_asked(config):
     bodies = [json.loads(request.data) for request, _ in opener.requests]
     assert bodies[0]["tool_choice"] == "auto"
     assert bodies[1]["tool_choice"] == {"type": "function", "function": {"name": "submit_assessment"}}
+
+
+@pytest.mark.parametrize("reason, truncated", [("length", True), ("max_tokens", True), ("stop", False), ("tool_calls", False), (None, False), (5, False)])
+def test_completion_is_truncated_when_the_output_hit_the_token_cap(reason, truncated):
+    body = json.dumps({"choices": [{"message": {"content": "x"}, "finish_reason": reason}]}).encode()
+    assert parse_completion(body).truncated is truncated
+
+
+def test_completion_without_a_finish_reason_is_not_truncated():
+    assert parse_completion(b'{"choices": [{"message": {"content": "x"}}]}').truncated is False

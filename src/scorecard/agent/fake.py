@@ -24,9 +24,9 @@ class OracleModel:
     """answers: {asvs_id: result fields}; default: the result fields for any other requirement; findings: agent-batch/v1
     finding drafts. A finding is sent with the batch whose results name its ref, or with the first batch if no answer names it."""
 
-    def __init__(self, *, default: dict, answers: dict | None = None, findings: list | None = None, reads=("*",), tokens: int = 1000):
+    def __init__(self, *, default: dict, answers: dict | None = None, findings: list | None = None, reads=("*",), tokens: int = 1000, truncated: bool = False):
         self.default, self.answers, self.findings = default, answers or {}, findings or []
-        self.reads, self.tokens = list(reads), tokens
+        self.reads, self.tokens, self.truncated = list(reads), tokens, truncated
         self.sent: list[list[dict]] = []
         self._submitted = 0
 
@@ -47,8 +47,8 @@ class OracleModel:
                       "function": {"name": "list_files" if path == "*" else "read_file",
                                    "arguments": json.dumps({"glob": "*"} if path == "*" else {"path": path})}}
                      for n, path in enumerate(self.reads)]
-            return Completion(message={"role": "assistant", "content": None, "tool_calls": calls}, tokens=self.tokens)
+            return Completion(message={"role": "assistant", "content": None, "tool_calls": calls}, tokens=self.tokens, truncated=self.truncated)
         results = [self._result(i) for i in _ASKED.findall(messages[1]["content"])]
         drafts = self._drafts(results)
         self._submitted += 1
-        return Completion(message=tool_call("submit_assessment", {"results": results, "findings": drafts}, "submit-1"), tokens=self.tokens)
+        return Completion(message=tool_call("submit_assessment", {"results": results, "findings": drafts}, "submit-1"), tokens=self.tokens, truncated=self.truncated)

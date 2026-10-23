@@ -41,6 +41,7 @@ USER_AGENT = f"golden-road-scorecard/{BUILDER_VERSION}"  # urllib's default, Pyt
 class Completion:
     message: dict  # the assistant message: {"role": "assistant", "content": str | None[, "tool_calls": [...]]}
     tokens: int | None  # total tokens the gateway reported for the call, or None when it reported none
+    truncated: bool = False  # the provider said the reply hit the output token cap (finish_reason "length", or "max_tokens" passed through)
 
 _EDGE_CODE = re.compile(rb"error code: ([0-9]{4})\s?")  # Cloudflare's short edge error body, such as "error code: 1010"
 EDGE_BODY_BYTES = 32
@@ -270,4 +271,5 @@ def parse_completion(data: bytes) -> Completion:
             raise GatewayError("the gateway response repeats a tool call id")
     usage = doc.get("usage")
     total = usage.get("total_tokens") if isinstance(usage, dict) else None
-    return Completion(message=out, tokens=total if type(total) is int and total >= 0 else None)
+    reason = choices[0].get("finish_reason")
+    return Completion(message=out, tokens=total if type(total) is int and total >= 0 else None, truncated=reason in ("length", "max_tokens"))

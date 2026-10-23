@@ -15,10 +15,16 @@ from .. import VERSION
 MAX_OUTPUT_CHARS = 400_000
 MAX_ERROR_CHARS = 300
 TOOL = "scorecard-agent"
+KINDS = ("too_long", "not_json", "schema", "coverage", "finding")
 
 
 class InvalidOutput(Exception):
-    """The model's output can't be used. The message is code-written and goes back to the model once."""
+    """The model's output can't be used. The message goes back to the model once; for schema and finding errors it can quote
+    model-supplied values, so it never goes to the run's stats. `kind` is code-written, one of KINDS, and is safe to log."""
+
+    def __init__(self, message: str, kind: str):
+        super().__init__(message)
+        self.kind = kind
 
 
 def _finding(draft: dict, now: str) -> dict:
@@ -26,21 +32,21 @@ def _finding(draft: dict, now: str) -> dict:
     finding = make_finding_v2(first_seen=now, layer="agentic", tool=TOOL, tool_version=VERSION, evidence_verified=False, **fields)
     errors = validate("finding.v2", finding)
     if errors:
-        raise InvalidOutput(f"finding {draft['ref']} is not a valid finding: {errors[0][:MAX_ERROR_CHARS]}")
+        raise InvalidOutput(f"finding {draft['ref']} is not a valid finding: {errors[0][:MAX_ERROR_CHARS]}", "finding")
     return finding
 
 
 def parse_batch(arguments, batch_ids: list[str], *, now: str) -> tuple[list[dict], list[dict]]:
     """Return (results, findings) for one batch, or raise InvalidOutput."""
     if not isinstance(arguments, str) or len(arguments) > MAX_OUTPUT_CHARS:
-        raise InvalidOutput(f"the submission must be a JSON object of at most {MAX_OUTPUT_CHARS} characters")
+        raise InvalidOutput(f"the submission must be a JSON object of at most {MAX_OUTPUT_CHARS} characters", "too_long")
     try:
         doc = json.loads(arguments)
     except (ValueError, RecursionError):
-        raise InvalidOutput("the submission is not valid JSON") from None
+        raise InvalidOutput("the submission is not valid JSON", "not_json") from None
     errors = validate("agent-batch.v1", doc)
     if errors:
-        raise InvalidOutput(f"the submission does not match the schema: {errors[0][:MAX_ERROR_CHARS]}")
+        raise InvalidOutput(f"the submission does not match the schema: {errors[0][:MAX_ERROR_CHARS]}", "schema")
     answered = [r["asvs_id"] for r in doc["results"]]
     wanted = set(batch_ids)
     problems = []
@@ -56,7 +62,7 @@ def parse_batch(arguments, batch_ids: list[str], *, now: str) -> tuple[list[dict
     if unknown := sorted({ref for r in doc["results"] for ref in r["finding_refs"]} - set(refs)):
         problems.append(f"finding_refs with no finding: {', '.join(unknown[:10])}")
     if problems:
-        raise InvalidOutput("; ".join(problems))
+        raise InvalidOutput("; ".join(problems), "coverage")
     findings = {f["ref"]: _finding(f, now) for f in doc["findings"]}
     results = []
     for r in doc["results"]:

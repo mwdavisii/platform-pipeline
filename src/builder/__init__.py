@@ -1,3 +1,3 @@
 """Deterministic builder: packages an app into a platform-compliant container and deployment config."""
 
-VERSION = "0.3.11"
+VERSION = "0.3.12"

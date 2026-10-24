@@ -73,5 +73,7 @@
   "github_host": "github.com",
   "actions_oidc_issuer": "https://token.actions.githubusercontent.com",
   "landing_page_url": "https://github.com/mwdavisii/golden-road-agents",
-  "portal_url": "https://viber.mwdavisii.com"
+  "portal_url": "https://viber.mwdavisii.com",
+  "scorecard_mode": "central",
+  "scorecard_app_id": 5450243
 }

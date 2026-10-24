@@ -1,6 +1,6 @@
 name: scorecard-factory intake
 description: >-
-  Copies this repository's trusted scorecard inputs (the config, and its intake, confirmed N/A and suppression files)
+  Copies this repository's trusted scorecard inputs (the config and the registration rules, and its intake, confirmed N/A and suppression files)
   out of the factory commit the runner downloaded for this action, into a new directory in the workspace.
 inputs:
   path:
@@ -43,6 +43,8 @@ runs:
         done
         mkdir -p "$DEST/config" "$DEST/intake/$owner" "$DEST/na/$owner" "$DEST/suppressions/$owner"
         cp "$root/config/scorecard.yaml" "$DEST/config/scorecard.yaml"
+        # T-21's floor rules. A factory without them still runs: the scorecard fires T-14 for rules it can't read.
+        if [ -f "$root/config/registration.yaml" ]; then cp "$root/config/registration.yaml" "$DEST/config/registration.yaml"; fi
         for kind in intake na; do
           if [ -f "$root/$kind/$owner/$name.yaml" ]; then cp "$root/$kind/$owner/$name.yaml" "$DEST/$kind/$owner/$name.yaml"; fi
         done

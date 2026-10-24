@@ -218,7 +218,7 @@ def make_factory(root):
     """A downloaded factory: the action at .github/actions/intake, plus records for two repos."""
     (root / ".github/actions/intake").mkdir(parents=True)
     (root / ".github/actions/intake/action.yml").write_text(ACTION.read_text())
-    files = {"config/scorecard.yaml": "config\n", "intake/o/app.yaml": "app intake\n", "intake/o/other.yaml": "other intake\n",
+    files = {"config/scorecard.yaml": "config\n", "config/registration.yaml": "rules\n", "intake/o/app.yaml": "app intake\n", "intake/o/other.yaml": "other intake\n",
              "na/o/app.yaml": "app na\n", "na/o/other.yaml": "other na\n", "suppressions/o/app/s1.json": "{}\n",
              "suppressions/o/other/s2.json": "{}\n", "suppressions/README.md": "doc\n"}
     for rel, text in files.items():
@@ -245,7 +245,7 @@ def tree(path):
 def test_the_action_copies_only_the_calling_repo_s_records(tmp_path):
     out, dest = run_action(tmp_path)
     assert out.returncode == 0, out.stdout + out.stderr
-    assert tree(dest) == ["config/scorecard.yaml", "intake/o/app.yaml", "na/o/app.yaml", "suppressions/o/app/s1.json"]
+    assert tree(dest) == ["config/registration.yaml", "config/scorecard.yaml", "intake/o/app.yaml", "na/o/app.yaml", "suppressions/o/app/s1.json"]
     assert (dest / "intake/o/app.yaml").read_text() == "app intake\n"
     assert (tmp_path / "output").read_text() == "path=factory\n"
 
@@ -253,13 +253,26 @@ def test_the_action_copies_only_the_calling_repo_s_records(tmp_path):
 def test_the_action_copies_the_named_repository_s_records(tmp_path):
     out, dest = run_action(tmp_path, repo="o/other")
     assert out.returncode == 0, out.stdout + out.stderr
-    assert tree(dest) == ["config/scorecard.yaml", "intake/o/other.yaml", "na/o/other.yaml", "suppressions/o/other/s2.json"]
+    assert tree(dest) == ["config/registration.yaml", "config/scorecard.yaml", "intake/o/other.yaml", "na/o/other.yaml", "suppressions/o/other/s2.json"]
 
 
 def test_an_app_with_no_records_gets_only_the_config(tmp_path):
     """No intake is not an error here: the scorecard fires T-8 (security_review) for it."""
     out, dest = run_action(tmp_path, repo="o/new-app")
-    assert out.returncode == 0 and tree(dest) == ["config/scorecard.yaml"]
+    assert out.returncode == 0 and tree(dest) == ["config/registration.yaml", "config/scorecard.yaml"]
+
+
+def test_the_action_copies_the_registration_rules_t_21_reads(tmp_path):
+    out, dest = run_action(tmp_path)
+    assert out.returncode == 0 and (dest / "config/registration.yaml").read_text() == "rules\n"
+
+
+def test_a_factory_without_registration_rules_still_gets_its_config(tmp_path):
+    """The scorecard fires T-14 for missing rules, so the action does not refuse an older factory."""
+    factory = make_factory(tmp_path / "actions-cache")
+    (factory / "config/registration.yaml").unlink()
+    out, dest = run_action(tmp_path, factory=factory)
+    assert out.returncode == 0 and not (dest / "config/registration.yaml").exists()
 
 
 @pytest.mark.parametrize("repo", ["o", "o/..", "../o", "o/a b", "o/a/b", ""])
@@ -281,7 +294,7 @@ def test_the_action_refuses_an_existing_destination(tmp_path):
     assert out.returncode == 1 and "already exists" in out.stdout
 
 
-@pytest.mark.parametrize("link", ["intake/o/app.yaml", "config/scorecard.yaml", "suppressions/o/app/s1.json", "na/o/other.yaml"])
+@pytest.mark.parametrize("link", ["intake/o/app.yaml", "config/scorecard.yaml", "config/registration.yaml", "suppressions/o/app/s1.json", "na/o/other.yaml"])
 def test_the_action_refuses_a_factory_with_a_symlink(tmp_path, link):
     factory = make_factory(tmp_path / "actions-cache")
     (factory / link).unlink()

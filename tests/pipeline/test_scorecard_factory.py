@@ -12,7 +12,7 @@ import pytest
 import yaml
 
 from contracts.schema import validate
-from helpers import blank_setup_doc_edits, doc_bash_blocks, run_doc_block, scratch_factory_workspace
+from helpers import blank_setup_doc_edits, doc_bash_blocks, run_doc_block, scorecard_central, scorecard_integration_id, scratch_factory_workspace
 
 ROOT = Path(__file__).resolve().parents[2]
 FACTORY = ROOT / "bootstrap/scorecard-factory"
@@ -408,6 +408,9 @@ def test_ci_runs_the_scorecard_docker_tests_with_the_other_docker_tests():
 # ---- hello-app calls the factory workflow ----
 
 def test_hello_app_calls_the_factory_workflow_on_pull_requests_only():
+    if scorecard_central():  # the factory assesses centrally: an app has no caller at all
+        assert not CALLER.exists()
+        return
     doc = load_workflow(CALLER)
     factory = load_workflow(FACTORY / ".github/workflows/scorecard.yml")
     assert doc["on"] == {"pull_request": factory["on"]["pull_request"]}, "the caller's types (edited included) are the workflow's"
@@ -422,6 +425,9 @@ def test_hello_app_calls_the_factory_workflow_on_pull_requests_only():
 
 
 def test_the_caller_grants_exactly_what_the_called_jobs_ask_for():
+    if scorecard_central():  # no caller, so nothing is granted by one
+        assert not CALLER.exists()
+        return
     caller = load_workflow(CALLER)["jobs"]["scorecard"]["permissions"]
     called = load_workflow(FACTORY / ".github/workflows/scorecard.yml")["jobs"]
     rank = {"read": 1, "write": 2}
@@ -435,7 +441,7 @@ def test_the_caller_grants_exactly_what_the_called_jobs_ask_for():
 def test_main_requires_the_fixed_name_scorecard_check():
     ruleset = json.loads((APP / ".github/rulesets/main.json").read_text())
     required = [r for r in ruleset["rules"] if r["type"] == "required_status_checks"][0]["parameters"]["required_status_checks"]
-    assert {"context": "scorecard / assessed", "integration_id": 15368} in required
+    assert {"context": "scorecard / assessed", "integration_id": scorecard_integration_id()} in required  # the App's id when central
     assert not [c for c in required if c["context"].startswith("scorecard / ") and c["context"] != "scorecard / assessed"], \
         "the level check's name changes with the level, so only `assessed` can be required"
     called = load_workflow(FACTORY / ".github/workflows/scorecard.yml")["jobs"]

@@ -19,7 +19,7 @@ SCRIPT = "scripts/bump-builder-version.py"
 # builder's own tests. test_export needs a git history, which a scratch copy doesn't have, and this file would recurse.
 RELEVANT = ["tests/test_smoke.py", "tests/golden_road/test_doctor.py", "tests/kit", "tests/builder",
             "tests/pipeline/test_agents_setup_doc.py", "tests/pipeline/test_bootstrap.py", "tests/pipeline/test_configure.py",
-            "tests/pipeline/test_scorecard_factory.py", "tests/pipeline/test_internal_docs.py"]
+            "tests/pipeline/test_scorecard_factory.py", "tests/pipeline/test_internal_docs.py", "tests/pipeline/test_portal_bootstrap.py", "tests/pipeline/test_workflows.py"]
 GOOD = ["--org", "example-org", "--gateway-host", "llm.example.org", "--edge-namespace", "edge-ns", "--edge-label", "app=edge",
         "--identity-header", "X-Roles-Test", "--scorecard-gateway-url", "https://llm-ci.example.org/v1/chat/completions"]
 
@@ -121,6 +121,16 @@ def test_after_a_bump_a_tree_configured_with_the_sample_config_still_passes_its_
     assert changed == {"src/builder/__init__.py", "bootstrap/hello-app/.builder.lock", "bootstrap/hello-app/Dockerfile",
                        "bootstrap/golden-road-portal/.builder.lock", "bootstrap/golden-road-portal/Dockerfile"}
     assert b"example-org" in (scratch / "bootstrap/hello-app/.github/workflows/ci.yml").read_bytes()
+    run_relevant_tests(scratch)
+
+
+def test_a_tree_configured_for_central_review_passes_the_relevant_tests_too(scratch):
+    """Central mode removes the scorecard callers and pins `scorecard / assessed` to the App; each test asserts the mode its tree is in."""
+    configure = subprocess.run([sys.executable, str(scratch / "scripts/configure.py"), "--root", str(scratch), *GOOD, "--scorecard-mode", "central",
+                                "--scorecard-app-id", "1234567"], capture_output=True, text=True)
+    assert configure.returncode == 0, configure.stderr
+    assert not (scratch / "bootstrap/hello-app/.github/workflows/scorecard.yml").exists()
+    assert json.loads((scratch / "platform/platform.json").read_text())["scorecard_app_id"] == 1234567
     run_relevant_tests(scratch)
 
 

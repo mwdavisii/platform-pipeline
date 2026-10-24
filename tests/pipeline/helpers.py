@@ -18,6 +18,7 @@ COMMITTED_CODEOWNERS = """\
 /trivy.yaml @ORG_PLACEHOLDER/platform-reviewers
 """
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_HOST = "github.com"
 DEFAULT_ISSUER = "https://token.actions.githubusercontent.com"
 CONFIGURE_KEYS = ("org", "github_host", "actions_oidc_issuer", "landing_page_url", "approved_models_url", "portal_url", "scorecard_mode", "scorecard_app_id")
@@ -60,6 +61,23 @@ COMMITTED_AGENTS_CODEOWNERS = """\
 # Everything here is what agents download and run, and what the stub trusts: every change needs a platform owner's review.
 * @ORG_PLACEHOLDER/platform-reviewers
 """
+
+
+def repo_platform():
+    """The tree's own platform/platform.json: per-app as committed, central when configure.py was run with --scorecard-mode central."""
+    return json.loads((REPO_ROOT / "platform/platform.json").read_text())
+
+
+def scorecard_central():
+    """True when the tree reviews centrally: the apps have no scorecard caller and their rulesets pin `scorecard / assessed` to the App."""
+    from builder.config import scorecard_mode
+    return scorecard_mode(repo_platform()) == "central"
+
+
+def scorecard_integration_id():
+    """The integration id the apps' rulesets pin `scorecard / assessed` to: the Actions app (15368) per app, the scorecard App's id centrally."""
+    from builder.config import scorecard_app_id
+    return scorecard_app_id(repo_platform()) or 15368
 
 
 def unconfigure_platform(platform_dir):

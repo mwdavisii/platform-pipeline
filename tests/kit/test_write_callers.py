@@ -17,12 +17,18 @@ ROOT = Path(__file__).resolve().parents[2]
 SKILL = ROOT / "bootstrap/golden-road-agents/skill"
 NAMES = list(doctor.CALLERS)
 OWNER = re.compile(r"[A-Za-z0-9_-]+/(platform-pipeline|scorecard-factory|security-scans)/")
+# The per-app scorecard caller as committed (a test keeps it equal to the bundle's template when the tree has one): central mode
+# removes the template from the bundle, and these tests are about the callers written from a full bundle.
+SCORECARD_TEMPLATE = Path(__file__).resolve().parent / "fixtures/scorecard.yml"
 
 
 def configured(tmp_path, org="example-org"):
-    """The skill folder as configure.py leaves it for org."""
+    """The skill folder as configure.py leaves it for org, with all four templates: a tree configured for central review has no
+    scorecard.yml in its bundle, so that one comes from the fixture."""
     dest = tmp_path / "skill"
     shutil.copytree(SKILL, dest, ignore=shutil.ignore_patterns("__pycache__"))
+    if not (dest / "templates/workflows/scorecard.yml").exists():
+        shutil.copy(SCORECARD_TEMPLATE, dest / "templates/workflows/scorecard.yml")
     for path in (dest / "templates/workflows").iterdir():
         path.write_text(OWNER.sub(rf"{org}/\1/", path.read_text()))
     return dest

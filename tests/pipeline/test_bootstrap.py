@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from helpers import builder_cmd, builder_env
+from helpers import builder_cmd, builder_env, scorecard_integration_id
 
 ROOT = Path(__file__).resolve().parents[2]
 APP = ROOT / "bootstrap/hello-app"
@@ -308,10 +308,11 @@ def test_root_readme_is_neutral_and_links_the_docs():
 
 
 def test_ruleset_requires_both_security_scans_checks_from_the_actions_app():
+    """The drift, preview and scan checks come from the Actions app; `scorecard / assessed` too per app, and from the scorecard App centrally."""
     doc = json.loads((APP / ".github/rulesets/main.json").read_text())
     checks = [r for r in doc["rules"] if r["type"] == "required_status_checks"][0]["parameters"]["required_status_checks"]
-    assert checks == [{"context": name, "integration_id": 15368} for name in ("golden-road / drift", "golden-road / preview", "security-scans / semgrep", "security-scans / trivy",
-                                                                          "scorecard / assessed")]
+    assert checks == [{"context": name, "integration_id": 15368} for name in ("golden-road / drift", "golden-road / preview", "security-scans / semgrep", "security-scans / trivy")] \
+        + [{"context": "scorecard / assessed", "integration_id": scorecard_integration_id()}]
 
 
 def test_code_scanning_ruleset_is_a_separate_file_so_a_wrong_field_cannot_break_the_main_ruleset():

@@ -4,6 +4,8 @@ from pathlib import Path
 
 import yaml
 
+from helpers import repo_platform
+
 ROOT = Path(__file__).resolve().parents[2]
 PORTAL = ROOT / "bootstrap/golden-road-portal"
 
@@ -73,9 +75,10 @@ def test_the_portal_verifies_with_the_platform_config():
 
 def test_the_portal_callers_are_the_skill_s_templates():
     from golden_road import doctor
-    for name in doctor.CALLERS:
+    callers = doctor.callers_for(repo_platform())  # central: no scorecard.yml in the portal or in the bundle
+    for name in callers:
         assert (PORTAL / ".github/workflows" / name).read_text() == (TEMPLATES / name).read_text().replace("__APP_NAME__", "golden-road-portal"), name
-    assert sorted(p.name for p in (PORTAL / ".github/workflows").iterdir()) == sorted(doctor.CALLERS)
+    assert sorted(p.name for p in (PORTAL / ".github/workflows").iterdir()) == sorted(callers) == sorted(p.name for p in TEMPLATES.iterdir())
 
 
 def test_the_portal_has_hello_app_s_repo_settings():

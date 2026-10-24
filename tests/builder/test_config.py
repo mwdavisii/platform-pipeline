@@ -88,9 +88,13 @@ def test_scorecard_mode_defaults_to_per_app():
     from builder.config import scorecard_mode
     assert scorecard_mode({}) == "per-app"
     assert scorecard_mode({"scorecard_mode": "central"}) == "central"
-    assert "scorecard_mode" not in load_platform()
     root = json.loads((Path(__file__).resolve().parents[2] / "platform/platform.json").read_text())
-    assert "scorecard_mode" not in root and "scorecard_app_id" not in root  # per-app when committed; configure.py --scorecard-mode central records it
+    assert "scorecard_mode" not in load_platform()  # the builder's packaged copy is the committed per-app one in every tree
+    if scorecard_mode(root) == "central":  # a tree configured with --scorecard-mode central records the mode and the App's id
+        assert root["scorecard_mode"] == "central" and isinstance(root["scorecard_app_id"], int)
+    else:
+        assert "scorecard_mode" not in root or root["scorecard_mode"] == "per-app"
+        assert "scorecard_app_id" not in root  # per-app when committed; configure.py --scorecard-mode central records it
 
 
 def test_central_mode_needs_a_positive_app_id():

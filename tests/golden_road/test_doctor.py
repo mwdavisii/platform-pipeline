@@ -22,6 +22,13 @@ ROOT = Path(__file__).resolve().parents[2]
 ORG = "example-org"
 REPO = "example-org/notes"
 
+
+
+def repo_platform():
+    """The tree's own platform/platform.json: per-app as committed, central when configure.py was run with --scorecard-mode central."""
+    return json.loads((ROOT / "platform/platform.json").read_text())
+
+
 FAKE_GH = f"""#!{sys.executable}
 import json, os, sys
 args = sys.argv[1:]
@@ -219,8 +226,10 @@ def test_doctor_matches_hello_app(tmp_path, monkeypatch):
     shutil.copytree(hello / ".github/workflows", root / ".github/workflows")
     for path in (root / ".github/workflows").iterdir():
         path.write_text(re.sub(r"uses: [A-Za-z0-9_-]+/", f"uses: {ORG}/", path.read_text()))
-    assert set(doctor.CALLERS) == {p.name for p in (root / ".github/workflows").iterdir()}
-    assert doctor.check_callers(doctor.Context(root=root, pin=tmp_path / "pin.json", host="github.com", org=ORG))["status"] == "pass"
+    platform = repo_platform()
+    assert set(doctor.callers_for(platform)) == {p.name for p in (root / ".github/workflows").iterdir()}  # central: no scorecard.yml
+    ctx = doctor.Context(root=root, pin=tmp_path / "pin.json", host="github.com", org=ORG, platform=platform)
+    assert doctor.check_callers(ctx)["status"] == "pass"
 
 
 # ---- the run, the report and the summary ----
@@ -643,6 +652,8 @@ def test_pr_checks_names_the_branch_and_repo_and_needs_a_branch(app, pin, gh):
 
 @pytest.mark.parametrize("name", list(doctor.CALLERS))
 def test_caller_triggers_are_hello_apps(name):
+    if name not in doctor.callers_for(repo_platform()):
+        pytest.skip(f"{name} is not an app file when the platform reviews centrally; the factory's own triggers are tested there")
     parsed = doctor.yaml.safe_load((ROOT / "bootstrap/hello-app/.github/workflows" / name).read_text())
     assert (parsed[True] if True in parsed else parsed["on"]) == doctor.CALLER_TRIGGERS[name]
 

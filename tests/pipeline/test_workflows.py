@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from helpers import scorecard_integration_id
+
 ROOT = Path(__file__).resolve().parents[2]
 SCANS = ROOT / "reference/security-scans"
 DIRS = [ROOT / ".github/workflows", ROOT / "bootstrap/hello-app/.github/workflows", ROOT / "bootstrap/golden-road-portal/.github/workflows",
@@ -419,7 +421,9 @@ def test_check_names_match_the_ruleset_and_the_documented_required_checks():
     ruleset = json.loads((ROOT / "bootstrap/hello-app/.github/rulesets/main.json").read_text())
     required = [r for r in ruleset["rules"] if r["type"] == "required_status_checks"][0]["parameters"]["required_status_checks"]
     assert {c["context"] for c in required if c["context"].startswith("security-scans / ")} == names
-    assert all(c["integration_id"] == 15368 for c in required) and "security-scans / comment" not in {c["context"] for c in required}
+    # the Actions app posts every check but `scorecard / assessed` when the platform reviews centrally: that one is the scorecard App's
+    assert all(c["integration_id"] == (scorecard_integration_id() if c["context"] == "scorecard / assessed" else 15368) for c in required)
+    assert "security-scans / comment" not in {c["context"] for c in required}
     doc = (ROOT / "docs/setup/personal-poc.md").read_text()
     for name in names:
         assert f'name: "{name}", app_id: 15368' in doc, name

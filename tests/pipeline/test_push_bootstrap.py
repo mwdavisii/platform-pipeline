@@ -45,7 +45,9 @@ case "$*" in
 esac
 """)
     fake.chmod(0o755)
-    env = {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}"}
+    # The script commits the tree; a CI runner has no git identity of its own.
+    env = {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}", "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
     out = subprocess.run(["bash", str(tree / "scripts/push-bootstrap.sh"), "acme", "demo", "--private"], cwd=tree, env=env,
                          capture_output=True, text=True)
     assert out.returncode == 0, out.stdout + out.stderr

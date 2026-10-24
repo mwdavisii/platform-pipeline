@@ -650,7 +650,8 @@ jobs:
           done < <(jq -r '.review_teams[]' report/github.json)
           # The authoritative level, in the PR's check list, from the App. The check carries the redacted summary the per-app run shows
           # in its job summary (the API's text limit is 65,535 characters), because the factory run may not be readable by app developers.
-          jq -Rs '.[0:60000]' report/scorecard.md > text.json
+          # Characters, not bytes, and the same on every runner (jq versions slice multibyte strings differently).
+          python3 -I -c 'import json, sys; json.dump(open(sys.argv[1], encoding="utf-8", errors="replace").read()[:60000], open(sys.argv[2], "w", encoding="utf-8"), ensure_ascii=False)' report/scorecard.md text.json
           jq -cn --arg name "scorecard / level: $LEVEL" --arg head "$HEAD_SHA" --arg url "$run_url" --arg level "$LEVEL" --slurpfile text text.json \
             '{name: $name, head_sha: $head, status: "completed", conclusion: "success", details_url: $url,
               output: {title: ("Scrutiny level: " + $level), summary: "This check is the level. The label and the comment are conveniences.", text: $text[0]}}' \

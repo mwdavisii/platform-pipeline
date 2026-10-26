@@ -1,0 +1,6 @@
+schema: intake/v1
+repo: acme/notes
+tier: moderate
+purpose: "Stores short team notes. It does not send email, call external APIs, or store files."
+owner: "notes-team"
+data_classification: internal

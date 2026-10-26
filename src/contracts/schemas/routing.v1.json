@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://platform.internal/schemas/routing.v1.json",
+  "title": "routing/v1",
+  "description": "config/routing.toml in the scorecard factory: security's routing policy. Facts say what the app or the change is; rules say which facts need a human. Code checks what the schema can't (scorecard.routing.config).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "floors", "reviewers", "detectors", "packages", "suppressions", "evidence", "facts", "rules"],
+  "properties": {
+    "schema": {"const": "routing/v1"},
+    "floors": {
+      "type": "object", "additionalProperties": false, "required": ["tier"],
+      "properties": {"tier": {
+        "type": "object", "additionalProperties": false, "required": ["low", "moderate", "high"],
+        "properties": {"low": {"$ref": "#/$defs/level"}, "moderate": {"$ref": "#/$defs/level"}, "high": {"$ref": "#/$defs/level"}}}}
+    },
+    "reviewers": {"$ref": "scorecard-config.v1.json#/properties/reviewers"},
+    "detectors": {
+      "type": "object", "additionalProperties": false,
+      "required": ["paths", "patterns", "large_change", "max_comment_block_lines"],
+      "properties": {
+        "paths": {"$ref": "scorecard-config.v1.json#/properties/paths"},
+        "patterns": {"$ref": "scorecard-config.v1.json#/properties/patterns"},
+        "large_change": {"$ref": "scorecard-config.v1.json#/properties/large_change"},
+        "max_comment_block_lines": {"$ref": "scorecard-config.v1.json#/properties/max_comment_block_lines"}
+      }
+    },
+    "packages": {
+      "type": "object", "additionalProperties": false,
+      "required": ["new_package_days", "internal_npm_scopes", "internal_packages", "internal_registries"],
+      "properties": {
+        "new_package_days": {"$ref": "scorecard-config.v1.json#/properties/registry/properties/new_package_days"},
+        "internal_npm_scopes": {"$ref": "scorecard-config.v1.json#/properties/registry/properties/internal_npm_scopes"},
+        "internal_packages": {"$ref": "scorecard-config.v1.json#/properties/registry/properties/internal_packages"},
+        "internal_registries": {"$ref": "scorecard-config.v1.json#/properties/registry/properties/internal_registries"}
+      }
+    },
+    "suppressions": {"$ref": "scorecard-config.v1.json#/properties/suppressions"},
+    "evidence": {"$ref": "scorecard-config.v1.json#/properties/evidence"},
+    "facts": {
+      "type": "object", "minProperties": 1, "maxProperties": 100,
+      "propertyNames": {"$ref": "#/$defs/fact_name"},
+      "additionalProperties": {"$ref": "#/$defs/fact"}
+    },
+    "rules": {"type": "array", "minItems": 1, "maxItems": 200, "items": {"$ref": "#/$defs/rule"}}
+  },
+  "$defs": {
+    "level": {"enum": ["standard", "elevated", "security_review"]},
+    "fact_name": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
+    "line": {"type": "string", "minLength": 1, "maxLength": 300, "pattern": "^[^\\r\\n]*\\S[^\\r\\n]*$"},
+    "text": {"type": "string", "minLength": 1, "maxLength": 2000, "pattern": "\\S"},
+    "fact": {
+      "type": "object", "required": ["from"],
+      "properties": {"from": {"enum": ["builtin", "spec", "diff", "agent"]}},
+      "allOf": [
+        {"if": {"properties": {"from": {"const": "builtin"}}}, "then": {
+          "additionalProperties": false, "required": ["from", "measure"],
+          "properties": {"from": true, "measure": {"enum": ["spec_security_change", "tests_weakened", "risky_dependency", "reviewer_text",
+            "no_intake", "purpose_changed", "input_problem", "review_incomplete", "suppression_added", "workflow_change", "tier_raised",
+            "app_type_changed", "large_change", "below_registration"]}}}},
+        {"if": {"properties": {"from": {"const": "spec"}}}, "then": {
+          "additionalProperties": false, "required": ["from", "measure"],
+          "properties": {"from": true, "measure": {"enum": ["data_classification", "resources_tier", "app_type", "role_count",
+            "write_role_count", "read_role_write_grants", "secret_env", "egress_hosts"]}}}},
+        {"if": {"properties": {"from": {"const": "diff"}}}, "then": {
+          "additionalProperties": false, "required": ["from", "paths"],
+          "properties": {"from": true,
+            "paths": {"type": "array", "minItems": 1, "maxItems": 100, "items": {"type": "string", "minLength": 1, "maxLength": 200}},
+            "added_lines": {"type": "array", "minItems": 1, "maxItems": 50, "items": {"type": "string", "minLength": 1, "maxLength": 500}}}}},
+        {"if": {"properties": {"from": {"const": "agent"}}}, "then": {
+          "additionalProperties": false, "required": ["from", "applies_to", "question"],
+          "properties": {"from": true,
+            "applies_to": {"enum": ["tree", "change"]},
+            "question": {"type": "string", "minLength": 10, "maxLength": 2000, "pattern": "\\S"},
+            "must_check": {"type": "array", "maxItems": 20, "uniqueItems": true,
+              "items": {"type": "string", "pattern": "^[^,\\s]([^,\\r\\n]{0,62}[^,\\s])?$"}}}}}
+      ]
+    },
+    "condition": {
+      "type": "object", "additionalProperties": false, "required": ["fact"], "minProperties": 2, "maxProperties": 2,
+      "properties": {
+        "fact": {"$ref": "#/$defs/fact_name"},
+        "is": {"type": ["boolean", "string"]},
+        "over": {"type": "integer", "minimum": 0, "maximum": 100000},
+        "at_least": {"type": "integer", "minimum": 0, "maximum": 100000},
+        "any": {"type": "array", "minItems": 1, "maxItems": 50, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 253}},
+        "changed": {"enum": ["any", "up", "added"]}
+      }
+    },
+    "rule": {
+      "type": "object", "additionalProperties": false, "required": ["id", "when", "level", "summary", "reason", "guidance"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^T-[1-9][0-9]{0,2}$"},
+        "when": {"oneOf": [{"$ref": "#/$defs/condition"},
+                           {"type": "array", "minItems": 1, "maxItems": 10, "items": {"$ref": "#/$defs/condition"}}]},
+        "level": {"$ref": "#/$defs/level"},
+        "on_unsure": {"enum": ["elevated", "rule_level", "standard"]},
+        "mode": {"enum": ["enforce", "shadow"]},
+        "summary": {"$ref": "#/$defs/line"},
+        "reason": {"$ref": "#/$defs/text"},
+        "guidance": {"$ref": "#/$defs/text"},
+        "escalate": {
+          "type": "object", "additionalProperties": false, "required": ["classifications", "level"],
+          "properties": {
+            "classifications": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["public", "internal", "restricted", "phi"]}},
+            "level": {"$ref": "#/$defs/level"}}}
+      }
+    }
+  }
+}

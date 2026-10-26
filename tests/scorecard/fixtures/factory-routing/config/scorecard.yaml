@@ -1,0 +1,23 @@
+# The risk scorecard's mechanics. Platform-owned. What gets routed to a person is in routing.toml (security-owned).
+schema: scorecard-config/v2
+
+gate1_checks:
+  - {name: "golden-road / drift", app_id: 15368}
+  - {name: "golden-road / preview", app_id: 15368}
+drift_check: "golden-road / drift"
+
+registry: {timeout_seconds: 10, max_total_seconds: 120}
+
+agent:
+  prompt_version: review-2
+  model: {version: pinned-1}
+  gateway:
+    url: "https://gateway.example.invalid/v1/chat/completions"
+    auth: {scheme: bearer}
+    credential_env: SCORECARD_GATEWAY_TOKEN
+    timeout_seconds: 120
+    retry_seconds: 5
+    max_response_bytes: 2000000
+  budget: {max_total_tokens: 1500000, max_tokens_per_call: 4096, max_run_seconds: 1800}
+  batching: {max_requirements: 12, max_turns: 16}
+  tools: {max_read_lines: 400, max_output_chars: 24000, max_grep_matches: 100, max_list_files: 500, max_diff_chars: 60000}

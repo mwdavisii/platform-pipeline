@@ -16,7 +16,8 @@ from contracts.schema import validate
 from golden_road.checks import load_required, validate_required
 from golden_road.io import InputError
 
-from .agent.prompt import PROMPTS
+from .agent.prompt import PROMPTS, ROUTING_PROMPTS
+from .routing.config import has_routing, load_routing, merge
 
 MAX_YAML_BYTES = 1_000_000
 MAX_RULES_BYTES = 65536  # config/registration.yaml: the portal's collector reads no more
@@ -139,9 +140,22 @@ def repo_parts(repo: str) -> tuple[str, str]:
     return owner, name
 
 
+def engine(config: dict) -> str:
+    """"routing" when the factory has config/routing.toml (prompt review-2), else "asvs" (the ASVS checklist, review-1)."""
+    return "routing" if "routing" in config else "asvs"
+
+
 def load_config(factory) -> dict:
     path = Path(factory) / "config" / "scorecard.yaml"
-    config = _checked(path, "scorecard-config.v1")
+    routed = has_routing(factory)
+    config = _checked(path, "scorecard-config.v2" if routed else "scorecard-config.v1")
+    prompt = config["agent"]["prompt_version"]
+    if routed and prompt not in ROUTING_PROMPTS:
+        raise InputError(f"{path} agent.prompt_version {prompt!r} is an ASVS prompt; config/routing.toml needs a routing prompt ({', '.join(sorted(ROUTING_PROMPTS))})")
+    if not routed and prompt in ROUTING_PROMPTS:
+        raise InputError(f"{path} agent.prompt_version {prompt!r} needs config/routing.toml")
+    if routed:
+        config = merge(config, load_routing(factory)[0])
     if config["drift_check"] not in {c.get("name") for c in config["gate1_checks"]}:
         raise InputError(f"{path} drift_check {config['drift_check']!r} is not one of the gate1_checks names")
     validate_required(config["gate1_checks"], f"{path} gate1_checks")

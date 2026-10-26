@@ -1,0 +1,6 @@
+schema: intake/v1
+repo: acme/clinic
+tier: high
+purpose: "Shows clinic schedules to staff. It does not edit patient records."
+owner: "clinic-team"
+data_classification: phi

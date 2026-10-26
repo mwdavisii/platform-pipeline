@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://platform.internal/schemas/scorecard-config.v2.json",
+  "title": "scorecard-config/v2",
+  "description": "config/scorecard.yaml when the factory also has config/routing.toml: only the mechanics (Gate 1, the review agent, registry limits, central review). Everything that changes what is routed is in routing.toml.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "gate1_checks", "drift_check", "registry", "agent"],
+  "properties": {
+    "schema": {"const": "scorecard-config/v2"},
+    "gate1_checks": {"$ref": "scorecard-config.v1.json#/properties/gate1_checks"},
+    "drift_check": {"$ref": "scorecard-config.v1.json#/properties/drift_check"},
+    "registry": {
+      "type": "object", "additionalProperties": false, "required": ["timeout_seconds", "max_total_seconds"],
+      "properties": {
+        "timeout_seconds": {"$ref": "scorecard-config.v1.json#/properties/registry/properties/timeout_seconds"},
+        "max_total_seconds": {"$ref": "scorecard-config.v1.json#/properties/registry/properties/max_total_seconds"}
+      }
+    },
+    "agent": {"$ref": "scorecard-config.v1.json#/properties/agent"},
+    "central": {"$ref": "scorecard-config.v1.json#/properties/central"}
+  }
+}

@@ -106,3 +106,18 @@ def pr_checkout(git_repo, notes_spec):
                 "event": event, "now": NOW}
 
     return _make
+
+
+@pytest.fixture
+def routing_factory(tmp_path):
+    """A writable copy of the routing factory: scorecard-config/v2 plus the starting routing.toml (no na/)."""
+    dest = tmp_path / "routing-factory"
+    shutil.copytree(FIXTURES / "factory-routing", dest)
+    return dest
+
+
+@pytest.fixture
+def routing_config(routing_factory):
+    from scorecard.config import load_config
+
+    return load_config(routing_factory)

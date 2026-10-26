@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://platform.internal/schemas/facts-assessment.v1.json",
+  "title": "facts-assessment/v1",
+  "description": "What `scorecard assess` writes with a routing prompt: the agent's answers to config/routing.toml's questions, and the tool log the harness recorded (the model never writes it). `scorecard run` checks every answer against the tree and the log.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "tree_sha", "prompt_version", "model", "questions_sha256", "complete", "answers", "tool_log"],
+  "properties": {
+    "schema": {"const": "facts-assessment/v1"},
+    "tree_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "prompt_version": {"$ref": "assessment.v1.json#/properties/prompt_version"},
+    "model": {"$ref": "assessment.v1.json#/properties/model"},
+    "questions_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "complete": {"type": "boolean"},
+    "answers": {"$ref": "agent-facts.v1.json#/properties/answers"},
+    "tool_log": {"type": "array", "maxItems": 5000, "items": {
+      "type": "object", "additionalProperties": false, "required": ["tool", "ok"],
+      "properties": {"tool": {"enum": ["list_files", "read_file", "grep"]}, "ok": {"type": "boolean"},
+        "text": {"type": "string", "maxLength": 200}, "glob": {"type": "string", "maxLength": 200}, "path": {"type": "string", "maxLength": 1024}}}}
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://platform.internal/schemas/agent-facts.v1.json",
+  "title": "agent-facts/v1",
+  "description": "What the routing review agent submits (the submit_facts tool's arguments): one answer per question. Self-contained (local $defs only) so it can be sent to the model as the tool's parameter schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["answers"],
+  "properties": {"answers": {"type": "array", "maxItems": 100, "items": {"$ref": "#/$defs/answer"}}},
+  "$defs": {
+    "answer": {
+      "type": "object", "additionalProperties": false, "required": ["fact", "answer", "justification", "evidence"],
+      "properties": {
+        "fact": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
+        "answer": {"enum": ["yes", "no", "unsure"]},
+        "justification": {"type": "string", "maxLength": 4000},
+        "evidence": {"type": "array", "maxItems": 20, "items": {"$ref": "#/$defs/anchor"}}
+      }
+    },
+    "anchor": {"type": "object", "additionalProperties": false, "required": ["file", "start_line", "snippet"],
+      "properties": {"file": {"$ref": "#/$defs/repo_path", "maxLength": 1024}, "start_line": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+        "snippet": {"type": "string", "minLength": 1, "maxLength": 8000, "pattern": "\\S"}, "note": {"type": "string", "maxLength": 2000}}},
+    "repo_path": {"type": "string", "minLength": 1, "anyOf": [{"const": "<unknown>"}, {"allOf": [
+      {"not": {"pattern": "[\\x00-\\x1f\\x7f\\x85\\u2028\\u2029]"}}, {"not": {"pattern": "\\\\"}}, {"not": {"pattern": "^/"}},
+      {"not": {"pattern": "(^|/)\\.\\.(/|$)"}}, {"not": {"pattern": "(^|/)\\.(/|$)"}}, {"not": {"pattern": "(^|/)\\.git(/|$)"}}]}]}
+  }
+}

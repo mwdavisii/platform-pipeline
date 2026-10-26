@@ -420,7 +420,8 @@ def _level(items, name, level, comments):
     for reason in reasons:
         trigger = reason["trigger"]
         owner = "platform" if trigger == "T-14" else "reviewer"
-        guidance = f"{base} {TRIGGER_NOTES.get(trigger, 'See the reason on the scorecard comment.')}" + (UNDO if trigger in UNDO_TRIGGERS else "")
+        note = reason.get("guidance") or TRIGGER_NOTES.get(trigger, "See the reason on the scorecard comment.")
+        guidance = f"{base} {note}" + (UNDO if trigger in UNDO_TRIGGERS else "")
         items.human(name, "scorecard", owner, guidance, priority=PRIORITY["level"], severity=level, rule_id=trigger,
                     text=f"{trigger} {reason['summary']}")
 

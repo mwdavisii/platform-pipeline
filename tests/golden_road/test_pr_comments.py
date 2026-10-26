@@ -130,6 +130,19 @@ def test_scorecard_comment_round_trip():
     assert empty["reasons"] == []
 
 
+def test_scorecard_comment_without_fix_lines_has_no_guidance():
+    parsed = pc.parse_scorecard(report_md.render(reporters._card(), reporters.TEXTS, reporters.NAMES, reporters.BLOCKING))
+    assert all("guidance" not in r for r in parsed["reasons"])
+
+
+def test_scorecard_comment_reads_the_fix_line_under_its_reason():
+    text = ("<!-- golden-road:scorecard -->\n## Scorecard: ELEVATED \u2014 2 reasons\n\n### Reasons\n\n"
+            "- **T-22** \u00b7 elevated \u00b7 First\n  - Why: because\n  - Fix: Do the \\_thing.\n  - Fix: ignored second\n"
+            "- **T-23** \u00b7 elevated \u00b7 Second\n  - Why: because\n")
+    first, second = pc.parse_scorecard(text)["reasons"]
+    assert first["guidance"] == "Do the _thing." and "guidance" not in second
+
+
 def test_scorecard_comment_parses_the_re_review_triggers():
     reasons = [{"trigger": "T-17", "level": "elevated", "summary": "Resource tier raised", "refs": []},
                {"trigger": "T-19", "level": "elevated", "summary": "Large change: 1200 lines in 3 files", "refs": []}]

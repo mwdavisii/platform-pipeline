@@ -31,7 +31,10 @@ def test_assess_then_run(pr_checkout, routing_factory, tmp_path, capsys):
     assert main(["run", *common, "--assessment", str(assessment), "--out", str(out)], registry=_Registry()) == 0
     card = json.loads((out / "scorecard.json").read_text())
     assert card["schema"] == "scorecard/v2" and card["level"] == "standard"
-    assert (out / "comment.md").read_text().startswith("<!-- golden-road:scorecard -->")
+    comment = (out / "comment.md").read_text()
+    assert comment.startswith("<!-- golden-road:scorecard -->") and "### Reasons" in comment
+    from golden_road.pr_comments import parse_scorecard
+    assert parse_scorecard(comment)["level"] == "standard"
     assert json.loads(capsys.readouterr().out.strip().splitlines()[-1]) == {"level": "standard", "triggers_fired": []}
 
 

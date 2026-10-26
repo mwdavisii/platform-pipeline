@@ -173,8 +173,44 @@ def _fit(lines: list[str], limit: int) -> str:
     return "\n".join(out) + "\n"
 
 
-__all__ = ["MARKER", "MAX_COMMENT", "render", "safe"]
+def _routing_reason(card: dict, server_url: str, reason: dict) -> list[str]:
+    refs = ", ".join(_ref(card, server_url, r) for r in reason["refs"][:MAX_REFS])
+    lines = [f"- **{reason['trigger']}** · {reason['level']} · {safe(reason['summary'])}{': ' + refs if refs else ''}",
+             f"  - Why: {safe(reason['reason'], 2000)}"]
+    lines += [f"  - Couldn't decide: {safe(item)}" for item in reason.get("undetermined", [])]
+    lines.append(f"  - Fix: {safe(reason['guidance'], 2000)}")
+    return lines
 
 
 def render_routing(card: dict, *, server_url: str = "https://github.com", limit: int = SUMMARY_LIMIT, expired=()) -> str:
-    return _fit([MARKER, f"## Scorecard: {HEADLINE[card['level']]}"], limit)
+    """Markdown for a scorecard/v2: the job summary (default limit) or the PR comment (limit=MAX_COMMENT). Shadow rules are
+    listed only in the job summary."""
+    app, n, facts = card["app"], len(card["reasons"]), len(card["routing"]["facts"])
+    lines = [MARKER, f"## Scorecard: {HEADLINE[card['level']]} — {n} reason{'s' if n != 1 else ''} · {facts} fact{'s' if facts != 1 else ''} checked", "",
+             f"Assessed tree `{app['tree_sha']}` at commit `{app['commit']}`. The authoritative level is the "
+             f"`level: {card['level']}` check from the scorecard run. This comment is a view: removing the label changes nothing."]
+    lines += ["", "### Reasons", ""]
+    if not card["reasons"]:
+        lines.append(f"- Nothing needs a person. The level comes from the intake floor: {card['floor']}.")
+    for reason in card["reasons"]:
+        lines += _routing_reason(card, server_url, reason)
+    lines += _findings(card | {"assessment": {"findings": []}}, server_url)
+    lines += _expired(list(expired))
+    lines += ["", "### Gate 1 (context, not re-scored)", "", "| Check | State |", "|---|---|"]
+    lines += [f"| {safe(c['name'], 120)} | {c['state']} |" for c in card["observations"]["checks"]]
+    if limit == SUMMARY_LIMIT and card["routing"]["shadow"]:
+        lines += ["", "### Shadow rules (recorded, not routed)", ""]
+        for reason in card["routing"]["shadow"]:
+            lines += _routing_reason(card, server_url, reason)
+    a = card["assessment"]
+    lines += ["", "### Review", ""]
+    if a["present"]:
+        lines.append(f"Model version {safe(a['model']['version'], 40)} at {temperature_phrase(a['model']['temperature'])}, "
+                     f"prompt {safe(a['prompt_version'], 64)}. {'Complete.' if a['complete'] else 'Incomplete.'}")
+    else:
+        lines.append("No review agent assessment: every question it answers is undetermined (T-14).")
+    lines.append("Facts from code are reproducible. The agent's answers are checked by code, but not guaranteed to be the same on a re-run.")
+    return _fit(lines, limit)
+
+
+__all__ = ["MARKER", "MAX_COMMENT", "render", "render_routing", "safe"]

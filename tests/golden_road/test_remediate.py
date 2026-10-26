@@ -195,6 +195,13 @@ def test_scorecard_levels():
     assert run([check("scorecard / level: standard", "pass", "SUCCESS")], {"scorecard": scorecard_comment(("T-15",), "security_review")})["items"] == []
 
 
+def test_scorecard_fix_line_replaces_the_trigger_note():
+    comment = ("<!-- golden-road:scorecard -->\n## Scorecard: SECURITY REVIEW \u2014 1 reason\n\n### Reasons\n\n"
+               "- **T-22** \u00b7 security_review \u00b7 The app checks its own credentials\n  - Why: no guard\n  - Fix: Use the platform identity header.\n")
+    item = only(run([check("scorecard / level: security_review", "pass", "SUCCESS")], {"scorecard": comment}), rule_id="T-22")
+    assert item["owner"] == "reviewer" and item["guidance"].endswith("Use the platform identity header.")
+
+
 def test_the_re_review_triggers_are_reviewer_items_with_nothing_to_fix():
     doc = run([check("scorecard / level: elevated", "pass", "SUCCESS")], {"scorecard": scorecard_comment(("T-17", "T-18", "T-19", "T-21"))})
     for trigger in ("T-17", "T-18", "T-19", "T-21"):

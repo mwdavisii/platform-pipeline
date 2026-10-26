@@ -153,6 +153,7 @@ def parse_preview(text) -> dict:
 
 _SC_HEAD = re.compile(r"## Scorecard: (STANDARD|ELEVATED|SECURITY REVIEW)\b")
 _SC_REASON = re.compile(r"- \*\*(T-[0-9]{1,3})\*\* · (standard|elevated|security_review) · (.{0,1500})")
+_SC_FIX = re.compile(r"  - Fix: (.{1,2000})")
 _SC_REF_START = re.compile(r": (?=\[|`)")
 
 
@@ -167,7 +168,10 @@ def parse_scorecard(text) -> dict:
             in_reasons = line == "### Reasons"
         elif in_reasons:
             match = _SC_REASON.fullmatch(line)
+            fix = _SC_FIX.fullmatch(line)
             if match:
                 rest = _SC_REF_START.split(match.group(3), maxsplit=1)[0]  # an unescaped "[" or backtick can only start a reference
                 out["reasons"].append({"trigger": match.group(1), "level": match.group(2), "summary": unescape_md(rest)[:300]})
+            elif fix and out["reasons"] and "guidance" not in out["reasons"][-1]:
+                out["reasons"][-1]["guidance"] = unescape_md(fix.group(1))[:600]
     return out

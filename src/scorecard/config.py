@@ -148,6 +148,8 @@ def engine(config: dict) -> str:
 def load_config(factory) -> dict:
     path = Path(factory) / "config" / "scorecard.yaml"
     routed = has_routing(factory)
+    if not routed and isinstance(raw := load_yaml(path), dict) and raw.get("schema") == "scorecard-config/v2":
+        raise InputError(f"{path} is scorecard-config/v2, which needs config/routing.toml next to it (is the intake action copying it?)")
     config = _checked(path, "scorecard-config.v2" if routed else "scorecard-config.v1")
     prompt = config["agent"]["prompt_version"]
     if routed and prompt not in ROUTING_PROMPTS:

@@ -101,3 +101,29 @@ def test_a_symlinked_routing_file_is_refused(routing_factory, tmp_path):
     path.symlink_to(target)
     with pytest.raises(InputError, match="symlink"):
         load_config(routing_factory)
+
+
+def test_a_v2_scorecard_yaml_without_routing_toml_says_so(routing_factory):
+    (routing_factory / "config" / "routing.toml").unlink()
+    with pytest.raises(InputError, match=r"scorecard-config/v2, which needs config/routing\.toml next to it \(is the intake action copying it\?\)"):
+        load_config(routing_factory)
+
+
+def test_a_v1_scorecard_yaml_without_routing_toml_still_gets_the_schema_error(factory):
+    text = (factory / "config" / "scorecard.yaml").read_text()
+    (factory / "config" / "scorecard.yaml").write_text(text.replace("scorecard-config/v1", "scorecard-config/v9", 1))
+    with pytest.raises(InputError, match="not a valid scorecard-config.v1"):
+        load_config(factory)
+
+
+def test_the_schema_measure_enums_equal_the_code_s_tables():
+    import json
+    from pathlib import Path
+
+    import contracts
+    from scorecard.routing.config import BUILTIN, SPEC
+
+    branches = json.loads((Path(contracts.__file__).parent / "schemas" / "routing.v1.json").read_text())["$defs"]["fact"]["allOf"]
+    enums = {b["if"]["properties"]["from"]["const"]: b["then"]["properties"]["measure"]["enum"] for b in branches[:2]}
+    assert set(enums["builtin"]) == set(BUILTIN) and len(enums["builtin"]) == len(BUILTIN)
+    assert set(enums["spec"]) == set(SPEC) and len(enums["spec"]) == len(SPEC)

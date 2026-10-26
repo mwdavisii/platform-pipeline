@@ -173,5 +173,5 @@ def parse_scorecard(text) -> dict:
                 rest = _SC_REF_START.split(match.group(3), maxsplit=1)[0]  # an unescaped "[" or backtick can only start a reference
                 out["reasons"].append({"trigger": match.group(1), "level": match.group(2), "summary": unescape_md(rest)[:300]})
             elif fix and out["reasons"] and "guidance" not in out["reasons"][-1]:
-                out["reasons"][-1]["guidance"] = unescape_md(fix.group(1))[:600]
+                out["reasons"][-1]["guidance"] = unescape_md(fix.group(1))[:2000]
     return out

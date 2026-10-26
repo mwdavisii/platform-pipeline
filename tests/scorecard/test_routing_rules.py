@@ -63,7 +63,7 @@ def test_unsure_follows_on_unsure():
         assert reasons[0]["undetermined"] == ["q: token was not searched"]
     level, reasons, _, undecided = evaluate({"rules": [_rule("T-26", {"fact": "q", "is": True}, on_unsure="standard")]}, facts,
                                             classification=None, floor="standard")
-    assert (level, reasons) == ("standard", []) and undecided == [{"trigger": "T-26", "undetermined": ["q: token was not searched"]}]
+    assert (level, reasons) == ("standard", []) and undecided == [{"trigger": "T-26", "mode": "enforce", "undetermined": ["q: token was not searched"]}]
 
 
 def test_a_no_answer_does_not_fire():
@@ -115,3 +115,35 @@ def test_reasons_are_sorted_by_number():
     routing = {"rules": [_rule("T-21", {"fact": "a", "is": True}), _rule("T-3", {"fact": "a", "is": True})]}
     _, reasons, _, _ = evaluate(routing, {"a": _bool(True)}, classification=None, floor="standard")
     assert [r["trigger"] for r in reasons] == ["T-3", "T-21"]
+
+
+def test_long_placeholder_values_are_cut_and_the_event_still_validates():
+    from scorecard.event import re_review_event
+    from scorecard.routing.rules import MAX_SUMMARY, MAX_TEXT
+
+    rule = _rule("T-24", {"fact": "g", "changed": "added"}, level="elevated")
+    rule.update(summary="Granted: {justification}", reason="Because: {justification}", guidance="Fix: {justification}")
+    grants = [{"justification": "x" * 5000}, {"justification": "y"}]
+    fact = _spec("grants", [], grants, added=grants)
+    fact["refs"] = [{"file": "builder-spec.json"}, {"file": "builder-spec.json", "line": 3}]
+    level, [entry], *_ = evaluate({"rules": [rule]}, {"g": fact}, classification=None, floor="standard")
+    assert entry["summary"].startswith("Granted: xxx") and entry["summary"].endswith("… (2 items)")
+    assert len(entry["summary"]) == MAX_SUMMARY + len(" (2 items)")
+    assert len(entry["reason"]) == len(entry["guidance"]) == MAX_TEXT and entry["reason"].endswith("…")
+    card = {"generated_at": "2026-10-23T08:00:00Z", "level": level, "floor": "standard", "app": {"repo": "acme/notes", "tree_sha": "c" * 40},
+            "assessment": {"complete": True}, "reasons": [entry]}
+    assert re_review_event(card, pr=1, head_sha="a" * 40, recorded=[])["signals"][0]["id"] == "T-24"
+
+
+def test_short_values_are_not_cut():
+    rule = _rule("T-9", {"fact": "a", "is": True}, level="elevated")
+    _, [entry], *_ = evaluate({"rules": [rule]}, {"a": _bool(True)}, classification=None, floor="standard")
+    assert entry["summary"] == "summary T-9" and entry["reason"] == "reason T-9"
+
+
+def test_an_undecided_rule_records_its_mode():
+    facts = {"q": _agent(None, why="unsure")}
+    for mode in ("enforce", "shadow"):
+        _, _, _, undecided = evaluate({"rules": [_rule("T-26", {"fact": "q", "is": True}, on_unsure="standard", mode=mode)]}, facts,
+                                      classification=None, floor="standard")
+        assert undecided[0]["mode"] == mode

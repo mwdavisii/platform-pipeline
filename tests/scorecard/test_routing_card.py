@@ -35,6 +35,7 @@ def test_no_assessment_is_t14_and_every_unsure_rule_routes(pr_checkout, routing_
     # Unsure on T-3, T-4, T-6 and T-7 routes at elevated (their on_unsure); T-9, T-10 and T-26 are undecided; T-14 is elevated.
     assert card["level"] == "elevated"
     assert {u["trigger"] for u in card["routing"]["undecided"]} >= {"T-9", "T-10"}
+    assert all(u["mode"] in ("enforce", "shadow") for u in card["routing"]["undecided"])  # the schema requires it
     fired = {r["trigger"]: r for r in card["reasons"]}
     assert "T-14" in fired and fired["T-4"]["unsure"] and fired["T-4"]["level"] == "elevated"
     assert {s["trigger"] for s in card["routing"]["shadow"]} >= {"T-22", "T-23", "T-25"}  # shadow: recorded, not routed

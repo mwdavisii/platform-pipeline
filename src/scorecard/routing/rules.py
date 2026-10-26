@@ -9,7 +9,14 @@ from ..levels import highest, rank
 from .config import conditions
 
 MAX_REFS = 20
+MAX_SUMMARY = 300  # what golden_road.pr_comments keeps of a reason's summary
+MAX_TEXT = 2000  # reason and guidance: the comment's Why and Fix lines
 UNSURE_PREFIX = "Not determined: "
+
+
+def _cut(text: str, limit: int) -> str:
+    """Placeholder values (a spec justification, say) are unbounded, so what they fill in is cut."""
+    return text if len(text) <= limit else text[:limit - 1] + "\u2026"
 
 
 def _number(value) -> int:
@@ -98,7 +105,7 @@ def evaluate(routing: dict, facts: dict, *, classification: str | None, floor: s
         why = [f"{name}: {fact.get('why') or 'unsure'}" for name, fact in unsure] if is_unsure else []
         level = rule["level"]
         if is_unsure and rule["on_unsure"] == "standard":
-            undecided.append({"trigger": rule["id"], "undetermined": why})
+            undecided.append({"trigger": rule["id"], "mode": rule.get("mode", "enforce"), "undetermined": why})
             continue
         if is_unsure and rule["on_unsure"] == "elevated":
             level = "elevated"
@@ -106,13 +113,14 @@ def evaluate(routing: dict, facts: dict, *, classification: str | None, floor: s
             level = escalate["level"]
         refs = _unique(ref for _, fact in chosen for ref in fact["refs"]) or [{"source": chosen[0][0]}]
         values = _values(chosen[0][1])
-        summary = (UNSURE_PREFIX if is_unsure else "") + rule["summary"].format(**values)
+        summary = _cut((UNSURE_PREFIX if is_unsure else "") + rule["summary"].format(**values), MAX_SUMMARY)
         if len(refs) > MAX_REFS:
             summary += f" (showing {MAX_REFS} of {len(refs)})"
         elif len(refs) > 1:
             summary += f" ({len(refs)} items)"
         entry = {"trigger": rule["id"], "level": level, "summary": summary, "refs": refs[:MAX_REFS], "total": len(refs),
-                 "reason": rule["reason"].format(**values), "guidance": rule["guidance"].format(**values), "unsure": is_unsure}
+                 "reason": _cut(rule["reason"].format(**values), MAX_TEXT),
+                 "guidance": _cut(rule["guidance"].format(**values), MAX_TEXT), "unsure": is_unsure}
         if is_unsure:
             entry["undetermined"] = why
         (shadow if rule.get("mode", "enforce") == "shadow" else reasons).append(entry)

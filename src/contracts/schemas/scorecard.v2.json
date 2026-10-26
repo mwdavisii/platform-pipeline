@@ -48,8 +48,8 @@
         "facts": {"type": "object", "propertyNames": {"$ref": "routing.v1.json#/$defs/fact_name"}, "additionalProperties": {"$ref": "#/$defs/fact"}},
         "shadow": {"type": "array", "items": {"$ref": "#/$defs/reason"}},
         "undecided": {"type": "array", "items": {
-          "type": "object", "additionalProperties": false, "required": ["trigger", "undetermined"],
-          "properties": {"trigger": {"$ref": "#/$defs/trigger"}, "undetermined": {"type": "array", "items": {"type": "string"}}}}}
+          "type": "object", "additionalProperties": false, "required": ["trigger", "mode", "undetermined"],
+          "properties": {"trigger": {"$ref": "#/$defs/trigger"}, "mode": {"enum": ["enforce", "shadow"]}, "undetermined": {"type": "array", "items": {"type": "string"}}}}}
       }
     },
     "signals": {"$ref": "scorecard.v1.json#/properties/signals"},

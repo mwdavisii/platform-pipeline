@@ -199,3 +199,9 @@ def test_scorecard_comment_parses_a_t21_reason_with_its_registered_and_needed_va
     reasons = [{"trigger": "T-21", "level": "security_review", "summary": summary, "refs": []}]
     text = report_md.render(reporters._card(reasons=reasons, level="security_review"), reporters.TEXTS, reporters.NAMES, reporters.BLOCKING)
     assert [(r["trigger"], r["summary"]) for r in pc.parse_scorecard(text)["reasons"]] == [("T-21", summary)]
+
+
+def test_scorecard_comment_keeps_long_guidance_up_to_2000_characters():
+    text = ("<!-- golden-road:scorecard -->\n## Scorecard: ELEVATED — 1 reason\n\n### Reasons\n\n"
+            f"- **T-22** · elevated · First\n  - Fix: {'g' * 2000}\n")
+    assert pc.parse_scorecard(text)["reasons"][0]["guidance"] == "g" * 2000

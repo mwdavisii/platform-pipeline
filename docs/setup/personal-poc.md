@@ -1138,18 +1138,19 @@ Work on a branch of `<you>/scorecard-factory`. Every step below goes into this o
    cp <src>/tests/scorecard/fixtures/factory-routing/config/routing.toml config/routing.toml
    ```
    Then set two sections to this factory's values. In `[reviewers]` put the teams for `elevated` and `security_review` (copy `reviewers` from the current `config/scorecard.yaml`; an empty list `[]` on a personal account, which has no teams). In `[packages]` put `new_package_days`, `internal_npm_scopes`, `internal_packages` and `internal_registries` from the current `registry:` block (`registry.new_package_days` and `registry.internal_*`). Leave the rest as it is: T-22, T-23, T-24, T-25 and T-26 start in `mode = "shadow"`, so they record and route nothing.
-3. Rewrite `config/scorecard.yaml` as `scorecard-config/v2`. It keeps only the mechanics: the first line `schema: scorecard-config/v2`, then `gate1_checks`, `drift_check`, `central` (if 16.4 added it), the `agent` block with `prompt_version: review-2` (keep your gateway, model version and budget values), and `registry: {timeout_seconds: <as now>, max_total_seconds: <as now>}`. Delete everything else (`tier_floor`, `reviewers`, `paths`, `patterns`, the ASVS keys and the rest of `registry`): `scorecard-config/v2` refuses them, because they are in `routing.toml` now. `<src>/tests/scorecard/fixtures/factory-routing/config/scorecard.yaml` is a complete example; its gateway and model values are stand-ins, so keep your own.
-4. Add the security owner to the factory's `.github/CODEOWNERS`:
+3. Carry over the factory's tuning before anything is deleted. Compare the factory's current values of `tier_floor`, `paths`, `patterns`, `large_change`, `max_comment_block_lines`, `suppressions`, `evidence`, and the T-level choices in `triggers`, with the copied `routing.toml`'s `[floors]`, `[detectors.*]`, `[suppressions]`, `[evidence]` and rule `level`s. Port any local change (a path, a pattern, a threshold, a level) into `routing.toml` now, so no tuning is lost in the switch.
+4. Rewrite `config/scorecard.yaml` as `scorecard-config/v2`. It keeps only the mechanics: the first line `schema: scorecard-config/v2`, then `gate1_checks`, `drift_check`, `central` (if 16.4 added it), the `agent` block with `prompt_version: review-2` (keep your gateway, model version and budget values), and `registry: {timeout_seconds: <as now>, max_total_seconds: <as now>}`. Delete everything else (`tier_floor`, `reviewers`, `paths`, `patterns`, the ASVS keys and the rest of `registry`): `scorecard-config/v2` refuses them, because they are in `routing.toml` now. `<src>/tests/scorecard/fixtures/factory-routing/config/scorecard.yaml` is a complete example; its gateway and model values are stand-ins, so keep your own.
+5. Add the security owner to the factory's `.github/CODEOWNERS`:
    ```bash
    printf '%s\n' '/config/routing.toml @<security owner>' >> .github/CODEOWNERS
    ```
-   Place it after the `*` line, since the last matching line wins. In the PoC `<security owner>` is `@<you>` (and `@<deputy>`).
-5. Run the checker on the branch with the pinned image, the way `factory-check` does:
+   Place it after the `*` line, since the last matching line wins. In the PoC, `<security owner>` is your own login (and your deputy's, if you have one).
+6. Run the checker on the branch with the pinned image, similar to `factory-check`:
    ```bash
    docker run --rm --network none --read-only --tmpfs /tmp --user "$(id -u):$(id -g)" -v "$PWD:/factory:ro" "$BUILDER_IMAGE" scorecard check-factory --factory /factory
    ```
    **Check:** it prints one line of counts (`{"intake": ..., "na": ..., "suppressions": ...}`), with no `error` and no `warnings`. A refusal names the file and the problem: fix it and run again. A `warnings` list (a fact no rule uses) does not fail, but read it.
-6. Open the pull request. **Check:** `factory-check` passes. Merge it.
+7. Open the pull request. **Check:** `factory-check` passes. Merge it.
 
 ### 17.2 Check it on a pull request
 Push a commit to an open pull request on an app (central: the poller assesses it within a poll or two; per-app: the app's `scorecard.yml` runs). Download the artifact and look at it:

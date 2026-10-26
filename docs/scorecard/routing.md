@@ -30,7 +30,7 @@ reason = "The app issues or checks its own API keys, tokens or sessions, so the 
 guidance = "Use the platform identity header (the caller's role comes from the edge) instead of app-issued tokens. If the app must issue tokens, this needs a security review; nothing in the PR clears it."
 ```
 
-`summary` is the one line in the comment, `reason` says why, and `guidance` says what clears it (the app team's coding agent reads it, so write it as an instruction). Rule ids are `T-<number>` (`T-1` to `T-999`), unique. The built-in rules keep their numbers; new rules start at T-22 and use the next free number.
+`summary` is the one line in the comment, `reason` says why, and `guidance` says what clears it (the app team's coding agent reads it, so write it as an instruction). Rule ids are `T-<number>` (`T-1` to `T-999`), unique. The built-in rules keep their numbers. The starting file already uses T-2 to T-26 (T-22 to T-26 are its shadow rules), so a new rule takes the next free number: T-27 for the starting file.
 
 ## The four fact kinds
 
@@ -84,7 +84,7 @@ The answer is never final on its own (`src/scorecard/routing/answers.py`). Anyth
 - `secret_env` (list of names)
 - `egress_hosts` (list of hosts other than the model gateway)
 
-Spec facts also fill `{value}`, `{base}` and `{head}`. Every fact fills `{count}`; an `agent` fact fills `{answer}` too. A literal brace is written `{{` or `}}`.
+Spec facts also fill `{value}`, `{base}` and `{head}`. Every fact fills `{count}`; an `agent` fact fills `{answer}` too. A literal brace is written `{{` or `}}`. A rule that names several facts can use only the placeholders every one of those facts fills (`check-factory` refuses the others).
 
 ## Conditions
 

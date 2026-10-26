@@ -19,7 +19,7 @@ def test_the_set_covers_every_agent_fact_both_ways(routing_config):
     from scorecard.routing.config import agent_facts
     names = {n for n, _ in agent_facts(routing_config["routing"])}
     wanted = {(f, a) for c in CASES for f, a in c["expect"].get("answers", {}).items()}
-    for fact in ("own_credentials", "mutates_on_read_route", "personal_data"):
+    for fact in sorted(names):
         assert (fact, "yes") in wanted and (fact, "no") in wanted, fact
     assert {f for f, _ in wanted} <= names
 

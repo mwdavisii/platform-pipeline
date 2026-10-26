@@ -1130,27 +1130,39 @@ Risk routing replaces the ASVS checklist with one short review and a security-ow
 
 Requirements: a builder release that carries `review-2` (the lead's version bump; this section names no number), released as in 13.2, and the factory's current `config/scorecard.yaml` at hand.
 
+A live golden run, reviewed, before the switch. The fake-mode golden cases check the pipeline, not the model. Run the cases against the real gateway and model the factory will use (it costs tokens and writes a report; nothing is asserted about answers):
+```bash
+GOLDEN_ROAD_SCORECARD_LIVE=1 GOLDEN_ROAD_SCORECARD_FACTORY=<routing factory dir> SCORECARD_GATEWAY_TOKEN=<token> SCORECARD_GATEWAY_MODEL=<model> \
+  PYTHONPATH=src pytest -s tests/scorecard/test_routing_golden_live.py
+```
+(`<routing factory dir>` is a checkout holding the new `config/` from 17.1; the report goes to `GOLDEN_ROAD_SCORECARD_REPORT`, see the test file's docstring.) Read the per-fact true and false positives and the `unsure` rate of every fact. Look hardest at T-3, T-4, T-6 and T-7: they are enforced with `on_unsure = "elevated"`, so each `unsure` answer sends a pull request to a person. If the unsure rate is high the switch floods reviewers: fix the model, the budget or the question wording first. Do not switch until the run has been read and its numbers accepted.
+
 ### 17.1 The factory pull request
 Work on a branch of `<you>/scorecard-factory`. Every step below goes into this one pull request.
 1. Pin the builder release that carries `review-2`: set `BUILDER_IMAGE` to its digest in all four factory workflows, as in 16.3 (`scorecard.yml`, `scorecard-poll.yml`, `scorecard-assess.yml` and `factory-check.yml`).
-2. Add the rules file, starting from the one the tests use:
+2. Update the factory's intake action. Every workflow fetches the factory through `<you>/scorecard-factory/.github/actions/intake@main`, so the copy on the factory's `main` is what runs for every app, and it copies the factory's config files into the run. The old copy does not know `config/routing.toml`: after the switch it would copy the v2 `scorecard.yaml` without the rules, and every app would fail with a config error. Replace it with the version in this repo, before the config changes below:
+   ```bash
+   cp <src>/bootstrap/scorecard-factory/.github/actions/intake/action.yml .github/actions/intake/action.yml
+   ```
+   If the factory's copy has local changes, carry them over into the new file first.
+3. Add the rules file, starting from the one the tests use:
    ```bash
    cp <src>/tests/scorecard/fixtures/factory-routing/config/routing.toml config/routing.toml
    ```
    Then set two sections to this factory's values. In `[reviewers]` put the teams for `elevated` and `security_review` (copy `reviewers` from the current `config/scorecard.yaml`; an empty list `[]` on a personal account, which has no teams). In `[packages]` put `new_package_days`, `internal_npm_scopes`, `internal_packages` and `internal_registries` from the current `registry:` block (`registry.new_package_days` and `registry.internal_*`). Leave the rest as it is: T-22, T-23, T-24, T-25 and T-26 start in `mode = "shadow"`, so they record and route nothing.
-3. Carry over the factory's tuning before anything is deleted. Compare the factory's current values of `tier_floor`, `paths`, `patterns`, `large_change`, `max_comment_block_lines`, `suppressions`, `evidence`, and the T-level choices in `triggers`, with the copied `routing.toml`'s `[floors]`, `[detectors.*]`, `[suppressions]`, `[evidence]` and rule `level`s. Port any local change (a path, a pattern, a threshold, a level) into `routing.toml` now, so no tuning is lost in the switch.
-4. Rewrite `config/scorecard.yaml` as `scorecard-config/v2`. It keeps only the mechanics: the first line `schema: scorecard-config/v2`, then `gate1_checks`, `drift_check`, `central` (if 16.4 added it), the `agent` block with `prompt_version: review-2` (keep your gateway, model version and budget values), and `registry: {timeout_seconds: <as now>, max_total_seconds: <as now>}`. Delete everything else (`tier_floor`, `reviewers`, `paths`, `patterns`, the ASVS keys and the rest of `registry`): `scorecard-config/v2` refuses them, because they are in `routing.toml` now. `<src>/tests/scorecard/fixtures/factory-routing/config/scorecard.yaml` is a complete example; its gateway and model values are stand-ins, so keep your own.
-5. Add the security owner to the factory's `.github/CODEOWNERS`:
+4. Carry over the factory's tuning before anything is deleted. Compare the factory's current values of `tier_floor`, `paths`, `patterns`, `large_change`, `max_comment_block_lines`, `suppressions`, `evidence`, and the T-level choices in `triggers`, with the copied `routing.toml`'s `[floors]`, `[detectors.*]`, `[suppressions]`, `[evidence]` and rule `level`s. Port any local change (a path, a pattern, a threshold, a level) into `routing.toml` now, so no tuning is lost in the switch.
+5. Rewrite `config/scorecard.yaml` as `scorecard-config/v2`. It keeps only the mechanics: the first line `schema: scorecard-config/v2`, then `gate1_checks`, `drift_check`, `central` (if 16.4 added it), the `agent` block with `prompt_version: review-2` (keep your gateway, model version and budget values), and `registry: {timeout_seconds: <as now>, max_total_seconds: <as now>}`. Delete everything else (`tier_floor`, `reviewers`, `paths`, `patterns`, the ASVS keys and the rest of `registry`): `scorecard-config/v2` refuses them, because they are in `routing.toml` now. `<src>/tests/scorecard/fixtures/factory-routing/config/scorecard.yaml` is a complete example; its gateway and model values are stand-ins, so keep your own.
+6. Add the security owner to the factory's `.github/CODEOWNERS`:
    ```bash
    printf '%s\n' '/config/routing.toml @<security owner>' >> .github/CODEOWNERS
    ```
    Place it after the `*` line, since the last matching line wins. In the PoC, `<security owner>` is your own login (and your deputy's, if you have one).
-6. Run the checker on the branch with the pinned image, similar to `factory-check`:
+7. Run the checker on the branch with the pinned image, similar to `factory-check`:
    ```bash
    docker run --rm --network none --read-only --tmpfs /tmp --user "$(id -u):$(id -g)" -v "$PWD:/factory:ro" "$BUILDER_IMAGE" scorecard check-factory --factory /factory
    ```
    **Check:** it prints one line of counts (`{"intake": ..., "na": ..., "suppressions": ...}`), with no `error` and no `warnings`. A refusal names the file and the problem: fix it and run again. A `warnings` list (a fact no rule uses) does not fail, but read it.
-7. Open the pull request. **Check:** `factory-check` passes. Merge it.
+8. Open the pull request. **Check:** `factory-check` passes. Merge it.
 
 ### 17.2 Check it on a pull request
 Push a commit to an open pull request on an app (central: the poller assesses it within a poll or two; per-app: the app's `scorecard.yml` runs). Download the artifact and look at it:
@@ -1158,7 +1170,7 @@ Push a commit to an open pull request on an app (central: the poller assesses it
 gh run download <run id> --repo <you>/<app> -n scorecard
 jq '{schema, level, reasons: [.reasons[].trigger], shadow: [.routing.shadow[].trigger], undecided: .routing.undecided, complete: .assessment.complete}' scorecard.json
 ```
-**Check:** `schema` is `"scorecard/v2"` (a v1 scorecard means the app still ran the old engine: its pull request has not been re-assessed with the new pin), `complete` is `true`, and the comment on the pull request has a `### Reasons` list with a `Fix:` line under each reason, or none if the level is `standard`. Shadow rules show only in `routing.shadow` and in the job summary, never in the comment.
+**Check:** `schema` is `"scorecard/v2"` (a v1 scorecard means the app still ran the old engine: its pull request has not been re-assessed with the new pin). That also shows the run's factory copy held `config/routing.toml`; if the run instead fails with "scorecard-config/v2, which needs config/routing.toml next to it", the intake action on the factory's `main` is still the old one (17.1, step 2). `complete` is `true`, and the comment on the pull request has a `### Reasons` list with a `Fix:` line under each reason, or none if the level is `standard`. Shadow rules show only in `routing.shadow` and in the job summary, never in the comment.
 
 ### 17.3 Watch the shadow rules
 Leave T-22 to T-26 in shadow while real pull requests come through. For each, look at `routing.shadow` (it would have routed) and `routing.undecided` (an agent answer that was `unsure` under `on_unsure = "standard"`). To enforce one, a separate factory pull request sets its `mode = "enforce"` (or deletes the `mode` line). Adding a rule later follows the steps in `docs/scorecard/routing.md`.

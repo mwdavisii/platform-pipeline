@@ -4,7 +4,7 @@
   change, at least one must be in a file this pull request changed. Otherwise the answer is unsure.
 - `no` can't cite an absence, so it must show what was searched: every `must_check` term needs a successful grep over the
   whole tree (glob "*") in the tool log the harness recorded. Otherwise the answer is unsure.
-- `unsure`, a missing answer, or no assessment at all is unsure, with the reason.
+- `unsure`, a missing answer, or no assessment at all is unsure, with the reason. An unfinished review accepts no answer.
 """
 
 from contracts.evidence import anchor_ok
@@ -43,7 +43,15 @@ def _searched(log) -> set[str]:
             if entry["tool"] == "grep" and entry["ok"] and entry.get("glob", "*") == "*" and isinstance(entry.get("text"), str)}
 
 
-def _unsure_why(doc, got, cfg, verified: bool, searched: set, changed: set) -> str | None:
+def _copy_anchor(anchor: dict, verified: bool) -> dict:
+    """Verified snippets are checked repo text, so they stay raw. Notes are model-written, so they are always redacted."""
+    out = dict(anchor) if verified else {**anchor, "snippet": redact(anchor["snippet"])}
+    if "note" in anchor:
+        out["note"] = redact(anchor["note"])
+    return out
+
+
+def _unsure_why(got, cfg, verified: bool, searched: set, changed: set) -> str | None:
     answer = got["answer"]
     if answer == "yes":
         if not verified:
@@ -74,9 +82,9 @@ def check_answers(doc: dict | None, routing: dict, *, repo_root, citable: set, c
         else:
             evidence = got["evidence"]
             verified = bool(evidence) and all(anchor_ok(repo_root, a) and a["file"] in citable for a in evidence)
-            fact["evidence"] = [dict(a) if verified else {**a, "snippet": redact(a["snippet"])} for a in evidence]
+            fact["evidence"] = [_copy_anchor(a, verified) for a in evidence]
             fact["justification"] = redact(got["justification"])[:MAX_JUSTIFICATION]
-            fact["why"] = _unsure_why(doc, got, cfg, verified, searched, changed)
+            fact["why"] = "the review did not finish" if not doc["complete"] else _unsure_why(got, cfg, verified, searched, changed)
             if fact["why"] is None:
                 fact["answer"], fact["value"] = got["answer"], got["answer"] == "yes"
         if fact["value"]:

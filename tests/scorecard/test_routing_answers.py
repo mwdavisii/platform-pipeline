@@ -99,6 +99,20 @@ def test_unverified_snippets_and_justifications_are_redacted(repo):
     assert secret not in str(fact["evidence"]) and secret not in fact["justification"]
 
 
+def test_anchor_notes_are_redacted_whether_or_not_verified(repo):
+    secret = "ghp_" + "A" * 36
+    fact = _check(repo, _doc([_answer("own_credentials", "yes", [{**CITE, "note": secret}])]))["own_credentials"]
+    assert fact["value"] is True and secret not in str(fact["evidence"])
+    fact = _check(repo, _doc([_answer("own_credentials", "yes", [{**CITE, "snippet": "API_KEYS = load()", "note": secret}])]))["own_credentials"]
+    assert fact["value"] is None and secret not in str(fact["evidence"])
+
+
+def test_an_unfinished_review_accepts_no_answer(repo):
+    fact = _check(repo, _doc([_answer("own_credentials", "yes", [CITE])], complete=False))["own_credentials"]
+    assert fact["value"] is None and fact["answer"] == "unsure" and fact["why"] == "the review did not finish"
+    assert fact["refs"] == [{"source": "own_credentials: the review did not finish"}]
+
+
 CONFIG = {"routing": ROUTING, "agent": {"prompt_version": "review-2", "model": {"version": "pinned-1", "temperature": 0}}}
 
 

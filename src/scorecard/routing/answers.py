@@ -43,9 +43,10 @@ def _searched(log) -> set[str]:
             if entry["tool"] == "grep" and entry["ok"] and entry.get("glob", "*") == "*" and isinstance(entry.get("text"), str)}
 
 
-def _copy_anchor(anchor: dict, verified: bool) -> dict:
-    """Verified snippets are checked repo text, so they stay raw. Notes are model-written, so they are always redacted."""
-    out = dict(anchor) if verified else {**anchor, "snippet": redact(anchor["snippet"])}
+def _copy_anchor(anchor: dict) -> dict:
+    """Snippets and notes are always redacted, verified or not: anchor_ok already ran on the original snippet, and the card
+    goes into public artifacts, so a secret that sits in the repo text must not be copied there. Nothing re-verifies the stored copy."""
+    out = {**anchor, "snippet": redact(anchor["snippet"])}
     if "note" in anchor:
         out["note"] = redact(anchor["note"])
     return out
@@ -82,7 +83,7 @@ def check_answers(doc: dict | None, routing: dict, *, repo_root, citable: set, c
         else:
             evidence = got["evidence"]
             verified = bool(evidence) and all(anchor_ok(repo_root, a) and a["file"] in citable for a in evidence)
-            fact["evidence"] = [_copy_anchor(a, verified) for a in evidence]
+            fact["evidence"] = [_copy_anchor(a) for a in evidence]
             fact["justification"] = redact(got["justification"])[:MAX_JUSTIFICATION]
             fact["why"] = "the review did not finish" if not doc["complete"] else _unsure_why(got, cfg, verified, searched, changed)
             if fact["why"] is None:

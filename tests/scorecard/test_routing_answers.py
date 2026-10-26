@@ -99,6 +99,15 @@ def test_unverified_snippets_and_justifications_are_redacted(repo):
     assert secret not in str(fact["evidence"]) and secret not in fact["justification"]
 
 
+def test_a_verified_snippet_is_redacted_too(tmp_path):
+    secret = "ghp_" + "A" * 36
+    (tmp_path / "app.py").write_text(f"a = 1\nTOKEN = '{secret}'\n")
+    cite = {"file": "app.py", "start_line": 2, "snippet": f"TOKEN = '{secret}'"}
+    fact = _check(tmp_path, _doc([_answer("own_credentials", "yes", [cite])]))["own_credentials"]
+    assert fact["value"] is True and fact["answer"] == "yes"
+    assert secret not in str(fact["evidence"]) and fact["evidence"][0]["file"] == "app.py"
+
+
 def test_anchor_notes_are_redacted_whether_or_not_verified(repo):
     secret = "ghp_" + "A" * 36
     fact = _check(repo, _doc([_answer("own_credentials", "yes", [{**CITE, "note": secret}])]))["own_credentials"]

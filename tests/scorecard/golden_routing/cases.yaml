@@ -1,0 +1,1355 @@
+# Generated once from small FastAPI apps; edit in place. `fake` answers cite exact file text and line.
+- name: read-token-writes
+  description: 'An app-issued API key marked scope read can POST: the handler checks only that the key exists, never its scope. Platform roles
+    never see it. T-22 runs in shadow, so the level stays standard.'
+  base:
+    app.py: |
+      from fastapi import FastAPI
+
+      app = FastAPI()
+      NOTES = []
+
+
+      @app.get("/healthz")
+      def healthz():
+          return {"ok": True}
+
+
+      @app.get("/api/notes")
+      def list_notes():
+          return NOTES
+
+
+      @app.post("/api/notes")
+      def add_note(note: dict):
+          NOTES.append(note.get("text", ""))
+          return {"count": len(NOTES)}
+    requirements.txt: |
+      fastapi==0.115.0 \
+          --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      uvicorn==0.30.0 \
+          --hash=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    builder-spec.json: |
+      {
+        "app_name": "notes-api",
+        "app_type": "python",
+        "entrypoint": "app:app",
+        "server": "uvicorn",
+        "port": 8080,
+        "health_path": "/healthz",
+        "data_classification": "internal",
+        "egress": [
+          {
+            "host": "litellm.internal",
+            "port": 443,
+            "reason": "model calls through the platform gateway"
+          }
+        ],
+        "env": [
+          {
+            "name": "NOTES_DB_URL",
+            "secret": true
+          }
+        ],
+        "resources_tier": "default",
+        "authz": {
+          "roles": [
+            {
+              "name": "reader",
+              "access": "read"
+            },
+            {
+              "name": "writer",
+              "access": "write"
+            }
+          ],
+          "default": "deny",
+          "rules": [
+            {
+              "methods": [
+                "GET"
+              ],
+              "path": "/api/**",
+              "roles": [
+                "reader",
+                "writer"
+              ]
+            },
+            {
+              "methods": [
+                "DELETE",
+                "PATCH",
+                "POST",
+                "PUT"
+              ],
+              "path": "/api/**",
+              "roles": [
+                "writer"
+              ]
+            }
+          ]
+        }
+      }
+    README.md: |
+      # Notes
+
+      Short team notes.
+  change:
+    app.py: |
+      from fastapi import FastAPI, Depends, Header, HTTPException
+
+      app = FastAPI()
+      NOTES = []
+      API_KEYS = {"k1": {"scope": "read"}}
+
+
+      def require_key(x_api_key: str = Header(default="")):
+          if x_api_key not in API_KEYS:
+              raise HTTPException(status_code=401)
+          return x_api_key
+
+
+      @app.get("/healthz")
+      def healthz():
+          return {"ok": True}
+
+
+      @app.get("/api/notes")
+      def list_notes():
+          return NOTES
+
+
+      @app.post("/api/notes")
+      def add_note(note: dict, key: str = Depends(require_key)):
+          NOTES.append(note.get("text", ""))
+          return {"count": len(NOTES)}
+  expect:
+    answers:
+      own_credentials: 'yes'
+      mutates_on_read_route: 'no'
+      personal_data: 'no'
+    level: standard
+    shadow:
+    - T-22
+    not_fired:
+    - T-22
+    - T-23
+  fake:
+    own_credentials:
+      answer: 'yes'
+      justification: The app keeps its own API keys and require_key checks only that the key exists; the scope is never read.
+      evidence:
+      - file: app.py
+        start_line: 5
+        snippet: 'API_KEYS = {"k1": {"scope": "read"}}'
+- name: get-deletes
+  description: A GET route deletes from the store. The spec lets readers GET /api/**, so a read role can delete.
+  base:
+    app.py: |
+      from fastapi import FastAPI
+
+      app = FastAPI()
+      NOTES = []
+
+
+      @app.get("/healthz")
+      def healthz():
+          return {"ok": True}
+
+
+      @app.get("/api/notes")
+      def list_notes():
+          return NOTES
+
+
+      @app.post("/api/notes")
+      def add_note(note: dict):
+          NOTES.append(note.get("text", ""))
+          return {"count": len(NOTES)}
+    requirements.txt: |
+      fastapi==0.115.0 \
+          --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      uvicorn==0.30.0 \
+          --hash=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    builder-spec.json: |
+      {
+        "app_name": "notes-api",
+        "app_type": "python",
+        "entrypoint": "app:app",
+        "server": "uvicorn",
+        "port": 8080,
+        "health_path": "/healthz",
+        "data_classification": "internal",
+        "egress": [
+          {
+            "host": "litellm.internal",
+            "port": 443,
+            "reason": "model calls through the platform gateway"
+          }
+        ],
+        "env": [
+          {
+            "name": "NOTES_DB_URL",
+            "secret": true
+          }
+        ],
+        "resources_tier": "default",
+        "authz": {
+          "roles": [
+            {
+              "name": "reader",
+              "access": "read"
+            },
+            {
+              "name": "writer",
+              "access": "write"
+            }
+          ],
+          "default": "deny",
+          "rules": [
+            {
+              "methods": [
+                "GET"
+              ],
+              "path": "/api/**",
+              "roles": [
+                "reader",
+                "writer"
+              ]
+            },
+            {
+              "methods": [
+                "DELETE",
+                "PATCH",
+                "POST",
+                "PUT"
+              ],
+              "path": "/api/**",
+              "roles": [
+                "writer"
+              ]
+            }
+          ]
+        }
+      }
+    README.md: |
+      # Notes
+
+      Short team notes.
+  change:
+    app.py: |
+      from fastapi import FastAPI
+
+      app = FastAPI()
+      NOTES = []
+
+
+      @app.get("/healthz")
+      def healthz():
+          return {"ok": True}
+
+
+      @app.get("/api/notes")
+      def list_notes():
+          return NOTES
+
+
+      @app.post("/api/notes")
+      def add_note(note: dict):
+          NOTES.append(note.get("text", ""))
+          return {"count": len(NOTES)}
+
+
+      @app.get("/api/notes/{id}/delete")
+      def delete_note(id: int):
+          NOTES.pop(id)
+          return {"count": len(NOTES)}
+  expect:
+    answers:
+      mutates_on_read_route: 'yes'
+      own_credentials: 'no'
+    level: standard
+    shadow:
+    - T-23
+    not_fired:
+    - T-23
+  fake:
+    mutates_on_read_route:
+      answer: 'yes'
+      justification: delete_note is a GET handler under /api/** that removes a note from NOTES; readers may call GET.
+      evidence:
+      - file: app.py
+        start_line: 25
+        snippet: '    NOTES.pop(id)'
+- name: graphql-mutation
+  description: A GraphQL POST endpoint that readers may call (the spec grants reader POST /graphql) runs a deleteNote mutation. The method guard
+    sees a POST by a read role and lets it through.
+  base:
+    app.py: |
+      from fastapi import FastAPI
+
+      app = FastAPI()
+      NOTES = []
+
+
+      @app.get("/healthz")
+      def healthz():
+          return {"ok": True}
+
+
+      @app.get("/api/notes")
+      def list_notes():
+          return NOTES
+
+
+      @app.post("/api/notes")
+      def add_note(note: dict):
+          NOTES.append(note.get("text", ""))
+          return {"count": len(NOTES)}
+    requirements.txt: |
+      fastapi==0.115.0 \
+          --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      uvicorn==0.30.0 \
+          --hash=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    builder-spec.json: |
+      {
+        "app_name": "notes-api",
+        "app_type": "python",
+        "entrypoint": "app:app",
+        "server": "uvicorn",
+        "port": 8080,
+        "health_path": "/healthz",
+        "data_classification": "internal",
+        "egress": [
+          {
+            "host": "litellm.internal",
+            "port": 443,
+            "reason": "model calls through the platform gateway"
+          }
+        ],
+        "env": [
+          {
+            "name": "NOTES_DB_URL",
+            "secret": true
+          }
+        ],
+        "resources_tier": "default",
+        "authz": {
+          "roles": [
+            {
+              "name": "reader",
+              "access": "read"
+            },
+            {
+              "name": "writer",
+              "access": "write"
+            }
+          ],
+          "default": "deny",
+          "rules": [
+            {
+              "methods": [
+                "GET"
+              ],
+              "path": "/api/**",
+              "roles": [
+                "reader",
+                "writer"
+              ]
+            },
+            {
+              "methods": [
+                "DELETE",
+                "PATCH",
+                "POST",
+                "PUT"
+              ],
+              "path": "/api/**",
+              "roles": [
+                "writer"
+              ]
+            }
+          ]
+        }
+      }
+    README.md: |
+      # Notes
+
+      Short team notes.
+  change:
+    app.py: |
+      from fastapi import FastAPI
+
+      app = FastAPI()
+      NOTES = []
+
+
+      @app.get("/healthz")
+      def healthz():
+          return {"ok": True}
+
+
+      @app.get("/api/notes")
+      def list_notes():
+          return NOTES
+
+
+      @app.post("/api/notes")
+      def add_note(note: dict):
+          NOTES.append(note.get("text", ""))
+          return {"count": len(NOTES)}
+
+
+      @app.post("/graphql")
+      def graphql(body: dict):
+          query = body.get("query", "")
+          if "deleteNote" in query:
+              NOTES.clear()
+              return {"data": {"deleteNote": True}}
+          return {"data": {"notes": NOTES}}
+    builder-spec.json: |
+      {
+        "app_name": "notes-api",
+        "app_type": "python",
+        "entrypoint": "app:app",
+        "server": "uvicorn",
+        "port": 8080,
+        "health_path": "/healthz",
+        "data_classification": "internal",
+        "egress": [
+          {
+            "host": "litellm.internal",
+            "port": 443,
+            "reason": "model calls through the platform gateway"
+          }
+        ],
+        "env": [
+          {
+            "name": "NOTES_DB_URL",
+            "secret": true
+          }
+        ],
+        "resources_tier": "default",
+        "authz": {
+          "roles": [
+            {
+              "name": "reader",
+              "access": "read"
+            },
+            {
+              "name": "writer",
+              "access": "write"
+            }
+          ],
+          "default": "deny",
+          "rules": [
+            {
+              "methods": [
+                "GET"
+              ],
+              "path": "/api/**",
+              "roles": [
+                "reader",
+                "writer"
+              ]
+            },
+            {
+              "methods": [
+                "DELETE",
+                "PATCH",
+                "POST",
+                "PUT"
+              ],
+              "path": "/api/**",
+              "roles": [
+                "writer"
+              ]
+            },
+            {
+              "methods": [
+                "POST"
+              ],
+              "path": "/graphql",
+              "roles": [
+                "reader",
+                "writer"
+              ],
+              "justification": "Readers run GraphQL queries through one POST endpoint."
+            }
+          ]
+        }
+      }
+  expect:
+    answers:
+      mutates_on_read_route: 'yes'
+    shadow:
+    - T-24
+    - T-23
+    fired:
+    - T-2
+    level: security_review
+  fake:
+    mutates_on_read_route:
+      answer: 'yes'
+      justification: The /graphql handler, reachable by reader under the new rule, runs the deleteNote mutation and clears NOTES.
+      evidence:
+      - file: app.py
+        start_line: 27
+        snippet: '        NOTES.clear()'
+- name: clean-notes
+  description: A comment on the in-memory store. Every answer is no.
+  base:
+    app.py: |
+      from fastapi import FastAPI
+
+      app = FastAPI()
+      NOTES = []
+
+
+      @app.get("/healthz")
+      def healthz():
+          return {"ok": True}
+
+
+      @app.get("/api/notes")
+      def list_notes():
+          return NOTES
+
+
+      @app.post("/api/notes")
+      def add_note(note: dict):
+          NOTES.append(note.get("text", ""))
+          return {"count": len(NOTES)}
+    requirements.txt: |
+      fastapi==0.115.0 \
+          --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      uvicorn==0.30.0 \
+          --hash=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    builder-spec.json: |
+      {
+        "app_name": "notes-api",
+        "app_type": "python",
+        "entrypoint": "app:app",
+        "server": "uvicorn",
+        "port": 8080,
+        "health_path": "/healthz",
+        "data_classification": "internal",
+        "egress": [
+          {
+            "host": "litellm.internal",
+            "port": 443,
+            "reason": "model calls through the platform gateway"
+          }
+        ],
+        "env": [
+          {
+            "name": "NOTES_DB_URL",
+            "secret": true
+          }
+        ],
+        "resources_tier": "default",
+        "authz": {
+          "roles": [
+            {
+              "name": "reader",
+              "access": "read"
+            },
+            {
+              "name": "writer",
+              "access": "write"
+            }
+          ],
+          "default": "deny",
+          "rules": [
+            {
+              "methods": [
+                "GET"
+              ],
+              "path": "/api/**",
+              "roles": [
+                "reader",
+                "writer"
+              ]
+            },
+            {
+              "methods": [
+                "DELETE",
+                "PATCH",
+                "POST",
+                "PUT"
+              ],
+              "path": "/api/**",
+              "roles": [
+                "writer"
+              ]
+            }
+          ]
+        }
+      }
+    README.md: |
+      # Notes
+
+      Short team notes.
+  change:
+    app.py: |
+      from fastapi import FastAPI
+
+      app = FastAPI()
+      NOTES = []  # kept in memory for now
+
+
+      @app.get("/healthz")
+      def healthz():
+          return {"ok": True}
+
+
+      @app.get("/api/notes")
+      def list_notes():
+          return NOTES
+
+
+      @app.post("/api/notes")
+      def add_note(note: dict):
+          NOTES.append(note.get("text", ""))
+          return {"count": len(NOTES)}
+  expect:
+    answers:
+      own_credentials: 'no'
+      mutates_on_read_route: 'no'
+      personal_data: 'no'
+      control_removed: 'no'
+      debug_or_bypass: 'no'
+    level: standard
+    not_shadow:
+    - T-22
+    - T-23
+    - T-24
+    - T-25
+    - T-26
+    not_fired:
+    - T-22
+    - T-23
+    - T-24
+    - T-25
+  fake: {}
+- name: personal-data
+  description: The app stores patient_name, date_of_birth and mrn. T-25 runs in shadow.
+  base:
+    app.py: |
+      from fastapi import FastAPI
+
+      app = FastAPI()
+      NOTES = []
+      PATIENTS = [{"patient_name": "Ada Example", "date_of_birth": "1990-01-01", "mrn": "000123"}]
+
+
+      @app.get("/healthz")
+      def healthz():
+          return {"ok": True}
+
+
+      @app.get("/api/notes")
+      def list_notes():
+          return NOTES
+
+
+      @app.post("/api/notes")
+      def add_note(note: dict):
+          NOTES.append(note.get("text", ""))
+          return {"count": len(NOTES)}
+    requirements.txt: |
+      fastapi==0.115.0 \
+          --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      uvicorn==0.30.0 \
+          --hash=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    builder-spec.json: |
+      {
+        "app_name": "notes-api",
+        "app_type": "python",
+        "entrypoint": "app:app",
+        "server": "uvicorn",
+        "port": 8080,
+        "health_path": "/healthz",
+        "data_classification": "internal",
+        "egress": [
+          {
+            "host": "litellm.internal",
+            "port": 443,
+            "reason": "model calls through the platform gateway"
+          }
+        ],
+        "env": [
+          {
+            "name": "NOTES_DB_URL",
+            "secret": true
+          }
+        ],
+        "resources_tier": "default",
+        "authz": {
+          "roles": [
+            {
+              "name": "reader",
+              "access": "read"
+            },
+            {
+              "name": "writer",
+              "access": "write"
+            }
+          ],
+          "default": "deny",
+          "rules": [
+            {
+              "methods": [
+                "GET"
+              ],
+              "path": "/api/**",
+              "roles": [
+                "reader",
+                "writer"
+              ]
+            },
+            {
+              "methods": [
+                "DELETE",
+                "PATCH",
+                "POST",
+                "PUT"
+              ],
+              "path": "/api/**",
+              "roles": [
+                "writer"
+              ]
+            }
+          ]
+        }
+      }
+    README.md: |
+      # Notes
+
+      Short team notes.
+  change:
+    app.py: |
+      from fastapi import FastAPI
+
+      app = FastAPI()
+      NOTES = []  # kept in memory for now
+      PATIENTS = [{"patient_name": "Ada Example", "date_of_birth": "1990-01-01", "mrn": "000123"}]
+
+
+      @app.get("/healthz")
+      def healthz():
+          return {"ok": True}
+
+
+      @app.get("/api/notes")
+      def list_notes():
+          return NOTES
+
+
+      @app.post("/api/notes")
+      def add_note(note: dict):
+          NOTES.append(note.get("text", ""))
+          return {"count": len(NOTES)}
+  expect:
+    answers:
+      personal_data: 'yes'
+      own_credentials: 'no'
+      mutates_on_read_route: 'no'
+    level: standard
+    shadow:
+    - T-25
+  fake:
+    personal_data:
+      answer: 'yes'
+      justification: The app keeps a patient's name, date of birth and MRN.
+      evidence:
+      - file: app.py
+        start_line: 5
+        snippet: 'PATIENTS = [{"patient_name": "Ada Example", "date_of_birth": "1990-01-01", "mrn": "000123"}]'
+- name: false-alarm-readme
+  description: README wording only.
+  base:
+    app.py: |
+      from fastapi import FastAPI
+
+      app = FastAPI()
+      NOTES = []
+
+
+      @app.get("/healthz")
+      def healthz():
+          return {"ok": True}
+
+
+      @app.get("/api/notes")
+      def list_notes():
+          return NOTES
+
+
+      @app.post("/api/notes")
+      def add_note(note: dict):
+          NOTES.append(note.get("text", ""))
+          return {"count": len(NOTES)}
+    requirements.txt: |
+      fastapi==0.115.0 \
+          --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      uvicorn==0.30.0 \
+          --hash=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    builder-spec.json: |
+      {
+        "app_name": "notes-api",
+        "app_type": "python",
+        "entrypoint": "app:app",
+        "server": "uvicorn",
+        "port": 8080,
+        "health_path": "/healthz",
+        "data_classification": "internal",
+        "egress": [
+          {
+            "host": "litellm.internal",
+            "port": 443,
+            "reason": "model calls through the platform gateway"
+          }
+        ],
+        "env": [
+          {
+            "name": "NOTES_DB_URL",
+            "secret": true
+          }
+        ],
+        "resources_tier": "default",
+        "authz": {
+          "roles": [
+            {
+              "name": "reader",
+              "access": "read"
+            },
+            {
+              "name": "writer",
+              "access": "write"
+            }
+          ],
+          "default": "deny",
+          "rules": [
+            {
+              "methods": [
+                "GET"
+              ],
+              "path": "/api/**",
+              "roles": [
+                "reader",
+                "writer"
+              ]
+            },
+            {
+              "methods": [
+                "DELETE",
+                "PATCH",
+                "POST",
+                "PUT"
+              ],
+              "path": "/api/**",
+              "roles": [
+                "writer"
+              ]
+            }
+          ]
+        }
+      }
+    README.md: |
+      # Notes
+
+      Short team notes.
+  change:
+    README.md: |
+      # Notes
+
+      Short team notes.
+
+      Run with uvicorn app:app.
+  expect:
+    answers:
+      mutates_on_read_route: 'no'
+      control_removed: 'no'
+    level: standard
+    fired: []
+    not_fired:
+    - T-5
+  fake: {}
+- name: false-alarm-dependency-bump
+  description: 'uvicorn 0.30.0 to 0.30.1: an established package, same hashes pattern.'
+  base:
+    app.py: |
+      from fastapi import FastAPI
+
+      app = FastAPI()
+      NOTES = []
+
+
+      @app.get("/healthz")
+      def healthz():
+          return {"ok": True}
+
+
+      @app.get("/api/notes")
+      def list_notes():
+          return NOTES
+
+
+      @app.post("/api/notes")
+      def add_note(note: dict):
+          NOTES.append(note.get("text", ""))
+          return {"count": len(NOTES)}
+    requirements.txt: |
+      fastapi==0.115.0 \
+          --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      uvicorn==0.30.0 \
+          --hash=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    builder-spec.json: |
+      {
+        "app_name": "notes-api",
+        "app_type": "python",
+        "entrypoint": "app:app",
+        "server": "uvicorn",
+        "port": 8080,
+        "health_path": "/healthz",
+        "data_classification": "internal",
+        "egress": [
+          {
+            "host": "litellm.internal",
+            "port": 443,
+            "reason": "model calls through the platform gateway"
+          }
+        ],
+        "env": [
+          {
+            "name": "NOTES_DB_URL",
+            "secret": true
+          }
+        ],
+        "resources_tier": "default",
+        "authz": {
+          "roles": [
+            {
+              "name": "reader",
+              "access": "read"
+            },
+            {
+              "name": "writer",
+              "access": "write"
+            }
+          ],
+          "default": "deny",
+          "rules": [
+            {
+              "methods": [
+                "GET"
+              ],
+              "path": "/api/**",
+              "roles": [
+                "reader",
+                "writer"
+              ]
+            },
+            {
+              "methods": [
+                "DELETE",
+                "PATCH",
+                "POST",
+                "PUT"
+              ],
+              "path": "/api/**",
+              "roles": [
+                "writer"
+              ]
+            }
+          ]
+        }
+      }
+    README.md: |
+      # Notes
+
+      Short team notes.
+  change:
+    requirements.txt: |
+      fastapi==0.115.0 \
+          --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      uvicorn==0.30.1 \
+          --hash=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  expect:
+    answers:
+      mutates_on_read_route: 'no'
+    level: standard
+    fired: []
+    not_fired:
+    - T-5
+  fake: {}
+- name: false-alarm-test-added
+  description: A new test; nothing deleted or skipped.
+  base:
+    app.py: |
+      from fastapi import FastAPI
+
+      app = FastAPI()
+      NOTES = []
+
+
+      @app.get("/healthz")
+      def healthz():
+          return {"ok": True}
+
+
+      @app.get("/api/notes")
+      def list_notes():
+          return NOTES
+
+
+      @app.post("/api/notes")
+      def add_note(note: dict):
+          NOTES.append(note.get("text", ""))
+          return {"count": len(NOTES)}
+    requirements.txt: |
+      fastapi==0.115.0 \
+          --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      uvicorn==0.30.0 \
+          --hash=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    builder-spec.json: |
+      {
+        "app_name": "notes-api",
+        "app_type": "python",
+        "entrypoint": "app:app",
+        "server": "uvicorn",
+        "port": 8080,
+        "health_path": "/healthz",
+        "data_classification": "internal",
+        "egress": [
+          {
+            "host": "litellm.internal",
+            "port": 443,
+            "reason": "model calls through the platform gateway"
+          }
+        ],
+        "env": [
+          {
+            "name": "NOTES_DB_URL",
+            "secret": true
+          }
+        ],
+        "resources_tier": "default",
+        "authz": {
+          "roles": [
+            {
+              "name": "reader",
+              "access": "read"
+            },
+            {
+              "name": "writer",
+              "access": "write"
+            }
+          ],
+          "default": "deny",
+          "rules": [
+            {
+              "methods": [
+                "GET"
+              ],
+              "path": "/api/**",
+              "roles": [
+                "reader",
+                "writer"
+              ]
+            },
+            {
+              "methods": [
+                "DELETE",
+                "PATCH",
+                "POST",
+                "PUT"
+              ],
+              "path": "/api/**",
+              "roles": [
+                "writer"
+              ]
+            }
+          ]
+        }
+      }
+    README.md: |
+      # Notes
+
+      Short team notes.
+  change:
+    tests/test_notes.py: |
+      from app import NOTES, list_notes
+
+
+      def test_list_notes_starts_empty():
+          assert list_notes() == NOTES
+  expect:
+    answers:
+      tests_weakened_agent: 'no'
+    level: standard
+    fired: []
+    not_fired:
+    - T-3
+  fake: {}
+- name: false-alarm-readonly-get
+  description: A new read-only GET that reports how many notes exist. Readers may call it and it changes nothing.
+  base:
+    app.py: |
+      from fastapi import FastAPI
+
+      app = FastAPI()
+      NOTES = []
+
+
+      @app.get("/healthz")
+      def healthz():
+          return {"ok": True}
+
+
+      @app.get("/api/notes")
+      def list_notes():
+          return NOTES
+
+
+      @app.post("/api/notes")
+      def add_note(note: dict):
+          NOTES.append(note.get("text", ""))
+          return {"count": len(NOTES)}
+    requirements.txt: |
+      fastapi==0.115.0 \
+          --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      uvicorn==0.30.0 \
+          --hash=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    builder-spec.json: |
+      {
+        "app_name": "notes-api",
+        "app_type": "python",
+        "entrypoint": "app:app",
+        "server": "uvicorn",
+        "port": 8080,
+        "health_path": "/healthz",
+        "data_classification": "internal",
+        "egress": [
+          {
+            "host": "litellm.internal",
+            "port": 443,
+            "reason": "model calls through the platform gateway"
+          }
+        ],
+        "env": [
+          {
+            "name": "NOTES_DB_URL",
+            "secret": true
+          }
+        ],
+        "resources_tier": "default",
+        "authz": {
+          "roles": [
+            {
+              "name": "reader",
+              "access": "read"
+            },
+            {
+              "name": "writer",
+              "access": "write"
+            }
+          ],
+          "default": "deny",
+          "rules": [
+            {
+              "methods": [
+                "GET"
+              ],
+              "path": "/api/**",
+              "roles": [
+                "reader",
+                "writer"
+              ]
+            },
+            {
+              "methods": [
+                "DELETE",
+                "PATCH",
+                "POST",
+                "PUT"
+              ],
+              "path": "/api/**",
+              "roles": [
+                "writer"
+              ]
+            }
+          ]
+        }
+      }
+    README.md: |
+      # Notes
+
+      Short team notes.
+  change:
+    app.py: |
+      from fastapi import FastAPI
+
+      app = FastAPI()
+      NOTES = []
+
+
+      @app.get("/healthz")
+      def healthz():
+          return {"ok": True}
+
+
+      @app.get("/api/notes")
+      def list_notes():
+          return NOTES
+
+
+      @app.post("/api/notes")
+      def add_note(note: dict):
+          NOTES.append(note.get("text", ""))
+          return {"count": len(NOTES)}
+
+
+      @app.get("/api/notes/count")
+      def count_notes():
+          return {"count": len(NOTES)}
+  expect:
+    answers:
+      mutates_on_read_route: 'no'
+      control_removed: 'no'
+    level: standard
+    fired: []
+    not_fired:
+    - T-23
+  fake:
+    mutates_on_read_route:
+      answer: 'no'
+      justification: count_notes only reads len(NOTES).
+      evidence: []
+- name: false-alarm-style
+  description: A local variable replaces an inline expression; behavior is unchanged.
+  base:
+    app.py: |
+      from fastapi import FastAPI
+
+      app = FastAPI()
+      NOTES = []
+
+
+      @app.get("/healthz")
+      def healthz():
+          return {"ok": True}
+
+
+      @app.get("/api/notes")
+      def list_notes():
+          return NOTES
+
+
+      @app.post("/api/notes")
+      def add_note(note: dict):
+          NOTES.append(note.get("text", ""))
+          return {"count": len(NOTES)}
+    requirements.txt: |
+      fastapi==0.115.0 \
+          --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      uvicorn==0.30.0 \
+          --hash=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    builder-spec.json: |
+      {
+        "app_name": "notes-api",
+        "app_type": "python",
+        "entrypoint": "app:app",
+        "server": "uvicorn",
+        "port": 8080,
+        "health_path": "/healthz",
+        "data_classification": "internal",
+        "egress": [
+          {
+            "host": "litellm.internal",
+            "port": 443,
+            "reason": "model calls through the platform gateway"
+          }
+        ],
+        "env": [
+          {
+            "name": "NOTES_DB_URL",
+            "secret": true
+          }
+        ],
+        "resources_tier": "default",
+        "authz": {
+          "roles": [
+            {
+              "name": "reader",
+              "access": "read"
+            },
+            {
+              "name": "writer",
+              "access": "write"
+            }
+          ],
+          "default": "deny",
+          "rules": [
+            {
+              "methods": [
+                "GET"
+              ],
+              "path": "/api/**",
+              "roles": [
+                "reader",
+                "writer"
+              ]
+            },
+            {
+              "methods": [
+                "DELETE",
+                "PATCH",
+                "POST",
+                "PUT"
+              ],
+              "path": "/api/**",
+              "roles": [
+                "writer"
+              ]
+            }
+          ]
+        }
+      }
+    README.md: |
+      # Notes
+
+      Short team notes.
+  change:
+    app.py: |
+      from fastapi import FastAPI
+
+      app = FastAPI()
+      NOTES = []
+
+
+      @app.get("/healthz")
+      def healthz():
+          return {"ok": True}
+
+
+      @app.get("/api/notes")
+      def list_notes():
+          return NOTES
+
+
+      @app.post("/api/notes")
+      def add_note(note: dict):
+          text = note.get("text", "")
+          NOTES.append(text)
+          return {"count": len(NOTES)}
+  expect:
+    answers:
+      control_removed: 'no'
+      mutates_on_read_route: 'no'
+    level: standard
+    fired: []
+    not_fired:
+    - T-4
+  fake: {}

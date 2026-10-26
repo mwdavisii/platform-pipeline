@@ -1125,6 +1125,46 @@ The "scorecard's checks can be imitated" and "gateway key readable by anyone wit
 
 **Scheduled workflows stop after 60 days without activity.** GitHub disables the scheduled workflows of a public repo after 60 days without repository activity (a commit, a merged pull request), and the poller then stops without any failure: pull requests just never get an assessment. Detect it: `gh api repos/<you>/scorecard-factory/actions/workflows/scorecard-poll.yml --jq .state` prints `active`, and `disabled_inactivity` when GitHub has switched it off. Re-enable it with `gh workflow enable scorecard-poll.yml --repo <you>/scorecard-factory`. Any commit to the factory's `main` (a pull request that merges) keeps it alive, and a poll that has not run for an hour is the sign to look: the newest `scorecard-poll` run in `gh run list --workflow scorecard-poll.yml --repo <you>/scorecard-factory --limit 1`.
 
+## 17. Switch the review to risk routing
+Risk routing replaces the ASVS checklist with one short review and a security-owned file of rules, `config/routing.toml`. Read `docs/scorecard/routing.md` first: it says what the file holds and how security changes it. Both engines exist in the same builder, and the factory picks one, so the switch is one factory pull request and rolling back is reverting it. Do it after section 16 works (or in per-app mode: the switch does not depend on central review).
+
+Requirements: a builder release that carries `review-2` (the lead's version bump; this section names no number), released as in 13.2, and the factory's current `config/scorecard.yaml` at hand.
+
+### 17.1 The factory pull request
+Work on a branch of `<you>/scorecard-factory`. Every step below goes into this one pull request.
+1. Pin the builder release that carries `review-2`: set `BUILDER_IMAGE` to its digest in all four factory workflows, as in 16.3 (`scorecard.yml`, `scorecard-poll.yml`, `scorecard-assess.yml` and `factory-check.yml`).
+2. Add the rules file, starting from the one the tests use:
+   ```bash
+   cp <src>/tests/scorecard/fixtures/factory-routing/config/routing.toml config/routing.toml
+   ```
+   Then set two sections to this factory's values. In `[reviewers]` put the teams for `elevated` and `security_review` (copy `reviewers` from the current `config/scorecard.yaml`; an empty list `[]` on a personal account, which has no teams). In `[packages]` put `new_package_days`, `internal_npm_scopes`, `internal_packages` and `internal_registries` from the current `registry:` block (`registry.new_package_days` and `registry.internal_*`). Leave the rest as it is: T-22, T-23, T-24, T-25 and T-26 start in `mode = "shadow"`, so they record and route nothing.
+3. Rewrite `config/scorecard.yaml` as `scorecard-config/v2`. It keeps only the mechanics: the first line `schema: scorecard-config/v2`, then `gate1_checks`, `drift_check`, `central` (if 16.4 added it), the `agent` block with `prompt_version: review-2` (keep your gateway, model version and budget values), and `registry: {timeout_seconds: <as now>, max_total_seconds: <as now>}`. Delete everything else (`tier_floor`, `reviewers`, `paths`, `patterns`, the ASVS keys and the rest of `registry`): `scorecard-config/v2` refuses them, because they are in `routing.toml` now. `<src>/tests/scorecard/fixtures/factory-routing/config/scorecard.yaml` is a complete example; its gateway and model values are stand-ins, so keep your own.
+4. Add the security owner to the factory's `.github/CODEOWNERS`:
+   ```bash
+   printf '%s\n' '/config/routing.toml @<security owner>' >> .github/CODEOWNERS
+   ```
+   Place it after the `*` line, since the last matching line wins. In the PoC `<security owner>` is `@<you>` (and `@<deputy>`).
+5. Run the checker on the branch with the pinned image, the way `factory-check` does:
+   ```bash
+   docker run --rm --network none --read-only --tmpfs /tmp --user "$(id -u):$(id -g)" -v "$PWD:/factory:ro" "$BUILDER_IMAGE" scorecard check-factory --factory /factory
+   ```
+   **Check:** it prints one line of counts (`{"intake": ..., "na": ..., "suppressions": ...}`), with no `error` and no `warnings`. A refusal names the file and the problem: fix it and run again. A `warnings` list (a fact no rule uses) does not fail, but read it.
+6. Open the pull request. **Check:** `factory-check` passes. Merge it.
+
+### 17.2 Check it on a pull request
+Push a commit to an open pull request on an app (central: the poller assesses it within a poll or two; per-app: the app's `scorecard.yml` runs). Download the artifact and look at it:
+```bash
+gh run download <run id> --repo <you>/<app> -n scorecard
+jq '{schema, level, reasons: [.reasons[].trigger], shadow: [.routing.shadow[].trigger], undecided: .routing.undecided, complete: .assessment.complete}' scorecard.json
+```
+**Check:** `schema` is `"scorecard/v2"` (a v1 scorecard means the app still ran the old engine: its pull request has not been re-assessed with the new pin), `complete` is `true`, and the comment on the pull request has a `### Reasons` list with a `Fix:` line under each reason, or none if the level is `standard`. Shadow rules show only in `routing.shadow` and in the job summary, never in the comment.
+
+### 17.3 Watch the shadow rules
+Leave T-22 to T-26 in shadow while real pull requests come through. For each, look at `routing.shadow` (it would have routed) and `routing.undecided` (an agent answer that was `unsure` under `on_unsure = "standard"`). To enforce one, a separate factory pull request sets its `mode = "enforce"` (or deletes the `mode` line). Adding a rule later follows the steps in `docs/scorecard/routing.md`.
+
+### 17.4 Roll back
+Revert the factory pull request from 17.1 (a revert pull request on the factory; it merges once `factory-check` passes). The factory goes back to `review-1`, its old `scorecard.yaml` and no `routing.toml`. An assessment made under one engine is not read by the other, so the next push to each open pull request assesses again.
+
 ## PoC gaps to record
 - The scans are open-source reference scans (Semgrep CE with a small vendored rule set plus `p/default`, Trivy, CodeQL default setup), not the security team's tools, thresholds, or triage. Until step 11, Gate 1 waits on nothing beyond drift and the authz probe. Gate 1 sees only a CodeQL check run's conclusion, so it proves the analysis ran, not that no alert exists; the alert threshold is enforced at merge time.
 - **Scan results can be forged.** Every check that a GitHub Actions workflow posts comes from the same app (id 15368), so pinning `app_id` cannot tell the `security-scans` workflow's `security-scans / semgrep` from a job of the same name that anyone with write access adds to a workflow in `hello-app` (or by editing `security-scans.yml` to stop calling the real scans). CodeQL's results can likewise be imitated by a workflow with `security-events: write`. What holds today is code-owner review of `.github/` and a deputy who rejects changes there. **The real fix is signed scan results**: the scan workflow signs its result with its own identity and the release verifies that signature instead of a check name. It is out of scope for this PoC.

@@ -1,6 +1,6 @@
 # Risk routing: send risky PRs and apps to a human, defensibly
 
-Status: approved design (brainstormed 2026-10-24 to 2026-10-26), not yet built.
+Status: approved design (brainstormed 2026-10-24 to 2026-10-26). Built on branch `risk-routing`; §10 records where the build differs from this text.
 
 ## 1. Problem
 
@@ -245,3 +245,13 @@ ASVS engine exactly as it is; `review-2` (with `routing.toml`) uses routing. Swi
   expire on 2026-11-09.
 - A platform-built nightly base image, so upstream CVE fixes don't wait on the upstream image.
 - The Cloudflare `security-audit-skill` as a periodic whole-app baseline audit, separate from the PR gate.
+
+## 10. Refinements made while building
+
+Where the build differs from, or fixes the detail of, the text above:
+
+- **§3, `[detectors]`:** `sensitive_classifications` is not a detector input. The T-10 rule's `escalate` replaces it.
+- **§6, `routing`:** it holds `facts`, `shadow` and `undecided`. The enforced rules that fired are `reasons`, so there is no separate `fired` list. `undecided` records the rules that did not route because an agent answer was `unsure` under `on_unsure = "standard"`. Shadow rules are shown in the job summary and in `routing.shadow`, never in the PR comment. The re-review event's trigger ids now reference `scorecard.v2.json`'s wider pattern (`T-<1..999>`).
+- **§2.1, `must_check`:** terms are fixed text (the `grep` tool matches fixed text), so a term has no commas and no leading or trailing space, and a term can't be listed twice (ignoring case).
+- **§8, golden harness (`src/scorecard/routing/golden.py`, `tests/scorecard/golden_routing/cases.yaml`):** each case's `expect` can name `answers`, `level`, `fired`, `not_fired` and `shadow`. `fired` and `shadow` are exact: the sorted list of rule ids that fired (the scorecard's `reasons`) or would have fired in shadow (`routing.shadow`) must equal the expected list, so an extra rule fails a case as surely as a missing one. The false-alarm set is the cases named `false-alarm-*` (a README change, a dependency bump, an added test, a read-only GET, a style change); each must expect `level: standard`, `fired: []` and `shadow: []`, and `test_routing_golden.py` asserts that and that there are at least five. The cases run in fake mode in CI (`test_routing_golden.py`) and live on demand (`test_routing_golden_live.py`, opt-in with `GOLDEN_ROAD_SCORECARD_LIVE=1`; it reports and asserts nothing about answers).
+- **`check-factory` warnings:** `scorecard check-factory` prints routing warnings (a fact no rule uses) in its output without failing. The golden-record warning in §8 is not built.

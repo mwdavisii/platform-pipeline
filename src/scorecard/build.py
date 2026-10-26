@@ -198,31 +198,48 @@ def agent_scope(prepared: Prepared) -> dict:
     return doc
 
 
+def _deterministic(p: Prepared, problems: list, *, pr_text, registry, agent_findings=()) -> dict:
+    """Every deterministic signal, suppressions applied: the part both engines share."""
+    config, today, now = p.config, p.today, p.now
+    signals = spec_changes(p.base_spec, p.head_spec_text, now=now)
+    signals += change_signals(p.repo_root, p.base, p.head, p.changed, config, now=now, problems=problems)
+    signals += tree_signals(p.repo_root, config, now=now, problems=problems)
+    size = change_size(p.repo_root, p.base, p.head, problems)
+    reg = config["registry"]
+    client = registry or RegistryClient(timeout=reg["timeout_seconds"], deadline_seconds=reg["max_total_seconds"])
+    dep_findings, skipped, failures = dependency_signals(p.base_packages, p.head_packages, client, reg, today=today, now=now)
+    signals += dep_findings
+    pr_hits = _pr_hits(pr_text, config)
+    kept, applied = apply_suppressions(signals + list(agent_findings), p.suppressions, repo=p.repo, today=today,
+                                       secret_rule_prefixes=config["suppressions"]["secret_rule_prefixes"])
+    return {"signals": signals, "kept": kept, "applied": applied, "size": size, "skipped": skipped, "failures": failures, "pr_hits": pr_hits}
+
+
+def _recorded(p: Prepared) -> list:
+    return recorded_spec_signals(p.base_spec, p.head_spec_text) + builder_bumped(_lock_text(p.repo_root, p.base), _lock_text(p.repo_root, p.head))
+
+
 def finish(p: Prepared, assessment_doc=None, *, pr_text=None, registry=None) -> tuple[dict, dict]:
     """Return (scorecard, render context): the deterministic signals, the agent's assessment applied, the level, and the re-review event (context["event"])."""
     config, intake, requirements, decided, agent_reqs = p.config, p.intake, p.requirements, p.decided, p.agent_reqs
     now, today = p.now, p.today
     problems = list(p.problems)  # finish may run more than once on the same Prepared; never grow its list
+    if engine(p.config) == "routing":
+        from .routing.card import routing_card
+        det = _deterministic(p, problems, pr_text=pr_text, registry=registry)
+        return routing_card(p, det, assessment_doc, problems=problems, recorded=_recorded(p))
     # apply_assessment checks the assessment itself (schema, tree, duplicates) and raises InputError when it is bad.
     agent_results, agent_findings, flags = apply_assessment(agent_reqs, assessment_doc, p.repo_root, config=config, tree_sha=p.tree_sha)
     if assessment_doc is not None:
         check_approved(assessment_doc, config)
     _redact_unverified(agent_results, agent_findings)
     assessment = assessment_doc
-    repo_root, base, head = p.repo_root, p.base, p.head
+    base, head = p.base, p.head
     observed = observe(p.checks, now)
 
-    signals = spec_changes(p.base_spec, p.head_spec_text, now=now)
-    signals += change_signals(repo_root, base, head, p.changed, config, now=now, problems=problems)
-    signals += tree_signals(repo_root, config, now=now, problems=problems)
-    size = change_size(repo_root, base, head, problems)
-    reg = config["registry"]
-    client = registry or RegistryClient(timeout=reg["timeout_seconds"], deadline_seconds=reg["max_total_seconds"])
-    dep_findings, skipped, failures = dependency_signals(p.base_packages, p.head_packages, client, reg, today=today, now=now)
-    signals += dep_findings
-    pr_hits = _pr_hits(pr_text, config)
-    kept, applied = apply_suppressions(signals + agent_findings, p.suppressions, repo=p.repo, today=today,
-                                       secret_rule_prefixes=config["suppressions"]["secret_rule_prefixes"])
+    det = _deterministic(p, problems, pr_text=pr_text, registry=registry, agent_findings=agent_findings)
+    signals, kept, applied, size = det["signals"], det["kept"], det["applied"], det["size"]
+    skipped, failures, pr_hits = det["skipped"], det["failures"], det["pr_hits"]
 
     order = {r["id"]: i for i, r in enumerate(requirements)}
     results = sorted(decided + agent_results, key=lambda r: order[r["asvs_id"]])
@@ -261,7 +278,7 @@ def finish(p: Prepared, assessment_doc=None, *, pr_text=None, registry=None) -> 
     errors = validate("scorecard.v1", card)
     if errors:
         raise InputError(f"the scorecard is not a valid scorecard/v1: {errors[0]}")
-    recorded = recorded_spec_signals(p.base_spec, p.head_spec_text) + builder_bumped(_lock_text(repo_root, base), _lock_text(repo_root, head))
+    recorded = _recorded(p)
     event = re_review_event(card, pr=p.pr_number, head_sha=p.pr_head or head, recorded=recorded)
     context = {"event": event, "texts": {r["id"]: r["text"] for r in requirements}, "names": names, "blocking": config["blocking"], "config": config,
                "expired_suppressions": expired(p.suppressions, repo=p.repo, today=today)}

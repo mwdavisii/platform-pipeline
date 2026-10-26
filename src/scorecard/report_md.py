@@ -174,3 +174,7 @@ def _fit(lines: list[str], limit: int) -> str:
 
 
 __all__ = ["MARKER", "MAX_COMMENT", "render", "safe"]
+
+
+def render_routing(card: dict, *, server_url: str = "https://github.com", limit: int = SUMMARY_LIMIT, expired=()) -> str:
+    return _fit([MARKER, f"## Scorecard: {HEADLINE[card['level']]}"], limit)

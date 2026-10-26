@@ -24,7 +24,7 @@
     "trigger_signal": {
       "type": "object", "additionalProperties": false, "required": ["id", "kind", "level", "summary", "count"],
       "properties": {
-        "id": {"$ref": "scorecard.v1.json#/$defs/trigger"},
+        "id": {"$ref": "scorecard.v2.json#/$defs/trigger"},
         "kind": {"const": "trigger"},
         "level": {"$ref": "scorecard.v1.json#/$defs/level"},
         "summary": {"$ref": "#/$defs/summary"},

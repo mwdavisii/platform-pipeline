@@ -34,8 +34,8 @@ def test_a_run_without_a_pr_and_without_signals_is_valid():
     lambda e: e.update(created="yesterday"),
     lambda e: e.update(level="blocked"),
     lambda e: e.update(extra=1),
-    lambda e: e["signals"][0].update(id="T-13"),  # reserved
-    lambda e: e["signals"][0].update(id="T-20"),
+    lambda e: e["signals"][0].update(id="T-0"),  # routing widened the ids to T-1..T-999
+    lambda e: e["signals"][0].update(id="T-1000"),
     lambda e: e["signals"][0].pop("count"),
     lambda e: e["signals"][0].update(count=0),
     lambda e: e["signals"][0].update(refs=[{"file": "app.py"}]),  # no refs, ever

@@ -14,15 +14,16 @@ from pathlib import Path
 from golden_road.io import InputError, load_json, write_json, write_text_atomic
 
 from .agent.gateway import GatewayClient, access_headers, credential, gateway_model
+from .agent.review2 import assess_facts
 from .agent.runner import assess
 from .build import NotAssessed, agent_scope, build_scorecard, prepare
 from .asvs import check_ids, load_asvs
-from .config import gate1_list, load_config, load_confirmed_na, load_intake, load_registration_rules, runner_env
+from .config import engine, gate1_list, load_config, load_confirmed_na, load_intake, load_registration_rules, runner_env
 from .factory_digest import factory_digest
 from .observations import checks_from_doc, checks_sha
 from .precondition import RERUN_HINT, not_assessed
 from .report_github import github_actions
-from .report_md import MAX_COMMENT, render
+from .report_md import MAX_COMMENT, render, render_routing
 from .suppressions import load_suppressions
 
 EXIT_OK, EXIT_ERROR = 0, 1
@@ -215,11 +216,14 @@ def _cmd_check_factory(args, registry, model) -> int:
     """Every problem in the factory, found with the loaders the scorecard uses, so a bad record fails the factory's own pull
     request instead of sending an app (or every app) to "not assessed"."""
     factory, problems, counts = args.factory, [], {"intake": 0, "na": 0, "suppressions": 0}
-    config = None
+    config, warnings = None, []
     problems += _symlinks(factory)
     try:
         config = load_config(factory)
         gate1_list(factory, config)
+        if engine(config) == "routing":
+            from .routing.config import load_routing
+            warnings = load_routing(factory)[1]
     except Exception as exc:  # noqa: BLE001 - every failure is a problem to report, not a traceback
         problems.append(f"config: {exc}")
     try:
@@ -227,7 +231,7 @@ def _cmd_check_factory(args, registry, model) -> int:
     except Exception as exc:  # noqa: BLE001
         problems.append(f"registration: {exc}")
     try:
-        requirements = load_asvs()
+        requirements = None if config and engine(config) == "routing" else load_asvs()  # routing reads no ASVS data
     except Exception as exc:  # noqa: BLE001
         requirements = None
         problems.append(f"ASVS data: {exc}")
@@ -251,7 +255,7 @@ def _cmd_check_factory(args, registry, model) -> int:
     if problems:
         print(json.dumps({"error": f"{len(problems)} problem(s) in the factory", "problems": [p[:MAX_ERROR] for p in problems]}), file=sys.stderr)
         return EXIT_ERROR
-    print(json.dumps(counts))
+    print(json.dumps({**counts, "warnings": warnings}) if warnings else json.dumps(counts))
     return EXIT_OK
 
 
@@ -282,7 +286,7 @@ def _cmd_assess(args, registry, model) -> int:
     prepared = prepare(repo_root=args.repo_root, repo=args.repo, base_ref=args.base, factory=args.factory, checks_doc=load_json(args.checks),
                        event=load_json(args.event) if args.event else None, now=_now(args.now))
     client = model or GatewayClient(prepared.config, credential(prepared.config), model=gateway_model(), access=access_headers())
-    doc, stats = assess(prepared, client)
+    doc, stats = assess_facts(prepared, client) if engine(prepared.config) == "routing" else assess(prepared, client)
     write_json(args.out, doc)
     print(json.dumps(stats))
     return EXIT_OK
@@ -298,11 +302,15 @@ def _cmd_run(args, registry, model) -> int:
         event=load_json(args.event) if args.event else None, now=_now(args.now), assessment_doc=load_json(args.assessment) if args.assessment else None,
         pr_text=load_json(args.pr_text) if args.pr_text else None, registry=registry,
     )
-    md_args = (card, context["texts"], context["names"], context["blocking"])
     expired = context["expired_suppressions"]
     # Render everything before writing anything, so a failure can't leave a partial set of outputs.
-    summary = render(*md_args, server_url=args.server_url, expired=expired)
-    comment = render(*md_args, server_url=args.server_url, limit=MAX_COMMENT, expired=expired)
+    if card["schema"] == "scorecard/v2":
+        summary = render_routing(card, server_url=args.server_url, expired=expired)
+        comment = render_routing(card, server_url=args.server_url, limit=MAX_COMMENT, expired=expired)
+    else:
+        md_args = (card, context["texts"], context["names"], context["blocking"])
+        summary = render(*md_args, server_url=args.server_url, expired=expired)
+        comment = render(*md_args, server_url=args.server_url, limit=MAX_COMMENT, expired=expired)
     actions = github_actions(card["level"], context["config"])
     try:
         write_json(args.out / "scorecard.json", card)

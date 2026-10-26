@@ -13,7 +13,7 @@ from golden_road.io import InputError
 
 from . import VERSION, git
 from .asvs import ASVS_SHA256, chapter_names, check_ids, for_level, load_asvs
-from .config import gate1_list, load_config, load_confirmed_na, load_intake, load_registration_rules
+from .config import engine, gate1_list, load_config, load_confirmed_na, load_intake, load_registration_rules
 from .event import re_review_event
 from .level import decide
 from .levels import asvs_level, effective_classification
@@ -102,7 +102,7 @@ class Prepared:
     intake: dict | None
     suppressions: list
     requirements: list
-    level_n: int
+    level_n: int | None
     classification: str | None
     spec_classification: str | None
     head: str
@@ -135,10 +135,12 @@ def prepare(*, repo_root, repo: str, base_ref: str, factory, checks_doc, event, 
         raise NotAssessed("not assessed: " + "; ".join(reasons) + ". " + RERUN_HINT)
     today = dt.date.fromisoformat(now[:10])
     intake = load_intake(factory, repo)
-    confirmed_na = load_confirmed_na(factory, repo)
     suppressions = load_suppressions(factory, repo)
-    requirements = load_asvs()
-    check_ids(requirements, config, confirmed_na)
+    routed = engine(config) == "routing"
+    confirmed_na = [] if routed else load_confirmed_na(factory, repo)  # routing reads no ASVS data and no na/ records
+    requirements = [] if routed else load_asvs()
+    if not routed:
+        check_ids(requirements, config, confirmed_na)
 
     base = git.rev(repo_root, base_ref)
     tree_sha = git.tree(repo_root, head)
@@ -147,7 +149,7 @@ def prepare(*, repo_root, repo: str, base_ref: str, factory, checks_doc, event, 
     spec = head_spec(head_spec_text)
     spec_classification = spec["data_classification"] if spec else None
     classification = effective_classification(intake["data_classification"] if intake else None, spec_classification)
-    level_n = asvs_level(config, intake, spec_classification)
+    level_n = None if routed else asvs_level(config, intake, spec_classification)
     head_packages, problems = read_packages(lambda p: git.show(repo_root, head, p))
     registration = _registration_floor(repo_root, factory, repo, head, intake, problems)
     # Base lockfile problems are discarded on purpose. An unreadable base list is empty, so every head package looks new
@@ -155,9 +157,12 @@ def prepare(*, repo_root, repo: str, base_ref: str, factory, checks_doc, event, 
     base_packages, _ = read_packages(lambda p: git.show(repo_root, base, p))
     observed = observe(checks, now)
 
-    decided, agent_reqs = scope(for_level(requirements, level_n), config=config, confirmed_na=confirmed_na, packages=head_packages,
-                                has_authz=bool(spec and spec.get("authz")), drift_green=drift_green(observed, config["drift_check"]),
-                                lockfile_problems=problems)
+    if routed:
+        decided, agent_reqs = [], []
+    else:
+        decided, agent_reqs = scope(for_level(requirements, level_n), config=config, confirmed_na=confirmed_na, packages=head_packages,
+                                    has_authz=bool(spec and spec.get("authz")), drift_green=drift_green(observed, config["drift_check"]),
+                                    lockfile_problems=problems)
     return Prepared(repo_root=repo_root, repo=repo, now=now, today=today, config=config, checks=checks, intake=intake,
                     suppressions=suppressions, requirements=requirements, level_n=level_n, classification=classification,
                     spec_classification=spec_classification, head=head, base=base, tree_sha=tree_sha, changed=changed,
@@ -182,6 +187,8 @@ def _registration_floor(repo_root, factory, repo, head, intake, problems) -> dic
 
 def agent_scope(prepared: Prepared) -> dict:
     """The agent-scope/v1 document: the requirements the agent must answer, and the tree its assessment must name."""
+    if engine(prepared.config) == "routing":
+        raise InputError("this factory routes with config/routing.toml; there is no ASVS scope (use `scorecard assess`)")
     doc = {"schema": "agent-scope/v1", "tree_sha": prepared.tree_sha, "asvs_level": prepared.level_n,
            "requirements": [{"asvs_id": r["id"], "chapter": r["chapter"], "section": r["section"], "level": r["level"], "text": r["text"]}
                             for r in prepared.agent_reqs]}

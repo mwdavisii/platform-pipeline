@@ -16,7 +16,6 @@ def _edit(factory, old: str, new: str, *, count: int = 1) -> None:
     path.write_text(text.replace(old, new, count))
 
 
-@pytest.mark.xfail(reason="review-2 is released in Task 5", strict=True)
 def test_the_starting_routing_factory_loads(routing_config):
     assert engine(routing_config) == "routing"
     assert routing_config["tier_floor"] == {"low": "standard", "moderate": "standard", "high": "security_review"}

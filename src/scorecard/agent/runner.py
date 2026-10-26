@@ -64,9 +64,11 @@ def _cut_note(cut: bool, budget: Budget) -> str:
             "(shorter justifications and evidence, only the findings that matter).")
 
 
-def run_batch(client: ModelClient, tools: RepoTools, budget: Budget, *, system: str, user: str, batch_ids: list[str],
-              max_turns: int, now: str) -> tuple[list[dict], list[dict]]:
-    specs = [*SPECS, _submit_spec()]
+def converse(client: ModelClient, tools, budget: Budget, *, system: str, user: str, max_turns: int, submit_name: str,
+             submit_spec: dict, parse, nudge: str):
+    """One conversation that ends with one call of the submit tool. Returns `parse(arguments)`; raises Stop when no more model
+    calls can be made, and BatchFailed when it produced no usable submission (after one correction)."""
+    specs = [*SPECS, submit_spec]
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
     corrected = pending = False
     kind, cut = None, False  # the kind of the last invalid submission, and whether that reply hit the output cap
@@ -75,9 +77,9 @@ def run_batch(client: ModelClient, tools: RepoTools, budget: Budget, *, system: 
         left_calls = max_turns - turn
         if left_calls == NUDGE_AT and turn > 0:  # a user message may follow tool results; after another user message it joins that one
             if messages[-1]["role"] == "user":
-                messages[-1] = {**messages[-1], "content": f"{messages[-1]['content']}\n\n{NUDGE}"}
+                messages[-1] = {**messages[-1], "content": f"{messages[-1]['content']}\n\n{nudge}"}
             else:
-                messages.append({"role": "user", "content": NUDGE})
+                messages.append({"role": "user", "content": nudge})
         estimate = estimate_tokens(messages, specs)
         if why := budget.refusal(estimate):
             raise Stop(why)
@@ -86,7 +88,7 @@ def run_batch(client: ModelClient, tools: RepoTools, budget: Budget, *, system: 
             client.set_time_limit(left)  # with no run deadline, each socket operation still has the gateway's timeout_seconds
         try:
             if left_calls == 1:
-                done = client.complete(messages, specs, max_tokens=budget.per_call, tool_choice=SUBMIT_NAME)
+                done = client.complete(messages, specs, max_tokens=budget.per_call, tool_choice=submit_name)
             else:
                 done = client.complete(messages, specs, max_tokens=budget.per_call)
         except GatewayError as exc:
@@ -104,28 +106,28 @@ def run_batch(client: ModelClient, tools: RepoTools, budget: Budget, *, system: 
         messages.append(message)
         if not calls:  # a plain-text answer is read as the submission
             try:
-                return parse_batch(message.get("content") or "", batch_ids, now=now)
+                return parse(message.get("content") or "")
             except InvalidOutput as exc:
                 kind, cut = exc.kind, done.truncated
                 if corrected:
                     raise BatchFailed(_invalid(kind, cut)) from None
                 corrected = pending = True
-                messages.append({"role": "user", "content": f"error: {exc}. Call {SUBMIT_NAME} with a corrected submission.{_cut_note(cut, budget)}"})
+                messages.append({"role": "user", "content": f"error: {exc}. Call {submit_name} with a corrected submission.{_cut_note(cut, budget)}"})
                 continue
         rejected = False
         for call in calls:
             name, arguments = call["function"]["name"], call["function"]["arguments"]
             if rejected:  # one invalid submission ends the handling of this reply; the correction turn follows
                 reply = "error: not run; fix the submission first"
-            elif name == SUBMIT_NAME:
+            elif name == submit_name:
                 try:
-                    return parse_batch(arguments, batch_ids, now=now)
+                    return parse(arguments)
                 except InvalidOutput as exc:
                     kind, cut = exc.kind, done.truncated
                     if corrected:
                         raise BatchFailed(_invalid(kind, cut)) from None
                     corrected = rejected = pending = True
-                    reply = f"error: {exc}. Call {SUBMIT_NAME} again with a corrected submission.{_cut_note(cut, budget)}"
+                    reply = f"error: {exc}. Call {submit_name} again with a corrected submission.{_cut_note(cut, budget)}"
             else:
                 reply = tools.call(name, arguments)
             messages.append({"role": "tool", "tool_call_id": call["id"], "content": reply})
@@ -134,6 +136,12 @@ def run_batch(client: ModelClient, tools: RepoTools, budget: Budget, *, system: 
     if pending:
         raise BatchFailed(_invalid(kind, cut))
     raise BatchFailed(f"no valid submission within {max_turns} model calls")
+
+
+def run_batch(client: ModelClient, tools: RepoTools, budget: Budget, *, system: str, user: str, batch_ids: list[str],
+              max_turns: int, now: str) -> tuple[list[dict], list[dict]]:
+    return converse(client, tools, budget, system=system, user=user, max_turns=max_turns, submit_name=SUBMIT_NAME,
+                    submit_spec=_submit_spec(), parse=lambda arguments: parse_batch(arguments, batch_ids, now=now), nudge=NUDGE)
 
 
 def assess(prepared: Prepared, client: ModelClient, *, clock=time.monotonic) -> tuple[dict, dict]:

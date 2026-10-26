@@ -115,6 +115,8 @@ def citable_paths(root) -> set[str]:
 
 
 class RepoTools:
+    submit_name = "submit_assessment"  # the review's submit tool, named in the unknown-tool message
+
     def __init__(self, root, config: dict):
         self.tree = Tree(root)
         self.limits = config["agent"]["tools"]
@@ -190,7 +192,7 @@ class RepoTools:
         """Run one tool call from the model. Never raises: a bad call returns an error message for the model."""
         try:
             if name not in NAMES:
-                raise ToolError(f"unknown tool {str(name)[:60]!r}; the tools are {', '.join(NAMES)} and submit_assessment")
+                raise ToolError(f"unknown tool {str(name)[:60]!r}; the tools are {', '.join(NAMES)} and {self.submit_name}")
             args = _arguments(arguments)
             if name == "list_files":
                 return self.list_files(_only(args, {"glob": str}, required={"glob"})["glob"])

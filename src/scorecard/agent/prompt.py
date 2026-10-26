@@ -16,7 +16,8 @@ from ..signals.injection import join_separators, path_flaw
 from .tools import shown_lines
 
 # Every released prompt and the SHA-256 of its file. Editing a released prompt fails loading; add a new version instead.
-PROMPTS = {"review-1": "aa300fe84f8c55ab3a000b44d67f743883fa9c3098a0ce83cef3585404e6d878"}
+PROMPTS = {"review-1": "aa300fe84f8c55ab3a000b44d67f743883fa9c3098a0ce83cef3585404e6d878",
+           "review-2": "12c4485998470aa61be92a18766575914563594ea52e4595b252e255641085b9"}
 # Prompts for the routing engine (config/routing.toml). Every other released prompt is for the ASVS engine.
 ROUTING_PROMPTS = frozenset({"review-2"})
 

@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 ACTION = ROOT / "bootstrap/scorecard-factory/.github/actions/app-token/action.yml"
 REAL_IMAGE = "ghcr.io/example/golden-road-builder@sha256:" + "ab" * 32
 TOKEN = "ghs_" + "a" * 36
+STATELESS = "ghs_1234_eyJhbGciOiJSUzI1NiJ9." + "eyJpc3MiOjEyMzR9" * 20 + "." + "s-_" * 110  # GitHub's stateless format
 HARDENING = "--cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --read-only --tmpfs /tmp --user"
 
 pytestmark = pytest.mark.skipif(shutil.which("jq") is None, reason="jq not installed")
@@ -67,6 +68,12 @@ def test_the_action_is_one_bash_step_using_only_its_inputs_as_env():
     assert "${{" not in s["run"] and s["run"].lstrip().startswith("set -euo pipefail")
 
 
+def test_a_stateless_token_is_handed_on_masked(tmp_path):
+    out, output, *_ = run(tmp_path, token_doc={"token": STATELESS, "expires_at": "2027-01-15T09:00:00Z", "app_slug": "scorecard-x"})
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert f"::add-mask::{STATELESS}" in out.stdout and output.splitlines() == [f"token={STATELESS}", "slug=scorecard-x"]
+
+
 def test_the_token_is_masked_before_it_is_an_output(tmp_path):
     _, s = step()
     assert s["run"].index("::add-mask::") < s["run"].index("GITHUB_OUTPUT")
@@ -109,7 +116,8 @@ def test_odd_inputs_fail_before_docker(tmp_path, kwargs):
     assert out.returncode == 1 and "::error::app-token:" in out.stdout and argv == "" and output == ""
 
 
-@pytest.mark.parametrize("doc", [{"token": "ghs_short"}, {"token": "not a token; echo pwned"}, {"token": ""}, {}, {"token": 5}])
+@pytest.mark.parametrize("doc", [{"token": "ghs_short"}, {"token": "not a token; echo pwned"}, {"token": ""}, {}, {"token": 5},
+                                 {"token": STATELESS[:60] + "\nslug=pwned"}, {"token": STATELESS[:60] + " echo pwned"}])
 def test_an_odd_token_is_refused_and_not_echoed(tmp_path, doc):
     out, output, *_ = run(tmp_path, token_doc=doc)
     assert out.returncode == 1 and output == "" and "pwned" not in out.stdout + out.stderr and "ghs_short" not in out.stdout + out.stderr

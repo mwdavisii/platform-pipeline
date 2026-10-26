@@ -14,6 +14,8 @@ KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 PEM = KEY.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption()).decode()
 PUB = KEY.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
 TOKEN = "ghs_" + "a" * 36
+# GitHub's stateless installation tokens (rolled out 2026-10-02): ghs_<app id>_<JWT>, about 520 characters, with dots.
+STATELESS = "ghs_1234_eyJhbGciOiJSUzI1NiJ9." + "eyJpc3MiOjEyMzR9" * 20 + "." + "s-_" * 110
 NOW = 1_800_000_000
 
 
@@ -32,8 +34,8 @@ class Resp:
 
 
 class FakeGitHub:
-    def __init__(self, installed=True, grant=None, repos=None, slug="scorecard-x"):
-        self.calls, self.installed, self.slug = [], installed, slug
+    def __init__(self, installed=True, grant=None, repos=None, slug="scorecard-x", token=TOKEN):
+        self.calls, self.installed, self.slug, self.token = [], installed, slug, token
         self.grant, self.repos = grant, repos
 
     def __call__(self, req, timeout):
@@ -47,7 +49,7 @@ class FakeGitHub:
                 raise urllib.error.HTTPError(req.full_url, 404, "x", {}, None)
             return Resp({"id": 77})
         asked = json.loads(req.data)
-        return Resp({"token": TOKEN, "expires_at": "2027-01-15T09:00:00Z",
+        return Resp({"token": self.token, "expires_at": "2027-01-15T09:00:00Z",
                      "permissions": self.grant or {**asked["permissions"], "metadata": "read"},
                      "repositories": self.repos if self.repos is not None else [{"full_name": "o/app"}]}, 201)
 
@@ -114,8 +116,16 @@ def test_odd_repositories_are_refused_before_any_call(repo):
     assert fake.calls == []
 
 
+@pytest.mark.parametrize("token", [TOKEN, STATELESS])
+def test_both_the_old_and_the_stateless_token_formats_are_accepted(token):
+    assert mint(FakeGitHub(token=token))["token"] == token
+
+
 @pytest.mark.parametrize("doc", [{"token": "not-a-token", "expires_at": "2027-01-15T09:00:00Z"},
-                                 {"token": TOKEN, "expires_at": "tomorrow"}, {}])
+                                 {"token": TOKEN, "expires_at": "tomorrow"}, {},
+                                 {"token": STATELESS[:100] + "\nnot-a-token", "expires_at": "2027-01-15T09:00:00Z"},
+                                 {"token": STATELESS[:100] + " not-a-token", "expires_at": "2027-01-15T09:00:00Z"},
+                                 {"token": "ghs_" + "a" * 4097, "expires_at": "2027-01-15T09:00:00Z"}])
 def test_an_odd_token_answer_is_refused_and_not_echoed(doc):
     def odd(req, timeout):
         return Resp({"id": 77}) if req.full_url.endswith("/installation") else Resp(doc)

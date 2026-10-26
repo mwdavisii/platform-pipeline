@@ -105,6 +105,12 @@ def test_no_reasons_and_no_assessment():
 
 def test_redact_patterns():
     assert redact("ghp_" + "a" * 36) == "[redacted: github-pat]"
+
+
+def test_a_stateless_github_app_token_is_redacted_whole():
+    """GitHub's installation tokens since 2026-10: ghs_<app id>_<JWT>, with dots. None of it, not even the App id, is left."""
+    token = "ghs_1234_eyJhbGciOiJSUzI1NiJ9." + "eyJpc3MiOjEyMzR9" * 20 + "." + "s-_" * 110
+    assert redact(f"Authorization: Bearer {token} ok") == "Authorization: Bearer [redacted: github-pat] ok"
     assert "hunter2hunter2" not in redact("password: hunter2hunter2")
     assert redact("plain text") == "plain text"
 

@@ -13,7 +13,9 @@ KEY_ENV = "GOLDEN_ROAD_APP_KEY"
 # What the scorecard's steps may ask for (C1 plus commit statuses for Gate 1). Anything else is refused before any call.
 ALLOWED = {"contents": ("read",), "pull_requests": ("read", "write"), "checks": ("read", "write"), "statuses": ("read",), "issues": ("write",)}
 _REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
-_TOKEN = re.compile(r"^ghs_[A-Za-z0-9_]{20,255}$")
+# Installation tokens are opaque: since GitHub's stateless format (2026-10) they are ghs_<app id>_<JWT>, about 520 characters with dots.
+# Only the prefix, a URL-safe alphabet (no whitespace, so the token can't break a header or an output line) and a sane length are checked.
+_TOKEN = re.compile(r"ghs_[A-Za-z0-9_.-]{20,4096}")
 _SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,38}$")
 _EXPIRES = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
@@ -69,7 +71,7 @@ def installation_token(api_url: str, app_id: int, key_pem: str, repo: str, permi
     doc = app.send("POST", f"/app/installations/{installation}/access_tokens", {"repositories": [name], "permissions": permissions})
     doc = doc if isinstance(doc, dict) else {}
     token, expires = doc.get("token"), doc.get("expires_at")
-    if not isinstance(token, str) or not _TOKEN.match(token) or not isinstance(expires, str) or not _EXPIRES.match(expires):
+    if not isinstance(token, str) or not _TOKEN.fullmatch(token) or not isinstance(expires, str) or not _EXPIRES.match(expires):
         raise InputError("GitHub returned no installation token")
     granted = dict(doc.get("permissions") or {})
     if granted.get("metadata") == "read":

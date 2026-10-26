@@ -12,7 +12,7 @@ import re
 SECRET_PATTERNS = [
     ("private-key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----.*?(?:-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----|\Z)", re.DOTALL)),
     ("aws-access-key-id", re.compile(r"(?:AKIA|ASIA)[0-9A-Z]{16}")),
-    ("github-pat", re.compile(r"gh[pousr]_[A-Za-z0-9]{36,}")),
+    ("github-pat", re.compile(r"gh[pousr]_[A-Za-z0-9][A-Za-z0-9_.-]{35,}")),  # ghs_ tokens can be ghs_<app id>_<JWT>, with dots
     ("github-fine-grained-pat", re.compile(r"github_pat_[A-Za-z0-9_]{22,}")),
     ("slack-token", re.compile(r"xox[abposr]-[A-Za-z0-9-]{10,}")),
     ("gcp-api-key", re.compile(r"AIza[0-9A-Za-z_-]{35}")),

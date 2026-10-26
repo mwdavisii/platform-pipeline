@@ -2,7 +2,6 @@
 that must come out standard. Fake mode (FactsModel with each case's `fake` answers) checks the pipeline exactly; live mode
 reports what the real model said, its tokens, and true and false positives per fact."""
 
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -13,8 +12,8 @@ from ..agent.review2 import assess_facts
 from ..build import finish, prepare
 from ..golden import GIT, GIT_ENV, GREEN, NOW, REPO
 
-CASE_KEYS = {"name", "description", "base", "change", "intake", "expect", "fake"}
-EXPECT_KEYS = {"answers", "level", "fired", "not_fired", "shadow", "not_shadow"}
+CASE_KEYS = {"name", "description", "base", "change", "expect", "fake"}
+EXPECT_KEYS = {"answers", "level", "fired", "not_fired", "shadow"}
 
 
 def load_cases(path) -> list[dict]:
@@ -67,19 +66,7 @@ class _Registry:
         return {"exists": True, "version_exists": True, "first_release": "2019-01-01", "maintainers": 5, "has_wheel": True}
 
 
-def _with_intake(factory: Path, case: dict, workdir: Path) -> Path:
-    copy = workdir / f"{case['name']}-factory"
-    shutil.copytree(factory, copy)
-    path = copy / "intake" / "acme" / "notes.yaml"
-    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
-    path.write_text(yaml.safe_dump({**doc, **case["intake"], "repo": REPO}), encoding="utf-8")
-    return copy
-
-
 def run_case(case: dict, factory: Path, client, workdir: Path) -> dict:
-    if "intake" in case:
-        # A case's intake goes into a copy of the factory, so the shared fixture is never changed.
-        factory = _with_intake(factory, case, workdir)
     p = prepare(**checkout(case, workdir), factory=factory)
     doc, stats = assess_facts(p, client)
     card, _ = finish(p, doc, registry=_Registry())
@@ -92,10 +79,10 @@ def run_case(case: dict, factory: Path, client, workdir: Path) -> dict:
             problems.append(f"{fact}: {answers.get(fact)}, expected {want} ({facts[fact].get('why') or 'accepted'})")
     if "level" in expect and card["level"] != expect["level"]:
         problems.append(f"level {card['level']}, expected {expect['level']}")
-    problems += [f"{t} did not fire" for t in expect.get("fired", []) if t not in fired]
+    for key, got in (("fired", fired), ("shadow", shadow)):
+        if key in expect and sorted(got) != sorted(expect[key]):
+            problems.append(f"{key} {', '.join(sorted(got)) or 'nothing'}; expected {', '.join(sorted(expect[key])) or 'nothing'}")
     problems += [f"{t} fired" for t in expect.get("not_fired", []) if t in fired]
-    problems += [f"{t} in shadow" for t in expect.get("not_shadow", []) if t in shadow]
-    problems += [f"{t} not in shadow" for t in expect.get("shadow", []) if t not in shadow]
     return {"name": case["name"], "answers": answers, "level": card["level"], "fired": fired, "shadow": shadow,
             "tokens": stats["tokens_used"], "tool_calls": stats["tool_calls"], "problems": problems}
 

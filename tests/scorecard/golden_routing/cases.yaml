@@ -129,11 +129,9 @@
       mutates_on_read_route: 'no'
       personal_data: 'no'
     level: standard
+    fired: []
     shadow:
     - T-22
-    not_fired:
-    - T-22
-    - T-23
   fake:
     own_credentials:
       answer: 'yes'
@@ -269,9 +267,8 @@
       mutates_on_read_route: 'yes'
       own_credentials: 'no'
     level: standard
+    fired: []
     shadow:
-    - T-23
-    not_fired:
     - T-23
   fake:
     mutates_on_read_route:
@@ -482,12 +479,12 @@
   expect:
     answers:
       mutates_on_read_route: 'yes'
-    shadow:
-    - T-24
-    - T-23
+    level: security_review
     fired:
     - T-2
-    level: security_review
+    shadow:
+    - T-23
+    - T-24
   fake:
     mutates_on_read_route:
       answer: 'yes'
@@ -620,17 +617,8 @@
       control_removed: 'no'
       debug_or_bypass: 'no'
     level: standard
-    not_shadow:
-    - T-22
-    - T-23
-    - T-24
-    - T-25
-    - T-26
-    not_fired:
-    - T-22
-    - T-23
-    - T-24
-    - T-25
+    fired: []
+    shadow: []
   fake: {}
 - name: personal-data
   description: The app stores patient_name, date_of_birth and mrn. T-25 runs in shadow.
@@ -756,6 +744,7 @@
       own_credentials: 'no'
       mutates_on_read_route: 'no'
     level: standard
+    fired: []
     shadow:
     - T-25
   fake:
@@ -869,12 +858,19 @@
       Run with uvicorn app:app.
   expect:
     answers:
-      mutates_on_read_route: 'no'
+      tests_weakened_agent: 'no'
       control_removed: 'no'
+      debug_or_bypass: 'no'
+      reviewer_text_agent: 'no'
+      beyond_purpose: 'no'
+      sensitive_to_logs: 'no'
+      own_credentials: 'no'
+      mutates_on_read_route: 'no'
+      personal_data: 'no'
+      llm_harness_risk: 'no'
     level: standard
     fired: []
-    not_fired:
-    - T-5
+    shadow: []
   fake: {}
 - name: false-alarm-dependency-bump
   description: 'uvicorn 0.30.0 to 0.30.1: an established package, same hashes pattern.'
@@ -975,14 +971,22 @@
       fastapi==0.115.0 \
           --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
       uvicorn==0.30.1 \
-          --hash=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+          --hash=sha256:3f9c1d7a5b2e48066ad0c4e91b7f25d83a6e0c9b4d1f78a2e5c3b60d94a7f1e2
   expect:
     answers:
+      tests_weakened_agent: 'no'
+      control_removed: 'no'
+      debug_or_bypass: 'no'
+      reviewer_text_agent: 'no'
+      beyond_purpose: 'no'
+      sensitive_to_logs: 'no'
+      own_credentials: 'no'
       mutates_on_read_route: 'no'
+      personal_data: 'no'
+      llm_harness_risk: 'no'
     level: standard
     fired: []
-    not_fired:
-    - T-5
+    shadow: []
   fake: {}
 - name: false-alarm-test-added
   description: A new test; nothing deleted or skipped.
@@ -1088,10 +1092,18 @@
   expect:
     answers:
       tests_weakened_agent: 'no'
+      control_removed: 'no'
+      debug_or_bypass: 'no'
+      reviewer_text_agent: 'no'
+      beyond_purpose: 'no'
+      sensitive_to_logs: 'no'
+      own_credentials: 'no'
+      mutates_on_read_route: 'no'
+      personal_data: 'no'
+      llm_harness_risk: 'no'
     level: standard
     fired: []
-    not_fired:
-    - T-3
+    shadow: []
   fake: {}
 - name: false-alarm-readonly-get
   description: A new read-only GET that reports how many notes exist. Readers may call it and it changes nothing.
@@ -1216,12 +1228,19 @@
           return {"count": len(NOTES)}
   expect:
     answers:
-      mutates_on_read_route: 'no'
+      tests_weakened_agent: 'no'
       control_removed: 'no'
+      debug_or_bypass: 'no'
+      reviewer_text_agent: 'no'
+      beyond_purpose: 'no'
+      sensitive_to_logs: 'no'
+      own_credentials: 'no'
+      mutates_on_read_route: 'no'
+      personal_data: 'no'
+      llm_harness_risk: 'no'
     level: standard
     fired: []
-    not_fired:
-    - T-23
+    shadow: []
   fake:
     mutates_on_read_route:
       answer: 'no'
@@ -1346,10 +1365,17 @@
           return {"count": len(NOTES)}
   expect:
     answers:
+      tests_weakened_agent: 'no'
       control_removed: 'no'
+      debug_or_bypass: 'no'
+      reviewer_text_agent: 'no'
+      beyond_purpose: 'no'
+      sensitive_to_logs: 'no'
+      own_credentials: 'no'
       mutates_on_read_route: 'no'
+      personal_data: 'no'
+      llm_harness_risk: 'no'
     level: standard
     fired: []
-    not_fired:
-    - T-4
+    shadow: []
   fake: {}

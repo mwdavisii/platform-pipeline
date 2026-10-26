@@ -25,5 +25,10 @@ def test_the_set_covers_every_agent_fact_both_ways(routing_config):
 
 
 def test_the_false_alarm_set_is_standard():
-    quiet = [c for c in CASES if c["expect"].get("level") == "standard" and not c["expect"].get("fired")]
+    quiet = [c for c in CASES if c["name"].startswith("false-alarm-")]
     assert len(quiet) >= 5
+    for case in quiet:
+        expect = case["expect"]
+        assert expect.get("level") == "standard", case["name"]
+        assert expect.get("fired") == [], case["name"]
+        assert expect.get("shadow") == [], case["name"]

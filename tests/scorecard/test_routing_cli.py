@@ -1,10 +1,21 @@
 """The CLI with a routing factory: assess writes facts-assessment/v1, run writes scorecard/v2 and the usual files."""
 
 import json
+import os
+
+import pytest
 
 from contracts.schema import validate
 from scorecard.agent.fake import FactsModel
 from scorecard.cli import main
+from scorecard.config import runner_env
+
+
+@pytest.fixture(autouse=True)
+def _no_runner_tokens(monkeypatch):
+    """CI sets GITHUB_*, ACTIONS_* and RUNNER_*; `assess` refuses them, so the tests start without any (scrubbed here, not in the code)."""
+    for name in runner_env(os.environ):
+        monkeypatch.delenv(name, raising=False)
 
 
 def _common(kw, factory, tmp_path):

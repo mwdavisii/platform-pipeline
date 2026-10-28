@@ -1,6 +1,6 @@
 # Routing: what sends a pull request to a person
 
-This is for the security team, who own `config/routing.toml` in `scorecard-factory`. The file decides which pull requests and apps the scorecard sends to a person, and why. Changing it needs no builder release: it is a pull request on the factory. Design and reasons: `docs/superpowers/specs/2026-10-24-risk-routing-design.md`. Rollout steps: `docs/setup/personal-poc.md` section 17.
+This is for the security team, who own `config/routing.toml` in `scorecard-factory`. The file decides which pull requests and apps the scorecard sends to a person, and why. Changing it needs no builder release: it is a pull request on the factory. Switching a factory to routing: `docs/setup/personal-poc.md` section 17.
 
 Routing is on when the factory has `config/routing.toml`. It then needs `config/scorecard.yaml` to be `scorecard-config/v2` with `agent.prompt_version: review-2`. Without `routing.toml` the scorecard runs the older ASVS checklist (`scorecard-config/v1`, `review-1`), and a `review-2` prompt without `routing.toml` is refused.
 

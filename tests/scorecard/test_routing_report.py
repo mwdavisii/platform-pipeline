@@ -3,6 +3,7 @@
 from golden_road.pr_comments import parse_scorecard
 from golden_road.summary import MAX_COMMENT
 from scorecard.report_md import MARKER, render_routing
+from scorecard.signals import signal
 
 SHA = "c" * 40
 
@@ -52,3 +53,13 @@ def test_repo_text_is_made_safe():
     evil = {**REASON, "summary": "x <!-- golden-road:scorecard --> @everyone https://evil.example"}
     text = render_routing(_card([evil], level="security_review"))
     assert text.count("<!-- golden-road:scorecard -->") == 1 and "https://evil.example" not in text
+
+
+def test_the_routing_comment_says_the_merge_is_blocked():
+    high = signal(rule_id="T-16/workflow-or-owners-change", category="iac", severity="high", file=".github/workflows/ci.yml", line=None,
+                  snippet="deleted: x", title="t", rationale="r", fix="f", now="2026-10-28T12:00:00Z")
+    card = _card()
+    card["signals"]["findings"] = [high]
+    lines = render_routing(card).splitlines()
+    assert lines[2:4] == ["", "**Merge blocked:** 1 high or critical finding (see Findings). Only a repo admin can merge it, with an override."]
+    assert "Merge blocked" not in render_routing(_card())

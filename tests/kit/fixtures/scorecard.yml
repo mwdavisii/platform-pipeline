@@ -1,7 +1,8 @@
 # The risk scorecard from the platform's factory repo, called as a reusable workflow (a personal account can't require
-# workflows with a ruleset). It classifies how much human review a pull request needs; it does not gate. The job id is
-# `scorecard`, so the checks are `scorecard / precondition`, `scorecard / assess`, `scorecard / score`,
-# `scorecard / report`, `scorecard / level: <level>` and `scorecard / assessed`. The ruleset requires `scorecard / assessed`.
+# workflows with a ruleset). It classifies how much human review a pull request needs, and holds the merge only for high or
+# critical findings. The job id is `scorecard`, so the checks are `scorecard / precondition`, `scorecard / assess`,
+# `scorecard / score`, `scorecard / report`, `scorecard / level: <level>`, `scorecard / findings` and `scorecard / assessed`.
+# The ruleset requires `scorecard / assessed`; the scorecard-findings ruleset requires `scorecard / findings`.
 # The `types` are the called workflow's, `edited` included: a retargeted base changes the diff, so it is assessed again.
 name: scorecard
 

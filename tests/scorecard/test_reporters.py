@@ -4,8 +4,9 @@ import pytest
 
 from contracts.findings import make_finding_v2
 from scorecard.redact import excerpt, redact
-from scorecard.report_github import github_actions
+from scorecard.report_github import findings_check, github_actions
 from scorecard.report_md import MARKER, MAX_COMMENT, render
+from scorecard.signals import signal
 
 AWS = "AKIA" + "ABCDEFGHIJKLMNOP"
 BLOCKING = ["v5.0.0-6", "v5.0.0-7", "v5.0.0-8", "v5.0.0-9", "v5.0.0-13.3"]
@@ -215,3 +216,54 @@ def test_the_assessment_line_for_a_model_with_no_temperature():
 
 def test_the_assessment_line_shows_the_model_version_only():
     assert "Model version 1 at temperature 0, prompt fixture. Complete." in _render(_card())
+
+
+def _high(rule_id="T-16/workflow-or-owners-change", file=".github/workflows/ci.yml", line=None):
+    return signal(rule_id=rule_id, category="iac", severity="high", file=file, line=line, snippet="deleted: x", title="t", rationale="r",
+                  fix="f", now="2026-10-28T12:00:00Z")
+
+
+def test_github_actions_without_a_card_has_no_block(config):
+    actions = github_actions("standard", config)
+    assert actions["blocking_findings"] == []
+    assert actions["findings_check"] == {"conclusion": "success", "title": "No high or critical findings", "summary": "No high or critical findings."}
+
+
+def test_github_actions_lists_the_blocking_findings(config):
+    card = _card()
+    card["signals"]["findings"] = [_high(), _high("T-15/inline-suppression", "app.py", 4)]
+    actions = github_actions("security_review", config, card=card, who="a member of `acme/platform`")
+    assert actions["blocking_findings"] == [{"rule_id": "T-15/inline-suppression", "file": "app.py", "line": 4},
+                                            {"rule_id": "T-16/workflow-or-owners-change", "file": ".github/workflows/ci.yml", "line": None}]
+    check = actions["findings_check"]
+    assert check["conclusion"] == "failure" and check["title"] == "Merge blocked: 2 high or critical findings"
+    assert "`T-15/inline-suppression` at app.py:4" in check["summary"]
+    assert "a member of `acme/platform` can merge with an override" in check["summary"]
+
+
+def test_the_check_lists_at_most_20():
+    many = [{"rule_id": f"T-16/r{i:02d}", "location": {"file": "f.py", "start_line": i + 1}} for i in range(23)]
+    summary = findings_check(many, "a repo admin")["summary"]
+    assert sum(line.startswith("- `") for line in summary.splitlines()) == 20 and "- and 3 more" in summary
+    assert findings_check(many[:1], "a repo admin")["title"] == "Merge blocked: 1 high or critical finding"
+
+
+def test_the_comment_says_the_merge_is_blocked():
+    card = _card()
+    card["signals"]["findings"] = [_high()]
+    lines = _render(card, override_by="a member of `acme/platform`").splitlines()
+    assert lines[2:4] == ["", "**Merge blocked:** 1 high or critical finding (see Findings). Only a member of `acme/platform` can merge it, with an override."]
+    assert "Merge blocked" not in _render(_card())
+    assert "@acme" not in "\n".join(lines)
+
+
+def test_the_check_neutralises_hostile_repo_text():
+    hostile = "@everyone`<script>alert(1)</script>\u202e\nx" + "d/" * 500
+    entry = {"rule_id": hostile, "location": {"file": hostile, "start_line": 3}}
+    check = findings_check([entry], "a repo admin")
+    text = check["title"] + "\n" + check["summary"]
+    assert "@everyone" not in text and "<script" not in text and "\u202e" not in text
+    line = next(x for x in check["summary"].splitlines() if x.startswith("- `"))
+    assert len(line) < 600
+    assert check["summary"].splitlines()[0] == line, "the newline in the text did not start a new line"
+    assert check["summary"].splitlines()[1] == ""

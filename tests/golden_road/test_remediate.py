@@ -328,3 +328,31 @@ def test_drift_evidence_has_each_rule_id_unescaped_once(valid_finding):
 def test_t21_says_the_registration_is_raised_in_the_portal_after_merging():
     assert "after merging, ask for the registration to be raised in the portal" in remediate.TRIGGER_NOTES["T-21"]
     assert remediate.TRIGGER_NOTES["T-21"].endswith("nothing to fix in code.")
+
+
+def test_findings_block():
+    findings = remediate.CHECKS["findings"]
+    item = only(run([check(ASSESSED, "pass", "SUCCESS"), check(findings)]), check=findings)
+    assert item["category"] == "fix" and item["source"] == "scorecard" and "Findings" in item["guidance"]
+    for word in ("bypass", "override", "without waiting", "admin"):
+        assert word not in item["guidance"].lower(), word
+    not_assessed = run([check(ASSESSED), check(findings)])
+    assert [i["check"] for i in not_assessed["items"]] == [ASSESSED], "a head that was not assessed: `assessed` says what to do"
+    assert run([check(ASSESSED, "pass", "SUCCESS"), check(findings, "pass", "SUCCESS")])["status"] == "clean"
+
+
+def test_findings_block_output_never_mentions_a_bypass():
+    findings = remediate.CHECKS["findings"]
+    for others, bucket in (([], "fail"), ([check(ASSESSED, "pass", "SUCCESS")], "fail"), ([check(DRIFT)], "fail"),
+                           ([check(ASSESSED, "pass", "SUCCESS")], "cancel")):
+        doc = run([*others, check(findings, bucket, "CANCELLED" if bucket == "cancel" else "FAILURE")])
+        text = json.dumps([i for i in doc["items"] if i["check"] == findings]).lower()
+        assert findings.lower() in text
+        for word in ("bypass", "override", "admin"):
+            assert word not in text, word
+
+
+def test_cancelled_findings_check_is_a_rerun_for_the_platform():
+    findings = remediate.CHECKS["findings"]
+    item = only(run([check(ASSESSED, "pass", "SUCCESS"), check(findings, "cancel", "CANCELLED")]), check=findings)
+    assert item["category"] == "rerun" and item["owner"] == "platform" and "Findings" not in item["guidance"]

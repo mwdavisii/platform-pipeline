@@ -408,7 +408,7 @@ Until this step the committed `platform/required-checks.json` is `{"required": [
    `<deputy>` approves (single-approver mode: skip) and you merge. **Check:** all of `golden-road / drift`, `golden-road / preview`, `security-scans / semgrep`, `security-scans / trivy` and the CodeQL check pass on the PR; the comments for the two tools now say `passed` (they are edited in place, not added); after the merge, the release job's Gate 1 waits for every required check on the merge commit and the release is signed (`gh release list --repo <you>/hello-app --limit 1`). Then close the proof PR's branch and run `gh pr list --repo <you>/hello-app --state all` to confirm nothing else is open. Record the commit SHAs and run URLs.
 
 ## 13. Risk scorecard: the factory repo and the first live run
-The scorecard gives every ready-for-review PR on `hello-app` a **scrutiny level** (`standard`, `elevated` or `security_review`) and a checklist of what a person should look at. It classifies; it never blocks a merge by itself, and drift, Gate 1, the preview and Gate 2 stay as they are. It runs from a fourth public repo, `<you>/scorecard-factory`, which holds the workflow and the trusted inputs (the app's tier and purpose, accepted findings, thresholds). `hello-app` calls its workflow as a reusable workflow, because a personal account can't require workflows with a ruleset, and the `main` ruleset requires its `scorecard / assessed` check.
+The scorecard gives every ready-for-review PR on `hello-app` a **scrutiny level** (`standard`, `elevated` or `security_review`) and a checklist of what a person should look at. It classifies, and its level never blocks a merge (since section 18, a high or critical deterministic finding does), and drift, Gate 1, the preview and Gate 2 stay as they are. It runs from a fourth public repo, `<you>/scorecard-factory`, which holds the workflow and the trusted inputs (the app's tier and purpose, accepted findings, thresholds). `hello-app` calls its workflow as a reusable workflow, because a personal account can't require workflows with a ruleset, and the `main` ruleset requires its `scorecard / assessed` check.
 
 What reaches the model: the review agent reads `hello-app`'s files through three read-only tools and sends excerpts to your model gateway. Text aimed at the reviewer and secret-shaped strings are withheld, but everything else in the repo can be sent, so use a model you are content to show `hello-app`'s code.
 
@@ -1118,7 +1118,7 @@ For `hello-app`, then again for the portal (`golden-road-portal`). Do the four s
 11. A merge commit that is not ready is retried: open a PR and, as soon as the first assess run starts, push a commit to its base branch. If the run ends "not assessed" with "The next poll tries again", the next poll (after about ten minutes) dispatches it again and the second run assesses; the check's `external_id` goes `queued`, `retry`, `queued`. At most three tries, then a final mark that says a new push starts again.
 
 ### 16.7 Roll back
-Re-PUT the ruleset with `integration_id` 15368 for `scorecard / assessed` (restore the committed `main.json` with the same `gh api -X PUT`), restore `scorecard.yml` in the app and its gateway secrets (13.5), remove the `scorecard: central` line from its intake record (a factory pull request, so the poller stops assessing it), and delete the repository variable (`gh variable delete SCORECARD_APP_ID --repo <you>/scorecard-factory`): without it the poller becomes inert at once. The environment, its secrets and the App can stay.
+Re-PUT the rulesets with `integration_id` 15368 for `scorecard / assessed` and `scorecard / findings` (restore the committed `main.json` and, if section 18 applied it, `scorecard-findings.json`, each with `gh api -X PUT repos/<you>/<app>/rulesets/<id>`), restore `scorecard.yml` in the app and its gateway secrets (13.5), remove the `scorecard: central` line from its intake record (a factory pull request, so the poller stops assessing it), and delete the repository variable (`gh variable delete SCORECARD_APP_ID --repo <you>/scorecard-factory`): without it the poller becomes inert at once. The environment, its secrets and the App can stay.
 
 ### 16.8 Gaps after section 16
 The "scorecard's checks can be imitated" and "gateway key readable by anyone with write access" bullets under "PoC gaps to record" no longer apply to an app that has migrated; they still apply to one that has not. New gaps to record: anyone who can merge to the factory's `main` can read the environment's secrets (a workflow they merge runs in it), scheduled runs can be delayed or dropped under load (a PR can wait longer than five minutes), and the factory is public, so the assess runs' logs and artifacts are public.
@@ -1178,6 +1178,38 @@ Leave T-22 to T-26 in shadow while real pull requests come through. For each, lo
 ### 17.4 Roll back
 Revert the factory pull request from 17.1 (a revert pull request on the factory; it merges once `factory-check` passes). The factory goes back to `review-1`, its old `scorecard.yaml` and no `routing.toml`. An assessment made under one engine is not read by the other, so the next push to each open pull request assesses again.
 
+## 18. High findings hold the merge
+A high or critical deterministic finding on the scorecard (for example T-16, when a PR changes a workflow) fails the check `scorecard / findings`. That check is required by its own ruleset, `scorecard-findings`, the app's only ruleset with a bypass: the repo admin role, for pull requests only. So the PR can't merge the normal way, and the admin merges it with "Merge without waiting for requirements". GitHub records that as a bypass, and that record is the override log (nothing else keeps one). Medium and low findings, and the reviewer's own findings, never hold a merge. In single-approver mode you are the admin, so every such merge is you overriding your own PR: this proves the mechanics, not separation of duties.
+
+Requirements: a builder release that carries the findings check (the lead's version bump; this section names no number), released and pinned as in 13.2, and the factory's `BUILDER_IMAGE` pins moved to it in one factory PR (all four in central mode, as in 16.3).
+
+### 18.1 Configure
+Re-export and configure exactly as before (16.3 in central mode, 13.2 in per-app mode). The tree now has `bootstrap/<app>/.github/rulesets/scorecard-findings.json` for `hello-app` and the portal. In central mode configure pins its `scorecard / findings` to the App, as it does `scorecard / assessed`; in per-app mode it stays 15368 (the factory workflow's `findings` job posts it).
+
+**Check:** `jq '[.rules[].parameters.required_status_checks[] | .integration_id]' bootstrap/hello-app/.github/rulesets/scorecard-findings.json` prints `[<app id>]` (central) or `[15368]` (per-app), and `jq '.bypass_actors' bootstrap/hello-app/.github/rulesets/scorecard-findings.json` prints one actor, `"actor_id": 5`, `"actor_type": "RepositoryRole"`, `"bypass_mode": "pull_request"`.
+
+### 18.2 Apply the ruleset
+Only `hello-app` and the portal ship the file. A newly registered app gets the ruleset when you apply the same file to it (`golden-road doctor` warns that `main` doesn't require `scorecard / findings` until then), and until then its high findings don't hold a merge.
+
+Apply it only after the factory runs the new release, so the check is posted: a required check that never comes holds every PR. Then, for `hello-app` and the portal:
+```bash
+gh api -X POST repos/<you>/hello-app/rulesets --input bootstrap/hello-app/.github/rulesets/scorecard-findings.json
+gh api -X POST repos/<you>/golden-road-portal/rulesets --input bootstrap/golden-road-portal/.github/rulesets/scorecard-findings.json
+```
+An open PR gets the check at its next assessment: push to it. If the API rejects the role bypass on a personal repo (see step 2), record the response: the ruleset then can't be applied with its bypass, and this section stops here.
+
+**Check:** `gh api repos/<you>/hello-app/rulesets --jq '.[] | select(.name=="scorecard-findings") | .enforcement'` prints `active`, and the `main` ruleset's `bypass_actors` is still `[]`.
+
+### 18.3 Proof items (record the results)
+1. A PR that changes a file under `.github/workflows/` (T-16) is held: the merge box lists `scorecard / findings` as failing ("Merge blocked: 1 high or critical finding"), the scorecard comment has a "**Merge blocked:**" line, and the normal merge button is disabled.
+2. As the admin, merge it with "Merge without waiting for requirements". Then `gh api 'repos/<you>/hello-app/rulesets/rule-suites?rule_suite_result=bypass' --jq '.[] | {actor_name, ref, after_sha, pushed_at, result}'` lists that merge with `"result": "bypass"`.
+3. A clean PR (no high finding) merges normally, and its `scorecard / findings` says "No high or critical findings".
+4. A PR whose head is not assessed is held too. In central mode a head with a red Gate 1 is marked by the poller without an assess run, so `scorecard / findings` stays missing (pending) and `scorecard / assessed` fails; a head that was dispatched but not assessed (Gate 1 turned red during the run, say) gets a failing `scorecard / findings` ("Not assessed"). In per-app mode the `findings` job fails whenever `score` did not succeed. Either way a missing assessment never lets it through.
+5. The bypass covers only this ruleset: on a PR where another required check fails (drift, say), "Merge without waiting for requirements" is not offered, because `main` has no bypass actor.
+
+### 18.4 Roll back
+Delete the ruleset, for each app: `gh api -X DELETE repos/<you>/<app>/rulesets/$(gh api repos/<you>/<app>/rulesets --jq '.[] | select(.name=="scorecard-findings") | .id')`. The check is still posted and no longer holds anything.
+
 ## PoC gaps to record
 - The scans are open-source reference scans (Semgrep CE with a small vendored rule set plus `p/default`, Trivy, CodeQL default setup), not the security team's tools, thresholds, or triage. Until step 11, Gate 1 waits on nothing beyond drift and the authz probe. Gate 1 sees only a CodeQL check run's conclusion, so it proves the analysis ran, not that no alert exists; the alert threshold is enforced at merge time.
 - **Scan results can be forged.** Every check that a GitHub Actions workflow posts comes from the same app (id 15368), so pinning `app_id` cannot tell the `security-scans` workflow's `security-scans / semgrep` from a job of the same name that anyone with write access adds to a workflow in `hello-app` (or by editing `security-scans.yml` to stop calling the real scans). CodeQL's results can likewise be imitated by a workflow with `security-events: write`. What holds today is code-owner review of `.github/` and a deputy who rejects changes there. **The real fix is signed scan results**: the scan workflow signs its result with its own identity and the release verifies that signature instead of a check name. It is out of scope for this PoC.
@@ -1188,6 +1220,7 @@ Revert the factory pull request from 17.1 (a revert pull request on the factory;
 - Anyone can mint platform-identity signatures for their own repos, so verification must pin the workflow repository, ref, and trigger.
 - The repo owner is the admin and can change settings, so the controls rest on the owner not weakening them. The deputy is a single second pair of eyes (none in single-approver mode, where the controls prove the mechanics only).
 - The organization-wide "require workflows" ruleset is not available on a personal account.
+- **Single-approver mode: every `scorecard / findings` override is the owner overriding their own PR** (18). The bypass record shows it happened, not that a second person agreed.
 - The PR preview builds and runs the PR's image on the runner with a read-only token and no secrets, but the build has full network egress, like the release build. A fork PR in a public repo can therefore make the runner reach the internet during `docker build`; nothing else is exposed. The preview is required for merge but advisory for signing: the release job rebuilds and re-probes. It runs in parallel with drift, so a drift failure does not hide a build failure.
 - Build egress is not restricted (see "Deferred: build egress" in `docs/enforcement.md`).
 - **The scorecard's checks can be imitated too.** `hello-app` calls the factory workflow itself, so a PR can edit that caller, and a job in `hello-app` can post `scorecard / assessed` (same app, 15368). The `level:` check, the `score` job summary and the `scorecard` artifact of the factory run are the record; code-owner review of `.github/` is the control. Organizations can require the workflow with a ruleset instead.

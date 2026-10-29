@@ -2,7 +2,7 @@
 # from main, in environment `scorecard` (the only place the gateway secrets and the App key exist), checks out the PR's merge
 # commit as data with a read-only App token per job, runs the same precondition, assess and score steps as scorecard.yml in
 # the pinned builder image, and only the report job writes: the queued `scorecard / assessed` check, `scorecard / level: <level>`,
-# the label and the comment. A newer head of the same PR cancels this run. Nothing from the pull request is executed.
+# `scorecard / findings`, the label and the comment. A newer head of the same PR cancels this run. Nothing from the pull request is executed.
 name: scorecard-assess
 
 on:
@@ -619,6 +619,11 @@ jobs:
           [ "$(jq -r .label report/github.json)" = "$label" ] || { echo "::error::github.json names a different level"; exit 1; }
           marker="<!-- golden-road:scorecard -->"
           [ "$(head -n 1 report/comment.md)" = "$marker" ] || { echo "::error::the comment does not start with its marker"; exit 1; }
+          # The findings result, checked before any write: without one the step fails, and the assessed step posts a failed check. The same
+          # exact conclusion/title pair as the per-app Score step (`\z`, not `$`, which also matches before a trailing newline).
+          jq -e '.findings_check | type == "object" and (.summary | type == "string") and ((.conclusion == "success" and .title == "No high or critical findings")
+                 or (.conclusion == "failure" and (.title | type == "string" and test("\\AMerge blocked: [1-9][0-9]{0,5} high or critical findings?\\z"))))' \
+            report/github.json > /dev/null 2>&1 || { echo "::error::github.json has no findings result"; exit 1; }
           run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           # The label: remove the stale scrutiny labels that are on the PR, then add this one. A failure fails the job.
           current=$(gh api --paginate "repos/$REPO/issues/$PR/labels?per_page=100" --jq '.[].name')
@@ -655,6 +660,14 @@ jobs:
           jq -cn --arg name "scorecard / level: $LEVEL" --arg head "$HEAD_SHA" --arg url "$run_url" --arg level "$LEVEL" --slurpfile text text.json \
             '{name: $name, head_sha: $head, status: "completed", conclusion: "success", details_url: $url,
               output: {title: ("Scrutiny level: " + $level), summary: "This check is the level. The label and the comment are conveniences.", text: $text[0]}}' \
+            | gh api --method POST "repos/$REPO/check-runs" --input - > /dev/null
+          # `scorecard / findings`: required by the scorecard-findings ruleset, the app's only ruleset a person can bypass (on the PR's merge box).
+          # The score job wrote the result; this only posts its title and summary (never the raw paths in blocking_findings). It is the
+          # last write, so any failure before it leaves this step failed and the assessed step posts a failed one.
+          jq -c --arg head "$HEAD_SHA" --arg url "$run_url" \
+            '{name: "scorecard / findings", head_sha: $head, status: "completed",
+              conclusion: (if .findings_check.conclusion == "success" then "success" else "failure" end), details_url: $url,
+              output: {title: .findings_check.title, summary: .findings_check.summary}}' report/github.json \
             | gh api --method POST "repos/$REPO/check-runs" --input - > /dev/null
 
       # The authoritative result: `scorecard / assessed` passes only when every job and the apply step succeeded. A cancelled or
@@ -694,6 +707,15 @@ jobs:
           if [ "$conclusion" = failure ] && { [ "$RETRY_PRECONDITION" = true ] || [ "$RETRY_SCORE" = true ]; }; then
             external=$(jq -r 'try (.external_id | capture("^v1:[a-z0-9]+:(?<fp>[0-9a-f]{16}):(?<n>[1-9])$") | "v1:retry:\(.fp):\(.n)") catch ""' check.json) || external=""
             [ -z "$external" ] || summary="$summary The next poll tries again."
+          fi
+          # A head that was not assessed gets a failed `scorecard / findings` too, unless the apply step posted one. Never neutral or
+          # skipped: GitHub counts both as passing for a required check. If this post fails, the check is missing or left from an earlier
+          # attempt; `assessed` holds the PR either way. (APPLY == success with conclusion == failure is unreachable today: apply checks LEVEL itself.)
+          if [ "$conclusion" = failure ] && [ "$APPLY" != success ]; then
+            jq -cn --arg head "$HEAD_SHA" --arg url "$run_url" \
+              '{name: "scorecard / findings", head_sha: $head, status: "completed", conclusion: "failure", details_url: $url,
+                output: {title: "Not assessed", summary: "Not assessed, see `scorecard / assessed`."}}' \
+              | gh api --method POST "repos/$REPO/check-runs" --input - > /dev/null || echo "::warning::the findings check could not be posted"
           fi
           jq -cn --arg c "$conclusion" --arg t "$title" --arg s "$summary" --arg url "$run_url" --arg ext "$external" \
             '{status: "completed", conclusion: $c, completed_at: (now | todate), details_url: $url, output: {title: $t, summary: $s}}

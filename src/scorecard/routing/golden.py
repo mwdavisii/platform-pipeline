@@ -9,11 +9,12 @@ import yaml
 
 from ..agent.fake import FactsModel
 from ..agent.review2 import assess_facts
+from ..blocking import blocking_findings
 from ..build import finish, prepare
 from ..golden import GIT, GIT_ENV, GREEN, NOW, REPO
 
 CASE_KEYS = {"name", "description", "base", "change", "expect", "fake"}
-EXPECT_KEYS = {"answers", "level", "fired", "not_fired", "shadow"}
+EXPECT_KEYS = {"answers", "level", "fired", "not_fired", "shadow", "blocking"}
 
 
 def load_cases(path) -> list[dict]:
@@ -82,8 +83,11 @@ def run_case(case: dict, factory: Path, client, workdir: Path) -> dict:
     for key, got in (("fired", fired), ("shadow", shadow)):
         if key in expect and sorted(got) != sorted(expect[key]):
             problems.append(f"{key} {', '.join(sorted(got)) or 'nothing'}; expected {', '.join(sorted(expect[key])) or 'nothing'}")
+    blocking = [f["rule_id"] for f in blocking_findings(card)]
+    if "blocking" in expect and blocking != expect["blocking"]:
+        problems.append(f"blocking {', '.join(blocking) or 'nothing'}; expected {', '.join(expect['blocking']) or 'nothing'}")
     problems += [f"{t} fired" for t in expect.get("not_fired", []) if t in fired]
-    return {"name": case["name"], "answers": answers, "level": card["level"], "fired": fired, "shadow": shadow,
+    return {"name": case["name"], "answers": answers, "level": card["level"], "fired": fired, "shadow": shadow, "blocking": blocking,
             "tokens": stats["tokens_used"], "tool_calls": stats["tool_calls"], "problems": problems}
 
 

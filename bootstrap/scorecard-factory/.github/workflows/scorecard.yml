@@ -304,6 +304,8 @@ jobs:
       level: ${{ steps.score.outputs.level }}
       comment_sha256: ${{ steps.score.outputs.comment_sha256 }}
       github_sha256: ${{ steps.score.outputs.github_sha256 }}
+      findings_conclusion: ${{ steps.score.outputs.findings_conclusion }}
+      findings_title: ${{ steps.score.outputs.findings_title }}
     steps:
       - name: Refuse the placeholder builder image
         run: |
@@ -389,8 +391,17 @@ jobs:
             --event /in/event.json --assessment /in/assessment.json --pr-text /in/pr-text.json --server-url "$GITHUB_SERVER_URL" --out /out
           level=$(jq -r .level out/scorecard.json)
           case "$level" in standard|elevated|security_review) ;; *) echo "::error::not assessed: the scorecard has no valid level"; exit 1;; esac
+          # The findings result for the findings job: only the conclusion and the title, which carry no repo text (never blocking_findings,
+          # whose paths are the PR's). Checked as a pair before any output is written, so a missing or odd one leaves the run not assessed.
+          # Compared exactly in jq (`$(...)` would strip a trailing newline; `\z`, not `$`, which also matches before one).
+          jq -e '.findings_check | type == "object" and ((.conclusion == "success" and .title == "No high or critical findings")
+                 or (.conclusion == "failure" and (.title | type == "string" and test("\\AMerge blocked: [1-9][0-9]{0,5} high or critical findings?\\z"))))' \
+            out/github.json > /dev/null 2>&1 || { echo "::error::not assessed: the scorecard has no findings result"; exit 1; }
+          findings_conclusion=$(jq -r '.findings_check.conclusion' out/github.json)
+          findings_title=$(jq -r '.findings_check.title' out/github.json)
           cat out/scorecard.md >> "$GITHUB_STEP_SUMMARY"
-          { echo "level=$level"; echo "comment_sha256=$(sha256sum out/comment.md | cut -d' ' -f1)"; echo "github_sha256=$(sha256sum out/github.json | cut -d' ' -f1)"; } >> "$GITHUB_OUTPUT"
+          { echo "level=$level"; echo "comment_sha256=$(sha256sum out/comment.md | cut -d' ' -f1)"; echo "github_sha256=$(sha256sum out/github.json | cut -d' ' -f1)";
+            echo "findings_conclusion=$findings_conclusion"; echo "findings_title=$findings_title"; } >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -483,6 +494,37 @@ jobs:
           set -euo pipefail
           case "$LEVEL" in standard|elevated|security_review) ;; *) echo "::error::not assessed: the score job produced no level"; exit 1;; esac
           { echo "### Scrutiny level: \`$LEVEL\`"; echo; echo "This check is the level. The label and the comment are conveniences; the reasons are in the score job's summary and the scorecard artifact."; } >> "$GITHUB_STEP_SUMMARY"
+
+  # `scorecard / findings`: fails on high or critical deterministic findings, and whenever the score job did not succeed (`assessed`
+  # still holds the PR for the other jobs). The scorecard-findings ruleset requires it and is the app's only ruleset with a bypass,
+  # used to merge the PR with an override. In per-app mode any job with this name could stand in for it (the same gap as
+  # `assessed`); central review pins it to the scorecard App.
+  findings:
+    needs: score
+    # always(): a failed, cancelled or skipped score job must leave `findings` failed, never skipped (a skipped required check passes).
+    if: "always() && github.repository != 'mwdavisii/scorecard-factory'"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: High findings
+        env:
+          SCORE: ${{ needs.score.result }}
+          CONCLUSION: ${{ needs.score.outputs.findings_conclusion }}
+          TITLE: ${{ needs.score.outputs.findings_title }}
+        run: |
+          set -euo pipefail
+          if [ "$SCORE" != success ]; then echo "::error::Not assessed, see scorecard / assessed."; exit 1; fi
+          case "$CONCLUSION" in
+            success)
+              [ "$TITLE" = "No high or critical findings" ] || { echo "::error::the score job gave no findings result"; exit 1; }
+              echo "$TITLE." >> "$GITHUB_STEP_SUMMARY" ;;
+            failure)
+              [[ "$TITLE" =~ ^Merge\ blocked:\ [1-9][0-9]{0,5}\ high\ or\ critical\ findings?$ ]] || { echo "::error::the score job gave no findings result"; exit 1; }
+              { echo "### $TITLE"; echo; echo "They are listed under Findings in the scorecard comment. Fix them and push again, or someone allowed to bypass the scorecard-findings ruleset can merge with an override."; } >> "$GITHUB_STEP_SUMMARY"
+              echo "::error::$TITLE"; exit 1 ;;
+            *) echo "::error::the score job gave no findings result"; exit 1 ;;
+          esac
 
   # One check with a fixed name that passes only when every job above succeeded, so a branch ruleset can require it by
   # name (the level check's name changes with the level). A skipped job means "not assessed", so this fails then too.

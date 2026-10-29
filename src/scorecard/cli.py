@@ -11,11 +11,13 @@ import re
 import sys
 from pathlib import Path
 
+from builder.config import load_platform
 from golden_road.io import InputError, load_json, write_json, write_text_atomic
 
 from .agent.gateway import GatewayClient, access_headers, credential, gateway_model
 from .agent.review2 import assess_facts
 from .agent.runner import assess
+from .blocking import override_by
 from .build import NotAssessed, agent_scope, build_scorecard, prepare
 from .asvs import check_ids, load_asvs
 from .config import engine, gate1_list, load_config, load_confirmed_na, load_intake, load_registration_rules, runner_env
@@ -304,14 +306,15 @@ def _cmd_run(args, registry, model) -> int:
     )
     expired = context["expired_suppressions"]
     # Render everything before writing anything, so a failure can't leave a partial set of outputs.
+    who = override_by(load_platform())
     if card["schema"] == "scorecard/v2":
-        summary = render_routing(card, server_url=args.server_url, expired=expired)
-        comment = render_routing(card, server_url=args.server_url, limit=MAX_COMMENT, expired=expired)
+        summary = render_routing(card, server_url=args.server_url, expired=expired, override_by=who)
+        comment = render_routing(card, server_url=args.server_url, limit=MAX_COMMENT, expired=expired, override_by=who)
     else:
         md_args = (card, context["texts"], context["names"], context["blocking"])
-        summary = render(*md_args, server_url=args.server_url, expired=expired)
-        comment = render(*md_args, server_url=args.server_url, limit=MAX_COMMENT, expired=expired)
-    actions = github_actions(card["level"], context["config"])
+        summary = render(*md_args, server_url=args.server_url, expired=expired, override_by=who)
+        comment = render(*md_args, server_url=args.server_url, limit=MAX_COMMENT, expired=expired, override_by=who)
+    actions = github_actions(card["level"], context["config"], card=card, who=who)
     try:
         write_json(args.out / "scorecard.json", card)
         write_text_atomic(args.out / "scorecard.md", summary)

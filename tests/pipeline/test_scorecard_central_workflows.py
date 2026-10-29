@@ -690,13 +690,13 @@ def test_an_odd_app_id_is_refused_before_it_reaches_jq(tmp_path):
     assert run_step(rstep("Check the check run")["run"], tmp_path, env, [bin_dir]).returncode == 1
 
 
-def run_apply(tmp_path, level="elevated", *, scorecard_md=None, tamper=None, wrong_sha=None, comments=None, slug="scorecard-x", **gh_env):
+def run_apply(tmp_path, level="elevated", *, card=None, github=None, scorecard_md=None, tamper=None, wrong_sha=None, comments=None, slug="scorecard-x", **gh_env):
     from scorecard.report_github import github_actions
 
     report = tmp_path / "work/report"
     report.mkdir(parents=True)
     config = {"reviewers": {"elevated": ["o/champions"], "security_review": ["o/security"]}}
-    (report / "github.json").write_text(json.dumps(github_actions(level if level in LEVELS else "elevated", config)))
+    (report / "github.json").write_text(github if isinstance(github, str) else json.dumps(github or github_actions(level if level in LEVELS else "elevated", config, card=card)))
     (report / "comment.md").write_text(f"{MARKER}\n**ELEVATED**: 2 reasons\n")
     (report / "scorecard.md").write_text(scorecard_md or "# Scorecard\nlevel: elevated\n")
     sha = {n: hashlib.sha256((report / n).read_bytes()).hexdigest() for n in ("comment.md", "github.json", "scorecard.md")}
@@ -722,16 +722,19 @@ def test_the_report_labels_comments_requests_reviews_and_posts_the_level(tmp_pat
                       "gh api --method POST repos/o/app/issues/7/labels -f labels[]=scrutiny:elevated",
                       "gh api --method POST repos/o/app/issues/7/comments --field body=@report/comment.md",
                       "gh api --method POST repos/o/app/pulls/7/requested_reviewers -f team_reviewers[]=champions",
+                      "gh api --method POST repos/o/app/check-runs --input -",
                       "gh api --method POST repos/o/app/check-runs --input -"]
-    [level] = bodies
+    [level, findings] = bodies
     assert level["name"] == "scorecard / level: elevated" and level["status"] == "completed" and level["conclusion"] == "success"
     assert level["head_sha"] == HEAD and level["details_url"] == RUN_URL
     assert level["output"]["title"] == "Scrutiny level: elevated" and level["output"]["text"] == "# Scorecard\nlevel: elevated\n"
+    assert findings == {"name": "scorecard / findings", "head_sha": HEAD, "status": "completed", "conclusion": "success", "details_url": RUN_URL,
+                        "output": {"title": "No high or critical findings", "summary": "No high or critical findings."}}
 
 
 @needs_jq
 def test_the_level_check_carries_the_scorecard_summary_truncated(tmp_path):
-    out, calls, [level] = run_apply(tmp_path, scorecard_md="é" * 70_000)
+    out, calls, [level, _] = run_apply(tmp_path, scorecard_md="é" * 70_000)
     assert out.returncode == 0, out.stdout + out.stderr
     assert level["output"]["text"] == "é" * 60_000 and level["conclusion"] == "success"
 
@@ -751,7 +754,7 @@ def test_the_report_finds_its_comment_by_the_app_id_and_ignores_github_actions_l
 @needs_jq
 def test_a_failed_review_request_is_only_noted(tmp_path):
     out, calls, bodies = run_apply(tmp_path, level="security_review", REVIEW_RC="1")
-    assert out.returncode == 0 and "::warning::could not request a review from o/security" in out.stdout and len(bodies) == 1
+    assert out.returncode == 0 and "::warning::could not request a review from o/security" in out.stdout and len(bodies) == 2
 
 
 @needs_jq
@@ -769,13 +772,61 @@ def test_the_report_refuses_files_it_cannot_trust_before_touching_the_pr(tmp_pat
     assert out.returncode == 1 and not [c for c in calls if "--method" in c] and bodies == []
 
 
+def high_card(path=".github/workflows/ci.yml"):
+    from scorecard.signals import signal
+    high = signal(rule_id="T-16/workflow-or-owners-change", category="iac", severity="high", file=path, snippet="x",
+                  title="t", rationale="r", fix="f", now="2026-10-28T12:00:00Z")
+    return {"signals": {"findings": [high]}, "suppressions_applied": []}
+
+
+@needs_jq
+def test_the_report_posts_a_failed_findings_check_for_a_high_finding(tmp_path):
+    out, _, [_, findings] = run_apply(tmp_path, level="security_review", card=high_card())
+    assert out.returncode == 0, out.stderr
+    assert findings["name"] == "scorecard / findings" and findings["head_sha"] == HEAD and findings["status"] == "completed"
+    assert findings["conclusion"] == "failure" and findings["output"]["title"] == "Merge blocked: 1 high or critical finding"
+    assert "T-16/workflow-or-owners-change" in findings["output"]["summary"]
+
+
+@needs_jq
+def test_a_hostile_path_reaches_the_findings_check_only_as_json_text(tmp_path):
+    path = '$(touch pwned)`touch pwned2`"; touch pwned3; echo "\n::error::x'
+    out, calls, [_, findings] = run_apply(tmp_path, level="security_review", card=high_card(path))
+    assert out.returncode == 0, out.stderr
+    assert findings["conclusion"] == "failure" and not list((tmp_path / "work").glob("pwned*"))
+    assert all("pwned" not in c for c in calls), "the path never reaches a command line"
+
+
+def findings_doc(drop=False, **over):
+    from scorecard.report_github import github_actions
+    doc = github_actions("elevated", {"reviewers": {"elevated": ["o/champions"]}})
+    doc["findings_check"].update(over)
+    if drop:
+        del doc["findings_check"]
+    return doc
+
+
+@needs_jq
+@pytest.mark.parametrize("github", [
+    findings_doc(drop=True), findings_doc(conclusion="neutral"), findings_doc(conclusion="skipped"), findings_doc(conclusion="Success"),
+    findings_doc(conclusion=None), findings_doc(conclusion=True), findings_doc(title=None), findings_doc(summary=7),
+    {**findings_doc(), "findings_check": "success"}, {**findings_doc(), "findings_check": None}, "{not json",
+    findings_doc(conclusion="success\n"), findings_doc(title="No high or critical findings\n"), findings_doc(title="Merge blocked: 2 high or critical findings"),
+    findings_doc(conclusion="failure"), findings_doc(conclusion="failure", title="Merge blocked: 2 high or critical findings\n"),
+    findings_doc(conclusion="failure", title="Merge blocked: 0 high or critical findings"), findings_doc(conclusion="failure", title="Merge blocked: lots"),
+])
+def test_the_report_refuses_a_github_json_without_a_usable_findings_check(tmp_path, github):
+    out, calls, bodies = run_apply(tmp_path, github=github)
+    assert out.returncode == 1 and not [c for c in calls if "--method" in c] and bodies == []
+
+
 def run_final(tmp_path, *, precondition="success", assess="success", score="success", apply_="success", level="elevated", retry_pre="", retry_score="",
               external_id="v1:queued:0123456789abcdef:1"):
     bin_dir = report_gh(tmp_path)
     work = tmp_path / "work"
     work.mkdir(parents=True, exist_ok=True)
     (work / "check.json").write_text(json.dumps({"app": {"id": APP}, "head_sha": HEAD, "name": "scorecard / assessed", "status": "queued", "external_id": external_id}))
-    env = {"GH_TOKEN": "t", "REPO": "o/app", "CHECK_RUN_ID": "991", "PRECONDITION": precondition, "ASSESS": assess, "SCORE": score, "APPLY": apply_,
+    env = {"GH_TOKEN": "t", "REPO": "o/app", "CHECK_RUN_ID": "991", "HEAD_SHA": HEAD, "PRECONDITION": precondition, "ASSESS": assess, "SCORE": score, "APPLY": apply_,
            "LEVEL": level, "GITHUB_SERVER_URL": "https://github.com", "GITHUB_REPOSITORY": "o/scorecard-factory", "GITHUB_RUN_ID": "9",
            "RETRY_PRECONDITION": retry_pre, "RETRY_SCORE": retry_score}
     out = run_step(rstep("Set scorecard / assessed")["run"], work, env, [bin_dir])
@@ -791,8 +842,13 @@ def run_final(tmp_path, *, precondition="success", assess="success", score="succ
     ({"score": "failure", "apply_": "skipped"}, False),
     ({"apply_": "failure"}, False), ({"apply_": "skipped"}, False), ({"level": ""}, False), ({"level": "blocked"}, False)])
 def test_assessed_passes_only_when_every_job_and_the_report_succeeded(tmp_path, kwargs, ok):
-    out, calls, [body] = run_final(tmp_path, **kwargs)
-    assert calls == ["gh api --method PATCH repos/o/app/check-runs/991 --input -"]
+    out, calls, bodies = run_final(tmp_path, **kwargs)
+    posts_findings = not ok and kwargs.get("apply_", "success") != "success"
+    assert calls == (["gh api --method POST repos/o/app/check-runs --input -"] if posts_findings else []) + ["gh api --method PATCH repos/o/app/check-runs/991 --input -"]
+    body = bodies[-1]
+    if posts_findings:
+        assert bodies[0] == {"name": "scorecard / findings", "head_sha": HEAD, "status": "completed", "conclusion": "failure", "details_url": RUN_URL,
+                             "output": {"title": "Not assessed", "summary": "Not assessed, see `scorecard / assessed`."}}
     assert body["status"] == "completed" and body["conclusion"] == ("success" if ok else "failure") and body["details_url"] == RUN_URL
     assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", body["completed_at"])
     assert (out.returncode == 0) is ok, "the step exits 1 when the check is set to failure"
@@ -802,7 +858,7 @@ def test_assessed_passes_only_when_every_job_and_the_report_succeeded(tmp_path, 
 def test_the_assessed_summary_names_the_level_and_how_to_try_again(tmp_path):
     _, _, [good] = run_final(tmp_path)
     assert good["output"]["title"] == "Assessed" and "Scrutiny level: `elevated`" in good["output"]["summary"]
-    _, _, [bad] = run_final(tmp_path / "bad", assess="cancelled", score="skipped", apply_="skipped")
+    _, _, [_, bad] = run_final(tmp_path / "bad", assess="cancelled", score="skipped", apply_="skipped")
     assert bad["output"]["title"] == "Not assessed" and "assess=cancelled" in bad["output"]["summary"] and "Push again" in bad["output"]["summary"]
     assert RUN_URL in bad["output"]["summary"]
 
@@ -989,7 +1045,8 @@ def test_a_gate1_read_that_cannot_run_in_score_is_retryable_and_a_moved_head_is_
     ({"retry_pre": "true", "precondition": "failure", "assess": "skipped", "score": "skipped", "apply_": "skipped", "external_id": "something else"}, None),
 ])
 def test_a_retryable_failure_rewrites_the_external_id_so_the_next_poll_dispatches_again(tmp_path, kwargs, external):
-    out, calls, [body] = run_final(tmp_path, **kwargs)
+    out, calls, bodies = run_final(tmp_path, **kwargs)
+    body = bodies[-1]
     assert body.get("external_id") == external and (out.returncode == 0) is (body["conclusion"] == "success")
     if external:
         assert "next poll tries again" in body["output"]["summary"] and body["conclusion"] == "failure"
@@ -1048,3 +1105,24 @@ def test_an_odd_slug_stops_the_apply_step_before_it_touches_the_pr(tmp_path, slu
 
 def test_the_apply_step_gets_the_slug_from_the_token_step():
     assert rstep("Label, reviewers, comment and level")["env"]["APP_SLUG"] == "${{ steps.write-token.outputs.slug }}"
+
+
+def test_a_failed_findings_post_never_stops_the_assessed_check():
+    run = rstep("Set scorecard / assessed")["run"]
+    post = next(line for line in run.splitlines() if '"repos/$REPO/check-runs" --input -' in line and "--method POST" in line)
+    assert post.rstrip().endswith('|| echo "::warning::the findings check could not be posted"')
+    assert run.index("--method POST") < run.index("--method PATCH")
+
+
+def test_the_findings_check_is_posted_last_in_the_apply_step_and_never_from_blocking_findings():
+    """Posted last, so any earlier failure leaves the apply step failed and the assessed step posts `Not assessed`. The raw
+    paths in blocking_findings never reach a script: only findings_check's title and summary are posted, through jq."""
+    run = rstep("Label, reviewers, comment and level")["run"]
+    assert run.rstrip().splitlines()[-1].strip() == '| gh api --method POST "repos/$REPO/check-runs" --input - > /dev/null'
+    assert run.index("findings_check") < run.index("--method")
+    assert "scorecard / findings" in run[run.rindex("scorecard / level"):]
+    for job in AJOBS.values():
+        for s in job["steps"]:
+            code = [line for line in s.get("run", "").splitlines() if not line.lstrip().startswith("#")]
+            assert not any("blocking_findings" in line for line in code), s.get("name")
+            assert "blocking_findings" not in json.dumps({k: v for k, v in s.items() if k != "run"}), s.get("name")

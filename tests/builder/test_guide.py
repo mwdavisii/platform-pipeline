@@ -124,7 +124,7 @@ def test_rules_name_what_generate_and_verify_enforce():
     doc = guide()
     rules = {rule["id"]: rule["text"] for rule in doc["rules"]}
     assert set(rules) == {"never-edit", "gateway-only", "ask-the-user", "never-public", "no-links", "regenerate-after-upgrade",
-                          "locked-dependencies", "single-line"}
+                          "locked-dependencies", "single-line", "high-findings-hold-the-merge"}
     assert all(rel in rules["never-edit"] for rel in NEVER_EDIT) and all(name in rules["never-edit"] for name in MANAGED_FILES)
     assert all(host in rules["gateway-only"] for host in doc["model_gateway_hosts"])
     assert all(rel in rules["no-links"] for rel in (SPEC_PATH, "--input", *MANAGED_FILES, *BUILDER_DIRS))

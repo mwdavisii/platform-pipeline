@@ -1072,3 +1072,18 @@ def test_check_factory_refuses_bad_or_missing_registration_rules(factory, capsys
     (factory / "config/registration.yaml").unlink()
     code, _, err = check_factory(factory, capsys)
     assert code != 0 and any("registration.yaml" in p for p in err["problems"])
+
+
+def test_a_workflow_change_blocks_the_merge(app, run):
+    app.commit({".github/workflows/ci.yml": "on: push\n"})
+    _, card, out, _ = run(assessment=full_assessment(app, run))
+    github = json.loads((out / "github.json").read_text())
+    assert github["blocking_findings"] == [{"rule_id": "T-16/workflow-or-owners-change", "file": ".github/workflows/ci.yml", "line": None}]
+    assert github["findings_check"]["conclusion"] == "failure" and "a repo admin" in github["findings_check"]["summary"]
+    assert "**Merge blocked:** 1 high or critical finding" in (out / "comment.md").read_text()
+
+
+def test_a_clean_pr_does_not_block(app, run):
+    app.commit({"app.py": APP + "\n# tidy\n"})
+    _, _, out, _ = run(assessment=full_assessment(app, run))
+    assert json.loads((out / "github.json").read_text())["findings_check"]["conclusion"] == "success"

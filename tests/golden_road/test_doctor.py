@@ -45,7 +45,7 @@ sys.exit(99)
 
 
 def good_rules():
-    contexts = [{"context": c, "integration_id": 15368} for c in doctor.REQUIRED_CONTEXTS]
+    contexts = [{"context": c, "integration_id": 15368} for c in (*doctor.REQUIRED_CONTEXTS, doctor.FINDINGS_CONTEXT)]
     return [
         {"args": ["auth", "status"], "stderr": "Logged in\n"},
         {"args": ["repo", "view"], "stdout": json.dumps({"nameWithOwner": REPO, "visibility": "PRIVATE"})},
@@ -216,12 +216,24 @@ def test_callers_without_an_org_fail(app, pin):
     assert result["status"] == "fail" and "no org" in result["message"]
 
 
+def test_ruleset_warns_without_the_findings_check(app, pin, gh):
+    contexts = [{"context": c, "integration_id": 15368} for c in doctor.REQUIRED_CONTEXTS]
+    gh.answer(["api", f"repos/{REPO}/rules/branches/main?per_page=100"],
+              stdout=json.dumps([{"type": "required_status_checks", "parameters": {"required_status_checks": contexts}}]))
+    result = doctor.check_ruleset(ctx(app, pin))
+    assert result["status"] == "warn" and "scorecard / findings" in result["message"]
+    assert "scorecard-findings" in result["fix"]
+
+
 def test_doctor_matches_hello_app(tmp_path, monkeypatch):
     """The caller templates and the required contexts are hello-app's, and doctor accepts hello-app's real caller files."""
     hello = ROOT / "bootstrap/hello-app"
     ruleset = json.loads((hello / ".github/rulesets/main.json").read_text())
     [rule] = [r for r in ruleset["rules"] if r["type"] == "required_status_checks"]
     assert tuple(c["context"] for c in rule["parameters"]["required_status_checks"]) == doctor.REQUIRED_CONTEXTS
+    findings = json.loads((hello / ".github/rulesets/scorecard-findings.json").read_text())
+    [rule] = findings["rules"]
+    assert [c["context"] for c in rule["parameters"]["required_status_checks"]] == [doctor.FINDINGS_CONTEXT]
     root = tmp_path / "hello"
     shutil.copytree(hello / ".github/workflows", root / ".github/workflows")
     for path in (root / ".github/workflows").iterdir():

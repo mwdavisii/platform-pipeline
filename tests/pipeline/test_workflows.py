@@ -190,7 +190,7 @@ ALLOWED_EXPR = [
     r"steps\.[\w-]+\.outputs\.[\w-]+", r"github\.run_id", r"github\.server_url", r"job\.workflow_repository", r"job\.workflow_sha", r"needs\.(semgrep|trivy|preview)\.result", r"github\.sha",
     # the scorecard: job results, the factory's own job outputs, and the gateway key secret
     r"needs\.(precondition|assess|score|report|level)\.result", r"needs\.precondition\.outputs\.(checks|event|merge_sha)",
-    r"needs\.assess\.outputs\.(assessment_sha256|factory_sha256)", r"needs\.score\.outputs\.(level|comment_sha256|github_sha256|summary_sha256)",
+    r"needs\.assess\.outputs\.(assessment_sha256|factory_sha256)", r"needs\.score\.outputs\.(level|comment_sha256|github_sha256|summary_sha256|findings_conclusion|findings_title)",
     r"secrets\.SCORECARD_GATEWAY_(KEY|MODEL|ACCESS_ID|ACCESS_SECRET)", r"github\.event\.pull_request\.base\.ref",  # the base ref reaches only an env var, never a script
     # the builder release's kit job: the image digest from the release job, and the App that may publish in golden-road-agents
     r"needs\.release\.outputs\.image", r"vars\.GOLDEN_ROAD_AGENTS_APP_CLIENT_ID", r"secrets\.GOLDEN_ROAD_AGENTS_APP_KEY",

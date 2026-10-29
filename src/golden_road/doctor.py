@@ -66,6 +66,9 @@ CALLER_TRIGGERS = {
 }
 # What main must require: drift, preview, Gate 1's scans and the scorecard, as hello-app's main.json does (a test keeps them equal).
 REQUIRED_CONTEXTS = ("golden-road / drift", "golden-road / preview", "security-scans / semgrep", "security-scans / trivy", "scorecard / assessed")
+# Required by its own ruleset (scorecard-findings, the one an admin can bypass), not by main.json.
+FINDINGS_CONTEXT = "scorecard / findings"
+PINNED_CONTEXTS = ("scorecard / assessed", FINDINGS_CONTEXT)  # posted by the scorecard App in central mode
 VISIBLE_OK = ("PRIVATE", "INTERNAL")
 GH_TIMEOUT = 60
 MAX_TEXT = 300
@@ -412,25 +415,30 @@ def check_ruleset(ctx: Context) -> dict:
     rules = result.json()
     if not isinstance(rules, list):
         return _result("ruleset", FAIL, "the rules on main can't be parsed", fix)
-    required, assessed_ids = set(), set()
+    required, pinned = set(), {c: set() for c in PINNED_CONTEXTS}
     for rule in rules:
         params = rule.get("parameters") if isinstance(rule, dict) and rule.get("type") == "required_status_checks" else None
         checks = params.get("required_status_checks") if isinstance(params, dict) else None
         for check in checks if isinstance(checks, list) else []:
             if isinstance(check, dict) and isinstance(check.get("context"), str):
                 required.add(check["context"])
-                if check["context"] == "scorecard / assessed":
-                    assessed_ids.add(check.get("integration_id"))
-    missing = [c for c in REQUIRED_CONTEXTS if c not in required]
+                if check["context"] in pinned:
+                    pinned[check["context"]].add(check.get("integration_id"))
+    missing = [c for c in (*REQUIRED_CONTEXTS, FINDINGS_CONTEXT) if c not in required]
     if missing:
+        if FINDINGS_CONTEXT in missing:
+            fix += (" The findings check has its own ruleset: apply bootstrap/<app>/.github/rulesets/scorecard-findings.json "
+                    "(`scorecard-findings`) as well as main.json, once the factory runs a release that posts the check.")
         return _result("ruleset", WARN, f"main doesn't require: {', '.join(missing)}", fix)
     app_id = central_app_id(ctx.platform)
-    if app_id is not None and assessed_ids != {app_id}:
-        return _result("ruleset", WARN, f"main requires `scorecard / assessed` but it is not pinned to the scorecard App (id {app_id}): "
-                       "any workflow job with that name could satisfy it",
-                       "Ask a platform admin to pin the ruleset's `scorecard / assessed` to the scorecard App (configure.py --scorecard-mode central, "
-                       "then apply the ruleset). doctor never changes settings.")
-    return _result("ruleset", PASS, "main requires drift, preview, the scans and the scorecard")
+    unpinned = [c for c in PINNED_CONTEXTS if app_id is not None and pinned[c] != {app_id}]
+    if unpinned:
+        names = " and ".join(f"`{c}`" for c in unpinned)
+        return _result("ruleset", WARN, f"main requires {names} but {'it is' if len(unpinned) == 1 else 'they are'} not pinned to the scorecard App "
+                       f"(id {app_id}): any workflow job with that name could satisfy it",
+                       "Ask a platform admin to pin `scorecard / assessed` and `scorecard / findings` to the scorecard App (configure.py "
+                       "--scorecard-mode central, then apply both rulesets). doctor never changes settings.")
+    return _result("ruleset", PASS, "main requires drift, preview, the scans, the scorecard and its findings check")
 
 
 def check_pr_checks(ctx: Context) -> dict:

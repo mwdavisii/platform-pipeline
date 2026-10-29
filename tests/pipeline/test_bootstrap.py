@@ -352,13 +352,15 @@ def test_personal_poc_doc_covers_the_scans_codeql_dependabot_and_the_known_gap()
                    'name: "security-scans / semgrep", app_id: 15368', 'name: "security-scans / trivy", app_id: 15368',
                    "CodeQL check name", "builder-v$version", "bump-builder-version.py", "jinja2==2.10", "shell=True", "golden-road checks wait",
                    "Scan results can be forged", "signed scan results", "can_approve_pull_request_reviews", "Checks: Read-only", "Dry run first",
-                   "GOLDEN_ROAD_SCANS_TRIVY", "rulesets --input .github/rulesets/main.json", "Base-image findings", "Gate 1 on a push"):
+                   "GOLDEN_ROAD_SCANS_TRIVY", "rulesets --input .github/rulesets/main.json", "Base-image findings", "Gate 1 on a push",
+                   "## 18. High findings hold the merge", "rulesets/scorecard-findings.json", "rule-suites",
+                   "Merge without waiting for requirements"):
         assert needle in text, needle
     steps = [int(m) for m in re.findall(r"^## (\d+)\.", text, re.M)]
-    assert steps == list(range(0, 18))
+    assert steps == list(range(0, 19))
     # the scans repo is published before hello-app is pushed, and the builder is released again only after both exist
     assert text.index("## 4. Publish `security-scans`") < text.index("## 5. Create `hello-app`") < text.index("## 11.") < text.index("## 12.")
-    assert text.index("## 13. Risk scorecard") < text.index("## 14. ") < text.index("## 16. Central AI review") < text.index("## 17. Switch the review to risk routing") < text.index("## PoC gaps to record")
+    assert text.index("## 13. Risk scorecard") < text.index("## 14. ") < text.index("## 16. Central AI review") < text.index("## 17. Switch the review to risk routing") < text.index("## 18. High findings hold the merge") < text.index("## PoC gaps to record")
 
 
 def test_enforcement_doc_has_neutral_rows_for_the_scans_and_the_forgery_gap():
@@ -398,3 +400,20 @@ def test_push_bootstrap_accepts_a_pinned_digest_and_a_guard_that_names_the_zero_
     pinned = "BUILDER_IMAGE: ghcr.io/o/golden-road-builder@sha256:" + "ab" * 32 + "\nguard: '@sha256:0{64}$'\n"
     out, calls = push_tree(tmp_path, "PRIVATE", readme=pinned)
     assert "placeholder" not in out.stderr and "gh repo create org/demo --private" in calls
+
+
+def test_the_findings_ruleset_is_the_only_one_with_a_bypass():
+    for app in (APP, ROOT / "bootstrap/golden-road-portal"):
+        rulesets = app / ".github/rulesets"
+        doc = json.loads((rulesets / "scorecard-findings.json").read_text())
+        assert doc["name"] == "scorecard-findings" and doc["target"] == "branch" and doc["enforcement"] == "active"
+        assert doc["conditions"] == {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}}
+        [rule] = doc["rules"]
+        assert rule["type"] == "required_status_checks" and rule["parameters"]["strict_required_status_checks_policy"] is False
+        assert [c["context"] for c in rule["parameters"]["required_status_checks"]] == ["scorecard / findings"]
+        [actor] = doc["bypass_actors"]
+        assert actor["bypass_mode"] == "pull_request", "an override is a PR merge, never a direct push"
+        others = sorted(p for p in rulesets.glob("*.json") if p.name != "scorecard-findings.json")
+        assert {p.name for p in others} >= {"main.json", "code-scanning.json"}
+        for other in others:
+            assert not json.loads(other.read_text()).get("bypass_actors"), other

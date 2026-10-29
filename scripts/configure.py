@@ -5,7 +5,7 @@ Usage: scripts/configure.py --org <org> --gateway-host <host> --edge-namespace N
                             --identity-header NAME [--scorecard-gateway-url URL] [--single-approver]
                             [--github-host HOST] [--cert-oidc-issuer URL]
                             [--landing-page-url URL] [--approved-models-url URL] [--portal-url URL]
-                            [--scorecard-mode {per-app,central} [--scorecard-app-id ID]]
+                            [--scorecard-mode {per-app,central} [--scorecard-app-id ID]] [--findings-bypass-team SLUG]
 
 --scorecard-gateway-url is the chat-completions URL the scorecard's review agent calls from the CI runners. It
 defaults to https://<gateway host>/v1/chat/completions; pass it when the runners reach the gateway at another
@@ -28,9 +28,13 @@ gate2_single_approver in platform/platform.json and relaxes the approval setting
 required; the person who triggers a promotion may approve it). Never use it for a real organization.
 
 --scorecard-mode central (central AI review) needs --scorecard-app-id, the scorecard GitHub App's App ID. It records scorecard_mode and
-scorecard_app_id in platform/platform.json, re-pins `scorecard / assessed` in the rulesets of hello-app and the portal to the App, and
+scorecard_app_id in platform/platform.json, re-pins `scorecard / assessed` and `scorecard / findings` in the rulesets of hello-app and the portal to the App, and
 removes the scorecard caller workflows (hello-app, the portal and the kit template): the factory's poller assesses instead. The default,
 per-app, records nothing and changes nothing. A later run may change the App ID; going back to per-app needs a restore of bootstrap and platform.
+
+--findings-bypass-team (an org only; refused with --single-approver) names the team that may merge a PR past a high scorecard finding. It
+records findings_bypass_team in platform/platform.json and replaces the one bypass actor of the scorecard-findings rulesets (the repo admin
+role by default) with a Team whose actor_id is 0: the apply step looks the team's id up. Once recorded it can't change.
 
 The edge selector and identity header come from the deploy owners. There are no defaults: the committed
 platform/platform.json carries `replace-me` placeholders for them, so an unconfigured tree is refused by the
@@ -153,23 +157,45 @@ SCORECARD_CONTEXT = "scorecard / assessed"
 # In central mode the platform's scorecard callers are not needed: the factory's poller assesses every ready PR. configure.py removes them.
 SCORECARD_CALLERS = ("hello-app/.github/workflows/scorecard.yml", "golden-road-portal/.github/workflows/scorecard.yml",
                      "golden-road-agents/skill/templates/workflows/scorecard.yml")  # under bootstrap/
-_ASSESSED_ENTRY = re.compile(r'("context"\s*:\s*"scorecard / assessed"\s*,\s*"integration_id"\s*:\s*)\d+')
+FINDINGS_CONTEXT = "scorecard / findings"
+FINDINGS_RULESET_REL = Path(".github/rulesets/scorecard-findings.json")  # the app's only ruleset with a bypass actor
 APP_ID = re.compile(r"[1-9][0-9]{0,9}")
+TEAM_SLUG = re.compile(r"[a-z0-9][a-z0-9_-]{0,99}")
 
 
-def scorecard_ruleset(data: bytes, integration_id: int) -> bytes:
-    """The ruleset with `scorecard / assessed` required from the scorecard App (its integration id) instead of the Actions app.
-    Raises ValueError unless exactly one required check is named `scorecard / assessed`. A file written in the usual
-    `{"context": ..., "integration_id": ...}` form keeps its formatting; any other form is rewritten as JSON."""
+def _entry(context: str) -> re.Pattern:
+    return re.compile(r'("context"\s*:\s*"' + re.escape(context) + r'"\s*,\s*"integration_id"\s*:\s*)\d+')
+
+
+def scorecard_ruleset(data: bytes, integration_id: int, context: str = SCORECARD_CONTEXT) -> bytes:
+    """The ruleset with `context` required from the scorecard App (its integration id) instead of the Actions app.
+    Raises ValueError unless exactly one required check is named `context`. A file written in the usual
+    `{"context": ..., "integration_id": ...}` form keeps its formatting; any other form is rewritten as JSON. The text rewrite is
+    kept only when the parsed result is the parsed input with that one required check re-pinned: a lookalike entry elsewhere
+    in the file (or keys in another order) never gets pinned in its place."""
     ruleset = json.loads(data.decode("utf-8"))
     entries = [c for rule in ruleset.get("rules", []) if isinstance(rule, dict) and rule.get("type") == "required_status_checks"
-               for c in (rule.get("parameters") or {}).get("required_status_checks", []) if isinstance(c, dict) and c.get("context") == SCORECARD_CONTEXT]
+               for c in (rule.get("parameters") or {}).get("required_status_checks", []) if isinstance(c, dict) and c.get("context") == context]
     if len(entries) != 1:
-        raise ValueError(f"the ruleset must require {SCORECARD_CONTEXT!r} exactly once (it has {len(entries)})")
-    text = data.decode("utf-8")
-    if len(_ASSESSED_ENTRY.findall(text)) == 1:
-        return _ASSESSED_ENTRY.sub(lambda m: f"{m.group(1)}{integration_id}", text).encode("utf-8")
-    entries[0]["integration_id"] = integration_id
+        raise ValueError(f"the ruleset must require {context!r} exactly once (it has {len(entries)})")
+    entries[0]["integration_id"] = integration_id  # `ruleset` is now exactly what the result must parse to
+    text, entry = data.decode("utf-8"), _entry(context)
+    if len(entry.findall(text)) == 1:
+        rewritten = entry.sub(lambda m: f"{m.group(1)}{integration_id}", text)
+        if json.loads(rewritten) == ruleset:
+            return rewritten.encode("utf-8")
+    return (json.dumps(ruleset, indent=2) + "\n").encode("utf-8")
+
+
+def findings_bypass_ruleset(data: bytes) -> bytes:
+    """The findings ruleset with its one bypass actor replaced by a team, rewritten as JSON. The team's id isn't known offline: it is
+    written as 0, and stays 0 on every run; the platform admin looks the real id up and substitutes it only when applying the file,
+    never writing it back. Raises ValueError unless there is exactly one actor."""
+    ruleset = json.loads(data.decode("utf-8"))
+    actors = ruleset.get("bypass_actors")
+    if not isinstance(actors, list) or len(actors) != 1:
+        raise ValueError("the findings ruleset must have exactly one bypass actor")
+    ruleset["bypass_actors"] = [{"actor_id": 0, "actor_type": "Team", "bypass_mode": "pull_request"}]
     return (json.dumps(ruleset, indent=2) + "\n").encode("utf-8")
 
 
@@ -386,11 +412,18 @@ def main() -> int:
     p.add_argument("--portal-url", default=None, help="the golden road portal's address (https, no path); golden-road register links to it")
     p.add_argument("--scorecard-mode", choices=("per-app", "central"), default=None,
                    help="per-app (default): each app calls the factory's scorecard workflow. central: the factory's poller assesses every ready PR; "
-                        "the rulesets require `scorecard / assessed` from the scorecard App and the apps' scorecard callers are removed")
+                        "the rulesets require `scorecard / assessed` and `scorecard / findings` from the scorecard App and the apps' scorecard callers are removed")
     p.add_argument("--scorecard-app-id", default=None, help="the scorecard GitHub App's id (the App ID, not the client ID); required with --scorecard-mode central")
+    p.add_argument("--findings-bypass-team", default=None,
+                   help="the slug of the org team that may merge past a high scorecard finding (default: the repo admin role, as in the PoC)")
     args = p.parse_args()
     if args.scorecard_app_id is not None and (not APP_ID.fullmatch(args.scorecard_app_id) or int(args.scorecard_app_id) >= 2**31):
         sys.exit("invalid --scorecard-app-id (the App ID: a positive whole number below 2147483648)")
+    if args.findings_bypass_team is not None:
+        if not TEAM_SLUG.fullmatch(args.findings_bypass_team):
+            sys.exit("invalid --findings-bypass-team (a team slug: lowercase letters, digits, - and _)")
+        if args.single_approver:
+            sys.exit("--findings-bypass-team is for an org with a platform team; with --single-approver the repo admin overrides")
     if not ORG.fullmatch(args.org) or len(args.org) > 39:
         sys.exit("invalid --org")
     if not valid_host(args.gateway_host):
@@ -430,7 +463,8 @@ def main() -> int:
     if not match or not valid_host(match.group(1).lower()):
         sys.exit("invalid --scorecard-gateway-url (an https URL with a host name and a path, no user info or fragment)")
     for value in (args.org, args.gateway_host, args.edge_namespace, args.identity_header, url, args.github_host or "",
-                  args.cert_oidc_issuer or "", args.landing_page_url or "", args.approved_models_url or "", args.portal_url or "", *args.edge_label):
+                  args.cert_oidc_issuer or "", args.landing_page_url or "", args.approved_models_url or "", args.portal_url or "",
+                  args.findings_bypass_team or "", *args.edge_label):
         if "replace-me" in value.lower():
             sys.exit(f"{value!r} is still a placeholder")
 
@@ -510,6 +544,18 @@ def main() -> int:
         if app_id is None:
             sys.exit("--scorecard-mode central needs --scorecard-app-id (the scorecard GitHub App's App ID)")
         platform["scorecard_mode"], platform["scorecard_app_id"] = "central", app_id
+    recorded_team = platform.get("findings_bypass_team")
+    if recorded_team is not None and not (isinstance(recorded_team, str) and TEAM_SLUG.fullmatch(recorded_team)):
+        sys.exit("findings_bypass_team in platform/platform.json must be a team slug")
+    if recorded_team is not None and args.findings_bypass_team not in (None, recorded_team):
+        sys.exit(f"bootstrap already configured with --findings-bypass-team {recorded_team}; "
+                 "restore with git checkout -- bootstrap platform to change it")
+    team = args.findings_bypass_team or recorded_team
+    if team is not None and (recorded or args.single_approver):
+        sys.exit("--findings-bypass-team is for an org with a platform team; with --single-approver the repo admin overrides "
+                 "(platform/platform.json records one of them)")
+    if team is not None:
+        platform["findings_bypass_team"] = team
     platform["model_gateway_hosts"] = [args.gateway_host]
     platform["edge_ingress"]["namespace"] = args.edge_namespace
     platform["edge_ingress"]["pod_labels"] = dict(label.split("=", 1) for label in args.edge_label)
@@ -546,19 +592,33 @@ def main() -> int:
         except (ValueError, OSError) as exc:
             sys.exit(f"cannot apply --single-approver: {exc}")
 
+    if team is not None:
+        for target in (app, portal_app):
+            if not is_real_dir(target):
+                continue
+            path = target / FINDINGS_RULESET_REL
+            try:
+                before = changes.get(path) or read_regular(path)
+                after = findings_bypass_ruleset(before)
+            except (ValueError, OSError) as exc:
+                sys.exit(f"cannot set the findings bypass team in {path}: {exc}")
+            if after != before:
+                changes[path] = after
+
     removals = []
     if mode == "central":
         for target in (app, portal_app):
             if not is_real_dir(target):
                 continue
-            ruleset_path = target / RULESET_REL
-            try:
-                before = changes.get(ruleset_path) or read_regular(ruleset_path)
-                after = scorecard_ruleset(before, app_id)
-            except (ValueError, OSError) as exc:
-                sys.exit(f"cannot pin the scorecard check in {ruleset_path}: {exc}")
-            if after != before:
-                changes[ruleset_path] = after
+            for rel, context in ((RULESET_REL, SCORECARD_CONTEXT), (FINDINGS_RULESET_REL, FINDINGS_CONTEXT)):
+                ruleset_path = target / rel
+                try:
+                    before = changes.get(ruleset_path) or read_regular(ruleset_path)
+                    after = scorecard_ruleset(before, app_id, context)
+                except (ValueError, OSError) as exc:
+                    sys.exit(f"cannot pin the scorecard check in {ruleset_path}: {exc}")
+                if after != before:
+                    changes[ruleset_path] = after
         removals = [bootstrap / rel for rel in SCORECARD_CALLERS if os.path.lexists(bootstrap / rel)]
         for path in removals:
             changes.pop(path, None)

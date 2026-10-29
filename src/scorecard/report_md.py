@@ -11,6 +11,7 @@ import urllib.parse
 from golden_road.summary import MAX_COMMENT, _md
 
 from .asvs import in_any
+from .blocking import blocking_findings, counted
 from .config import temperature_phrase
 from .level import MAX_REFS
 from .redact import MAX_EXCERPT_LINES, excerpt, redact
@@ -123,11 +124,19 @@ def _expired(expired: list[str]) -> list[str]:
             *[f"- `{safe(i, 80)}`" for i in expired]]
 
 
+def _blocked(card: dict, who: str) -> list[str]:
+    n = len(blocking_findings(card))
+    if not n:
+        return []
+    return ["", f"**Merge blocked:** {counted(n)} (see Findings). Only {who} can merge it, with an override."]
+
+
 def render(card: dict, texts: dict[str, str], names: dict[str, str], blocking: list[str], *,
-           server_url: str = "https://github.com", limit: int = SUMMARY_LIMIT, expired: list[str] = ()) -> str:
+           server_url: str = "https://github.com", limit: int = SUMMARY_LIMIT, expired: list[str] = (),
+           override_by: str = "a repo admin") -> str:
     """Markdown for the job summary (default limit) or the PR comment (limit=MAX_COMMENT)."""
     app, asvs = card["app"], card["asvs"]
-    lines = [MARKER, _headline(card), "",
+    lines = [MARKER, _headline(card), *_blocked(card, override_by), "",
              f"Assessed tree `{app['tree_sha']}` at commit `{app['commit']}`. The authoritative level is the "
              f"`level: {card['level']}` check from the scorecard run. This comment is a view: removing the label changes nothing."]
     lines += ["", "### Reasons", ""]
@@ -182,11 +191,13 @@ def _routing_reason(card: dict, server_url: str, reason: dict) -> list[str]:
     return lines
 
 
-def render_routing(card: dict, *, server_url: str = "https://github.com", limit: int = SUMMARY_LIMIT, expired=()) -> str:
+def render_routing(card: dict, *, server_url: str = "https://github.com", limit: int = SUMMARY_LIMIT, expired=(),
+                   override_by: str = "a repo admin") -> str:
     """Markdown for a scorecard/v2: the job summary (default limit) or the PR comment (limit=MAX_COMMENT). Shadow rules are
     listed only in the job summary."""
     app, n, facts = card["app"], len(card["reasons"]), len(card["routing"]["facts"])
-    lines = [MARKER, f"## Scorecard: {HEADLINE[card['level']]} — {n} reason{'s' if n != 1 else ''} · {facts} fact{'s' if facts != 1 else ''} checked", "",
+    lines = [MARKER, f"## Scorecard: {HEADLINE[card['level']]} — {n} reason{'s' if n != 1 else ''} · {facts} fact{'s' if facts != 1 else ''} checked",
+             *_blocked(card, override_by), "",
              f"Assessed tree `{app['tree_sha']}` at commit `{app['commit']}`. The authoritative level is the "
              f"`level: {card['level']}` check from the scorecard run. This comment is a view: removing the label changes nothing."]
     lines += ["", "### Reasons", ""]

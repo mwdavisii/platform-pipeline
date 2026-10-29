@@ -54,10 +54,17 @@ def test_a_failing_caller_outranks_the_left_over_warning(app, pin):
     assert doctor.check_callers(central_ctx(app, pin))["status"] == "fail"
 
 
-def scorecard_rules(gh, integration_id):
-    contexts = [{"context": c, "integration_id": 15368 if c != "scorecard / assessed" else integration_id} for c in doctor.REQUIRED_CONTEXTS]
+def scorecard_rules(gh, integration_id, findings_id=None):
+    ids = {"scorecard / assessed": integration_id, doctor.FINDINGS_CONTEXT: findings_id if findings_id is not None else integration_id}
+    contexts = [{"context": c, "integration_id": ids.get(c, 15368)} for c in (*doctor.REQUIRED_CONTEXTS, doctor.FINDINGS_CONTEXT)]
     gh.answer(["api", f"repos/{REPO}/rules/branches/main?per_page=100"],
               stdout=json.dumps([{"type": "required_status_checks", "parameters": {"required_status_checks": contexts}}]))
+
+
+def test_central_mode_warns_when_findings_is_not_pinned_to_the_app(app, pin, gh):
+    scorecard_rules(gh, 99, findings_id=15368)
+    result = doctor.check_ruleset(central_ctx(app, pin))
+    assert result["status"] == "warn" and "`scorecard / findings`" in result["message"] and "not pinned" in result["message"]
 
 
 def test_central_mode_warns_when_assessed_is_not_pinned_to_the_app(app, pin, gh):

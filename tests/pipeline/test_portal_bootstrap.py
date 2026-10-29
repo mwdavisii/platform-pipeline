@@ -83,7 +83,7 @@ def test_the_portal_callers_are_the_skill_s_templates():
 
 def test_the_portal_has_hello_app_s_repo_settings():
     for rel in (".github/CODEOWNERS", ".github/dependabot.yml", ".github/environment-prod.json", ".github/rulesets/main.json",
-                ".github/rulesets/code-scanning.json"):
+                ".github/rulesets/code-scanning.json", ".github/rulesets/scorecard-findings.json"):
         assert (PORTAL / rel).read_text() == (HELLO / rel).read_text(), rel
 
 

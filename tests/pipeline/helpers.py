@@ -21,14 +21,32 @@ COMMITTED_CODEOWNERS = """\
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_HOST = "github.com"
 DEFAULT_ISSUER = "https://token.actions.githubusercontent.com"
-CONFIGURE_KEYS = ("org", "github_host", "actions_oidc_issuer", "landing_page_url", "approved_models_url", "portal_url", "scorecard_mode", "scorecard_app_id")
+CONFIGURE_KEYS = ("org", "github_host", "actions_oidc_issuer", "landing_page_url", "approved_models_url", "portal_url", "scorecard_mode",
+                  "scorecard_app_id", "findings_bypass_team")
+# The committed findings ruleset (hello-app's and the portal's are the same bytes). Central mode pins the check to the App and
+# --findings-bypass-team swaps the actor; the helpers put this text back. A test keeps it equal to the committed files.
+COMMITTED_FINDINGS_RULESET = """\
+{
+  "name": "scorecard-findings",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
+  "bypass_actors": [{"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "pull_request"}],
+  "rules": [
+    {"type": "required_status_checks", "parameters": {"strict_required_status_checks_policy": false, "required_status_checks": [
+      {"context": "scorecard / findings", "integration_id": 15368}
+    ]}}
+  ]
+}
+"""
 # The committed per-app scorecard caller (hello-app, the portal and the kit template are the same text). Central mode removes the files;
 # the helpers put this text back. A test keeps it equal to the committed files whenever the live tree is pristine.
 COMMITTED_SCORECARD_CALLER = """\
 # The risk scorecard from the platform's factory repo, called as a reusable workflow (a personal account can't require
-# workflows with a ruleset). It classifies how much human review a pull request needs; it does not gate. The job id is
-# `scorecard`, so the checks are `scorecard / precondition`, `scorecard / assess`, `scorecard / score`,
-# `scorecard / report`, `scorecard / level: <level>` and `scorecard / assessed`. The ruleset requires `scorecard / assessed`.
+# workflows with a ruleset). It classifies how much human review a pull request needs, and holds the merge only for high or
+# critical findings. The job id is `scorecard`, so the checks are `scorecard / precondition`, `scorecard / assess`,
+# `scorecard / score`, `scorecard / report`, `scorecard / level: <level>`, `scorecard / findings` and `scorecard / assessed`.
+# The ruleset requires `scorecard / assessed`; the scorecard-findings ruleset requires `scorecard / findings`.
 # The `types` are the called workflow's, `edited` included: a retargeted base changes the diff, so it is assessed again.
 name: scorecard
 
@@ -109,6 +127,13 @@ def _repin_scorecard(ruleset_path):
         ruleset_path.write_text(new)
 
 
+def _restore_findings_ruleset(app):
+    """Central mode pins `scorecard / findings` to the App and --findings-bypass-team swaps the actor; put the committed file back."""
+    path = Path(app) / ".github/rulesets/scorecard-findings.json"
+    if path.read_text() != COMMITTED_FINDINGS_RULESET:
+        path.write_text(COMMITTED_FINDINGS_RULESET)
+
+
 def _restore_default_approval(app, with_env=True, ruleset_name="main.json"):
     """Put the two-person approval settings back. A file already at the defaults is left byte-for-byte alone."""
     ruleset_path = app / ".github/rulesets" / ruleset_name
@@ -133,6 +158,7 @@ def unconfigure_hello_app(app_dir):
     app = Path(app_dir)
     _restore_scorecard_caller(app / ".github/workflows/scorecard.yml")
     _repin_scorecard(app / ".github/rulesets/main.json")
+    _restore_findings_ruleset(app)
     for rel in (".github/workflows/ci.yml", ".github/workflows/promote.yml", ".github/workflows/security-scans.yml", ".github/workflows/scorecard.yml"):
         path = app / rel
         path.write_text(re.sub(r"uses: [A-Za-z0-9-]+/(platform-pipeline|security-scans|scorecard-factory)/", r"uses: ORG_PLACEHOLDER/\1/", path.read_text()))
@@ -221,6 +247,7 @@ def unconfigure_portal(app_dir):
         return
     _restore_scorecard_caller(app / ".github/workflows/scorecard.yml")
     _repin_scorecard(app / ".github/rulesets/main.json")
+    _restore_findings_ruleset(app)
     for rel in (".github/workflows/ci.yml", ".github/workflows/promote.yml", ".github/workflows/security-scans.yml", ".github/workflows/scorecard.yml"):
         path = app / rel
         path.write_text(re.sub(r"uses: [A-Za-z0-9-]+/(platform-pipeline|security-scans|scorecard-factory)/", r"uses: ORG_PLACEHOLDER/\1/", path.read_text()))

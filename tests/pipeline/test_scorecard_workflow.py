@@ -500,7 +500,9 @@ def test_each_job_hands_on_its_files_with_their_hashes_as_job_outputs():
     run = score["run"]
     assert run.index('= "$ASSESSMENT_SHA256" ]') < run.index("scorecard run") and "--assessment /in/assessment.json" in run
     assert JOBS["score"]["outputs"] == {"level": "${{ steps.score.outputs.level }}", "comment_sha256": "${{ steps.score.outputs.comment_sha256 }}",
-                                        "github_sha256": "${{ steps.score.outputs.github_sha256 }}"}
+                                        "github_sha256": "${{ steps.score.outputs.github_sha256 }}",
+                                        "findings_conclusion": "${{ steps.score.outputs.findings_conclusion }}",
+                                        "findings_title": "${{ steps.score.outputs.findings_title }}"}
     upload = next(s for s in JOBS["score"]["steps"] if s.get("uses", "").startswith("actions/upload-artifact"))
     assert upload["with"]["name"] == "scorecard" and upload["with"]["if-no-files-found"] == "error" and upload["with"]["overwrite"] is True
     assert upload["with"]["path"].split() == ["out/scorecard.json", "out/scorecard.md", "out/comment.md", "out/github.json",
@@ -637,6 +639,108 @@ def test_the_level_job_fails_without_a_level(tmp_path, level, ok):
     assert (out.returncode == 0) is ok
 
 
+def test_findings_has_no_name_and_reads_only_the_score_job():
+    job = JOBS["findings"]
+    assert "name" not in job, "the check is `<caller job> / findings`, which the scorecard-findings ruleset requires by name"
+    assert job["needs"] == "score" and job["permissions"] == {} and "uses" not in json.dumps(job["steps"])
+    assert [s["name"] for s in job["steps"]] == ["High findings"]
+    assert step("findings", "High findings")["env"] == {"SCORE": "${{ needs.score.result }}",
+                                                        "CONCLUSION": "${{ needs.score.outputs.findings_conclusion }}",
+                                                        "TITLE": "${{ needs.score.outputs.findings_title }}"}
+
+
+@pytest.mark.parametrize("score,conclusion,title,ok", [
+    ("success", "success", "No high or critical findings", True),
+    ("success", "failure", "Merge blocked: 2 high or critical findings", False),
+    ("success", "failure", "Merge blocked: 1 high or critical finding", False),
+    ("failure", "", "", False), ("skipped", "", "", False), ("cancelled", "", "", False),
+    ("failure", "success", "No high or critical findings", False),
+    ("success", "", "", False), ("success", "null", "null", False),
+    ("success", "neutral", "No high or critical findings", False),
+    ("success", "skipped", "No high or critical findings", False),
+    ("success", "Success", "No high or critical findings", False),
+    ("success", "success", "Merge blocked: 2 high or critical findings", False),
+    ("success", "success", "No high or critical findings; rm -rf", False),
+    ("success", "success", "No high or critical findings\n::notice::x", False),
+])
+def test_findings_fails_unless_assessed_and_clear(tmp_path, score, conclusion, title, ok):
+    env = {"SCORE": score, "CONCLUSION": conclusion, "TITLE": title, "GITHUB_STEP_SUMMARY": str(tmp_path / "s")}
+    out = run_step(step("findings", "High findings")["run"], tmp_path, env)
+    assert (out.returncode == 0) is ok, out.stdout + out.stderr
+    if not ok:
+        assert "::error::" in out.stdout
+    if score != "success":
+        assert "Not assessed" in out.stdout
+
+
+def score_tail(tmp_path, github):
+    """The Score step from the level on: it checks the findings result before it writes any output."""
+    run = step("score", "Score")["run"]
+    tail = run[run.index("level=$(jq -r .level out/scorecard.json)"):]
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    (out_dir / "scorecard.json").write_text('{"level": "elevated"}')
+    (out_dir / "scorecard.md").write_text("# Scorecard\n")
+    (out_dir / "comment.md").write_text("c\n")
+    (out_dir / "github.json").write_text(github if isinstance(github, str) else json.dumps(github))
+    env = {"GITHUB_OUTPUT": str(tmp_path / "output"), "GITHUB_STEP_SUMMARY": str(tmp_path / "summary")}
+    out = run_step("set -euo pipefail\n" + tail, tmp_path, env)
+    output = (tmp_path / "output").read_text() if (tmp_path / "output").exists() else ""
+    return out, output
+
+
+def _blocking(n):
+    return [{"rule_id": f"T-16/x{i}", "location": {"file": f"$(touch pwned){i}\n::error::x", "start_line": i + 1}} for i in range(n)]
+
+
+@needs_jq
+@pytest.mark.parametrize("n", [0, 1, 2, "many"])
+def test_score_publishes_the_findings_result_the_findings_job_reads(tmp_path, n):
+    """The real findings_check, through the Score step's outputs, into the findings job: one wording end to end."""
+    from scorecard.blocking import MAX_LISTED, counted
+    from scorecard.report_github import CLEAR, findings_check
+    n = MAX_LISTED + 1 if n == "many" else n
+    check = findings_check(_blocking(n), "a repo admin")
+    github = {"label": "scrutiny:elevated", "blocking_findings": [{"rule_id": "T-16/x", "file": "$(touch pwned)\nfindings_conclusion=success"}], "findings_check": check}
+    out, output = score_tail(tmp_path, github)
+    assert out.returncode == 0, out.stdout + out.stderr
+    lines = output.splitlines()
+    title = CLEAR if n == 0 else f"Merge blocked: {counted(n)}"
+    assert f"findings_conclusion={'success' if n == 0 else 'failure'}" in lines and f"findings_title={title}" in lines
+    assert len([line for line in lines if line.startswith("findings_")]) == 2, "blocking_findings never reaches the outputs"
+    assert "pwned" not in output and not (tmp_path / "pwned").exists()
+    outputs = dict(line.split("=", 1) for line in lines if line.startswith("findings_"))
+    env = {"SCORE": "success", "CONCLUSION": outputs["findings_conclusion"], "TITLE": outputs["findings_title"], "GITHUB_STEP_SUMMARY": str(tmp_path / "s")}
+    job = run_step(step("findings", "High findings")["run"], tmp_path, env)
+    assert (job.returncode == 0) is (n == 0), job.stdout
+    if n:
+        assert f"::error::{title}" in job.stdout and "the score job gave no findings result" not in job.stdout
+
+
+@needs_jq
+@pytest.mark.parametrize("github", [
+    {"label": "scrutiny:elevated"},
+    {"findings_check": None},
+    {"findings_check": {"conclusion": "neutral", "title": "No high or critical findings", "summary": "s"}},
+    {"findings_check": {"conclusion": "success", "title": "No high or critical findings\nlevel=standard", "summary": "s"}},
+    {"findings_check": {"conclusion": "success\nlevel=standard", "title": "No high or critical findings", "summary": "s"}},
+    {"findings_check": {"conclusion": "success", "title": "Merge blocked: 3 high or critical findings", "summary": "s"}},
+    {"findings_check": {"conclusion": "success\n", "title": "No high or critical findings", "summary": "s"}},
+    {"findings_check": {"conclusion": "success", "title": "No high or critical findings\n", "summary": "s"}},
+    {"findings_check": {"conclusion": "success\n", "title": "No high or critical findings\n", "summary": "s"}},
+    {"findings_check": {"conclusion": "failure", "title": "Merge blocked: 3 high or critical findings\n", "summary": "s"}},
+    {"findings_check": {"conclusion": "failure\n", "title": "Merge blocked: 3 high or critical findings", "summary": "s"}},
+    {"findings_check": {"conclusion": "failure", "title": "Merge blocked: 0 high or critical findings", "summary": "s"}},
+    {"findings_check": {"conclusion": "failure", "title": None, "summary": "s"}},
+    {"findings_check": "success"},
+    "{not json",
+])
+def test_score_refuses_a_github_json_without_a_usable_findings_result(tmp_path, github):
+    out, output = score_tail(tmp_path, github)
+    assert out.returncode == 1 and "::error::not assessed" in out.stdout
+    assert output == "", "no output is written, so the findings job sees no result and fails"
+
+
 def test_assessed_reads_every_job_result_and_has_no_name():
     job = JOBS["assessed"]
     assert "name" not in job, "the check is `<caller job> / assessed`, which the app ruleset requires by name"
@@ -662,7 +766,7 @@ def test_assessed_passes_only_when_every_job_succeeded(tmp_path, results, ok):
 
 def test_the_jobs_run_in_order():
     needs = {name: job.get("needs") for name, job in JOBS.items()}
-    assert needs == {"precondition": None, "assess": "precondition", "score": "assess", "report": "score", "level": "score",
+    assert needs == {"precondition": None, "assess": "precondition", "score": "assess", "report": "score", "level": "score", "findings": "score",
                      "assessed": ["precondition", "assess", "score", "report", "level"]}
 
 
@@ -673,6 +777,7 @@ def test_permissions_per_job():
         "score": {"contents": "read", "packages": "read", "checks": "read", "statuses": "read", "pull-requests": "read"},
         "report": {"pull-requests": "write", "issues": "write"},
         "level": {},
+        "findings": {},
         "assessed": {},
     }
 
@@ -681,8 +786,9 @@ def test_only_the_factory_itself_is_skipped():
     """In an app repo both conditions are true; the factory's own PRs are not app changes."""
     assert JOBS["precondition"]["if"] == "github.repository != 'ORG_PLACEHOLDER/scorecard-factory'" or re.fullmatch(
         r"github\.repository != '[A-Za-z0-9-]+/scorecard-factory'", JOBS["precondition"]["if"])
-    assert re.fullmatch(r"always\(\) && github\.repository != '[A-Za-z0-9_-]+/scorecard-factory'", JOBS["assessed"]["if"])
-    assert [n for n, j in JOBS.items() if "if" in j] == ["precondition", "assessed"]
+    for job in ("findings", "assessed"):
+        assert re.fullmatch(r"always\(\) && github\.repository != '[A-Za-z0-9_-]+/scorecard-factory'", JOBS[job]["if"]), job
+    assert [n for n, j in JOBS.items() if "if" in j] == ["precondition", "findings", "assessed"]
 
 
 def test_checkouts_are_the_run_s_merge_commit_without_credentials():

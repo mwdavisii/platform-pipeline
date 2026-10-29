@@ -112,6 +112,8 @@ def _rules(gateways: list[str]) -> list[dict]:
         {"id": "locked-dependencies", "text": "Python apps need requirements.txt with hashes (--hash lines) and the server pinned (==); use gunicorn 22 or newer. "
                                               "Node apps need package.json and package-lock.json."},
         {"id": "single-line", "text": "Text fields in the spec are single lines."},
+        {"id": "high-findings-hold-the-merge", "text": "A high or critical scorecard finding holds the merge (the `scorecard / findings` check). "
+                                                      "Fix it and push again. Only a person can merge past it; never try to."},
     ]
 
 

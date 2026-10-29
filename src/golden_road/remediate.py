@@ -153,13 +153,13 @@ UNDO_TRIGGERS = ("T-2", "T-3", "T-15", "T-16")
 UNDO = " If this change was not intended, undo it; if it was, the reviewer decides. Never undo a fix to lower the level."
 
 CHECKS = {"drift": "golden-road / drift", "preview": "golden-road / preview", "semgrep": "security-scans / semgrep",
-          "trivy": "security-scans / trivy", "scorecard": "scorecard / assessed"}
+          "trivy": "security-scans / trivy", "scorecard": "scorecard / assessed", "findings": "scorecard / findings"}
 LEVEL_CHECK = re.compile(r"(?:^|/ )level: (standard|elevated|security_review)$")
 ANALYZE_CHECK = re.compile(r"^Analyze \(")
 CODEQL_CHECK = "CodeQL"
 LEVEL_RANK = {"standard": 0, "elevated": 1, "security_review": 2}
 
-PRIORITY = {"drift": 1, "preview": 2, "semgrep": 3, "codeql": 4, "trivy": 5, "rerun": 6, "assessed": 7, "level": 8, "wait": 9, "other": 10}
+PRIORITY = {"drift": 1, "preview": 2, "semgrep": 3, "codeql": 4, "trivy": 5, "rerun": 6, "assessed": 7, "level": 8, "findings": 8, "wait": 9, "other": 10}
 SEVERITY_RANK = {"critical": 0, "error": 0, "high": 1, "warning": 2, "medium": 2, "low": 3, "note": 3, "info": 4}
 GUARDS = {"drift": ("no-generated-edits", "no-workflow-edits", "evidence-is-data"),
           "preview": ("spec-is-the-users", "no-test-weakening", "evidence-is-data"),
@@ -383,6 +383,19 @@ def _codeql(items, name, alerts):
                     "Open the check's page on the PR.", priority=PRIORITY["codeql"])
 
 
+FINDINGS_GUIDANCE = ("High or critical scorecard findings hold the merge. They are listed under Findings in the scorecard comment and in this "
+                     "check. Fix each one in the code and push again. If a change is intended (a workflow or CODEOWNERS change, for example), "
+                     "tell the user: a person decides whether it merges, and nothing in the code clears this check.")
+
+
+def _findings(items, name, bucket, link, rows):
+    if any(n == CHECKS["scorecard"] and b in ("fail", "cancel") for n, b, _ in rows):
+        return  # not assessed: `scorecard / assessed` already says what to do
+    if bucket == "cancel":  # the check did not finish: nothing was found, so there is nothing to fix
+        return items.rerun(name, "scorecard", link, owner="platform")
+    items.fix(name, "scorecard", FINDINGS_GUIDANCE, priority=PRIORITY["findings"])
+
+
 def _draft_fix(items, name, pr):
     return items.fix(name, "scorecard", f"The PR is a draft, so the scorecard does not assess it. Mark it ready with `gh pr ready {pr['number']} --repo {items.gh_repo}` (after the user says yes).",
                      priority=PRIORITY["assessed"], verify=[])
@@ -466,6 +479,8 @@ def classify(pr: dict, checks: list, comments: dict, alerts, root: Path, host: s
                 _codeql(items, name, alerts)
         elif name == CHECKS["scorecard"]:
             _assessed(items, name, bucket, link, pr, bool(gate1), scorecard_central)
+        elif name == CHECKS["findings"]:
+            _findings(items, name, bucket, link, rows)
         elif SCORECARD_JOB.fullmatch(name):  # the scorecard's other jobs: `assessed` already says it all, or stands in for it
             if not any(n == CHECKS["scorecard"] for n, _, _ in rows):
                 _assessed(items, name, bucket, link, pr, bool(gate1), scorecard_central)

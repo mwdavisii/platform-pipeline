@@ -619,6 +619,7 @@
     level: standard
     fired: []
     shadow: []
+    blocking: []
   fake: {}
 - name: personal-data
   description: The app stores patient_name, date_of_birth and mrn. T-25 runs in shadow.
@@ -871,6 +872,7 @@
     level: standard
     fired: []
     shadow: []
+    blocking: []
   fake: {}
 - name: false-alarm-dependency-bump
   description: 'uvicorn 0.30.0 to 0.30.1: an established package, same hashes pattern.'
@@ -1382,7 +1384,8 @@
 - name: weakened-assertion
   description: A test's exact count assertion is loosened to one that cannot fail; the app code is untouched. The code-side test check and the
     agent both see it, so T-3 fires.
-  base:
+  # workflow-removed (below) reuses this base.
+  base: &notes_base
     requirements.txt: "fastapi==0.115.0 \\\n    --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nuvicorn==0.30.0\
       \ \\\n    --hash=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
     builder-spec.json: "{\n  \"app_name\": \"notes-api\",\n  \"app_type\": \"python\",\n  \"entrypoint\": \"app:app\",\n  \"server\": \"uvicorn\"\
@@ -1735,3 +1738,16 @@
     fired: []
     shadow: []
   fake: {}
+- name: workflow-removed
+  description: The change deletes one of the app's workflows and nothing else. T-16 fires from code, and its high finding holds the merge.
+  base:
+    <<: *notes_base
+    .github/workflows/scorecard.yml: "on: pull_request\njobs: {}\n"
+  change:
+    .github/workflows/scorecard.yml: null
+  expect:
+    level: security_review
+    fired:
+    - T-16
+    blocking:
+    - T-16/workflow-or-owners-change

@@ -856,3 +856,411 @@ def test_no_other_workflow_uses_the_scorecard_app_key():
     """The scorecard App's key lives only in the factory's `scorecard` environment, read by the poller and the assess run."""
     holders = sorted(p.name for p in WORKFLOWS if "SCORECARD_APP_KEY" in p.read_text())
     assert holders == ["scorecard-assess.yml", "scorecard-poll.yml"]
+
+
+# ---- the release fetches the app's binding from the factory ----
+
+FETCH_STEP = "Fetch the app's binding from the factory"
+BINDING_TEXT = """schema: binding/v1
+repo: acme/notes
+linked_by: p_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+linked_at: '2026-10-29T15:00:00Z'
+request: r_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+azure_identity:
+  directory_id: sp-notes
+  tenant_id: 00000000-0000-4000-8000-00000000a2e0
+  client_id: 11111111-1111-4111-8111-111111111111
+  verified_by: mock-directory
+"""
+# A stand-in for curl that answers per URL. It appends each call's arguments (one per line, then "--") to CURL_LOG. The factory
+# repo itself answers FAKE_REPO_CODE (exit FAKE_REPO_RC); the binding file answers FAKE_BODY with FAKE_CODE (exit FAKE_RC).
+FAKE_CURL = r'''#!/usr/bin/env bash
+{ printf '%s\n' "$@"; echo --; } >> "$CURL_LOG"
+out=
+for arg in "$@"; do url="$arg"; done
+while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift 2 ;; *) shift ;; esac; done
+case "$url" in
+  */contents/*) rc="${FAKE_RC:-0}"; code="$FAKE_CODE"; body="$FAKE_BODY" ;;
+  */repos/*/scorecard-factory) rc="${FAKE_REPO_RC:-0}"; code="${FAKE_REPO_CODE:-200}"; body='{"full_name": "factory"}' ;;
+  *) echo "unexpected curl $url" >&2; exit 99 ;;
+esac
+[ "$rc" -eq 0 ] || exit "$rc"
+[ -z "$out" ] || printf '%s' "$body" > "$out"
+printf '%s' "$code"
+'''
+
+
+def curl_calls(tmp_path):
+    text = (tmp_path / "curl.log").read_text()
+    return [call.strip("\n").splitlines() for call in text.split("--\n") if call.strip()]
+
+
+def release_steps():
+    return gr_doc()["jobs"]["release"]["steps"]
+
+
+def contents_answer(text=BINDING_TEXT, **overrides):
+    import base64
+    raw = text.encode()
+    encoded = base64.encodebytes(raw).decode()  # the API wraps the base64 at 60 characters
+    return json.dumps({"type": "file", "encoding": "base64", "size": len(raw), "name": "notes.yaml",
+                       "path": "bindings/acme/notes.yaml", "content": encoded, **overrides})
+
+
+def run_fetch(tmp_path, code="200", body=None, rc=0, repo="acme/notes", repo_code="200", repo_rc=0):
+    shim = tmp_path / "bin"
+    shim.mkdir()
+    (shim / "curl").write_text(FAKE_CURL)
+    (shim / "curl").chmod(0o755)
+    (tmp_path / "out").mkdir(exist_ok=True)
+    script = step_named(gr_doc()["jobs"]["release"], FETCH_STEP)["run"]
+    result = subprocess.run(["bash", "-c", script], cwd=tmp_path, capture_output=True, text=True, env={
+        "PATH": f"{shim}:/usr/bin:/bin", "GITHUB_REPOSITORY": repo, "GITHUB_REPOSITORY_OWNER": repo.split("/")[0],
+        "GITHUB_API_URL": "https://api.github.com", "GH_TOKEN": "tok-123", "CURL_LOG": str(tmp_path / "curl.log"),
+        "FAKE_CODE": code, "FAKE_BODY": contents_answer() if body is None else body, "FAKE_RC": str(rc),
+        "FAKE_REPO_CODE": repo_code, "FAKE_REPO_RC": str(repo_rc)})
+    return result, tmp_path / "out/binding.yaml"
+
+
+def test_the_release_fetches_the_binding_and_renders_and_records_it():
+    steps = release_steps()
+    fetch = step_named(gr_doc()["jobs"]["release"], FETCH_STEP)
+    assert "contents/$path?ref=main" in fetch["run"] and "scorecard-factory" in fetch["run"] and "404)" in fetch["run"]
+    assert fetch["env"] == {"GH_TOKEN": "${{ github.token }}"}
+    assert "the factory's default branch must be `main`" in (ROOT / ".github/workflows/golden-road.yml").read_text()
+    render = step_named(gr_doc()["jobs"]["release"], "Render manifests and the gate record")
+    assert "--binding /out/binding.yaml --repo \"$GITHUB_REPOSITORY\"" in render["run"] and render["run"].count("--binding") >= 2
+    names = [s.get("name") for s in steps]
+    assert names.index("Container authz probe") < names.index(FETCH_STEP) == names.index("Render manifests and the gate record") - 1
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq not installed")
+class TestFetchTheBinding:
+    def test_a_binding_is_fetched_from_the_factory_main_with_the_job_token(self, tmp_path):
+        result, binding = run_fetch(tmp_path)
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert binding.read_text() == BINDING_TEXT
+        assert not (tmp_path / "out/binding.json").exists()
+        factory, args = curl_calls(tmp_path)
+        assert factory[-1] == "https://api.github.com/repos/acme/scorecard-factory"
+        assert args[-1] == "https://api.github.com/repos/acme/scorecard-factory/contents/bindings/acme/notes.yaml?ref=main"
+        for call in (factory, args):
+            assert "Authorization: Bearer tok-123" in call and "--max-filesize" in call and "--proto" in call and "=https" in call
+        assert "Accept: application/vnd.github.object+json" in args
+        assert not (tmp_path / "out/factory-unreadable").exists() and not (tmp_path / "out/factory.json").exists()
+        assert "The app has a binding: bindings/acme/notes.yaml" in result.stdout
+
+    def test_404_is_no_binding(self, tmp_path):
+        result, binding = run_fetch(tmp_path, code="404", body='{"message": "Not Found"}')
+        assert result.returncode == 0 and not binding.exists() and not (tmp_path / "out/binding.json").exists()
+        assert "no binding" in result.stdout
+        assert not (tmp_path / "out/factory-unreadable").exists() and "::warning::" not in result.stdout
+
+    def test_a_factory_that_answers_404_is_no_binding_with_a_warning_and_a_marker(self, tmp_path):
+        result, binding = run_fetch(tmp_path, repo_code="404")
+        assert result.returncode == 0 and not binding.exists()
+        assert "::warning::the factory acme/scorecard-factory could not be read (HTTP 404)" in result.stdout
+        assert (tmp_path / "out/factory-unreadable").exists()
+        assert len(curl_calls(tmp_path)) == 1  # the file is never asked for
+
+    @pytest.mark.parametrize("repo_code", ["500", "502", "401", "403", "301", "000"])
+    def test_any_other_answer_from_the_factory_stops_the_release(self, tmp_path, repo_code):
+        result, binding = run_fetch(tmp_path, repo_code=repo_code)
+        assert result.returncode != 0 and f"factory acme/scorecard-factory answered HTTP {repo_code}" in result.stdout
+        assert not binding.exists() and not (tmp_path / "out/factory-unreadable").exists() and len(curl_calls(tmp_path)) == 1
+
+    @pytest.mark.parametrize("repo_rc", [6, 28, 35])
+    def test_a_failed_request_for_the_factory_stops_the_release(self, tmp_path, repo_rc):
+        result, _ = run_fetch(tmp_path, repo_rc=repo_rc)
+        assert result.returncode != 0 and f"curl exit {repo_rc}" in result.stdout and not (tmp_path / "out/factory-unreadable").exists()
+
+    def test_a_stale_marker_is_never_used(self, tmp_path):
+        (tmp_path / "out").mkdir()
+        (tmp_path / "out/factory-unreadable").touch()
+        result, binding = run_fetch(tmp_path)
+        assert result.returncode == 0 and binding.exists() and not (tmp_path / "out/factory-unreadable").exists()
+
+    def test_a_stale_binding_file_is_never_used(self, tmp_path):
+        (tmp_path / "out").mkdir()
+        (tmp_path / "out/binding.yaml").write_text(BINDING_TEXT)
+        result, binding = run_fetch(tmp_path, code="404", body="{}")
+        assert result.returncode == 0 and not binding.exists()
+
+    @pytest.mark.parametrize("code", ["500", "502", "503", "401", "403", "301", "302", "429", "000", "201", "204"])
+    def test_any_other_http_answer_stops_the_release(self, tmp_path, code):
+        result, binding = run_fetch(tmp_path, code=code, body='{"message": "nope"}')
+        assert result.returncode != 0 and f"HTTP {code}" in result.stdout and not binding.exists()
+
+    @pytest.mark.parametrize("rc", [6, 7, 28, 35, 63])  # DNS, connect, timeout, TLS, over --max-filesize
+    def test_a_failed_request_stops_the_release(self, tmp_path, rc):
+        result, binding = run_fetch(tmp_path, rc=rc)
+        assert result.returncode != 0 and f"curl exit {rc}" in result.stdout and not binding.exists()
+
+    @pytest.mark.parametrize("body", [
+        json.dumps([{"type": "file", "name": "notes.yaml", "path": "bindings/acme/notes.yaml"}]),  # a directory at the path
+        contents_answer(type="dir"),
+        contents_answer(type="symlink", target="../intake/acme/notes.yaml"),
+        contents_answer(type="submodule"),
+        contents_answer(path="intake/acme/notes.yaml"),  # a symlink the API followed to another file
+        contents_answer(path="bindings/acme/Notes.yaml"),
+        contents_answer(size=70_000),
+        contents_answer(size=0, content=""),
+        contents_answer(encoding="none", content=""),
+        contents_answer(size="12"),
+        contents_answer(content="!!!! not base64 !!!!"),
+        contents_answer(size=10),  # the decoded file is not the size the API reported
+        "{not json",
+        "",
+        "null",
+    ], ids=["listing", "dir", "symlink", "submodule", "other-path", "other-case", "too-large", "empty", "no-content", "size-string",
+            "bad-base64", "size-mismatch", "bad-json", "empty-body", "null"])
+    def test_anything_but_one_small_regular_file_stops_the_release(self, tmp_path, body):
+        result, _ = run_fetch(tmp_path, body=body)
+        assert result.returncode != 0 and "::error::" in result.stdout
+
+    @pytest.mark.parametrize("repo", ["acme/..", "../notes", "acme/notes/x", "acme/no tes", "acme/notes\nx"])
+    def test_an_unexpected_repository_name_stops_the_release_before_any_request(self, tmp_path, repo):
+        result, _ = run_fetch(tmp_path, repo=repo)
+        assert result.returncode != 0 and "unexpected repository name" in result.stdout
+        assert not (tmp_path / "curl.log").exists()
+
+    def test_the_path_keeps_the_repository_name_as_github_gives_it(self, tmp_path):
+        body = contents_answer(path="bindings/Acme/Notes.yaml")
+        result, binding = run_fetch(tmp_path, repo="Acme/Notes", body=body)
+        assert result.returncode == 0, result.stdout
+        assert curl_calls(tmp_path)[-1][-1].endswith("/repos/Acme/scorecard-factory/contents/bindings/Acme/Notes.yaml?ref=main")
+
+
+
+FAKE_DOCKER_LOG = r'''#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$DOCKER_LOG"
+'''
+
+
+@pytest.mark.parametrize("with_binding", [True, False])
+def test_render_and_record_get_the_binding_only_when_one_was_fetched(tmp_path, with_binding):
+    shim = tmp_path / "bin"
+    shim.mkdir()
+    (shim / "docker").write_text(FAKE_DOCKER_LOG)
+    (shim / "docker").chmod(0o755)
+    (tmp_path / "out").mkdir()
+    if with_binding:
+        (tmp_path / "out/binding.yaml").write_text(BINDING_TEXT)
+    script = step_named(gr_doc()["jobs"]["release"], "Render manifests and the gate record")["run"]
+    result = subprocess.run(["bash", "-c", script], cwd=tmp_path, capture_output=True, text=True, env={
+        "PATH": f"{shim}:/usr/bin:/bin", "GITHUB_REPOSITORY": "acme/notes", "GITHUB_SHA": "c" * 40, "GITHUB_OUTPUT": str(tmp_path / "gh-out"),
+        "REF": "ghcr.io/acme/notes@sha256:" + "d" * 64, "BUILDER_IMAGE": "builder@sha256:" + "a" * 64, "DOCKER_LOG": str(tmp_path / "docker.log")})
+    assert result.returncode == 0, result.stderr
+    render, record = (tmp_path / "docker.log").read_text().splitlines()
+    assert ("--binding /out/binding.yaml --repo acme/notes --output /out/manifests.yaml" in render) is with_binding
+    assert (" --binding /out/binding.yaml --drift " in record) is with_binding
+    if not with_binding:
+        assert "--binding" not in render + record and " --repo " not in render
+
+
+# Stand-ins for the publish step's tools: each logs its arguments; docker answers the tag's digest, git the commit date.
+PUBLISH_FAKES = {
+    "cosign": '#!/usr/bin/env bash\necho "cosign $*" >> "$TOOL_LOG"\n',
+    "git": '#!/usr/bin/env bash\necho 2026-10-20T15:30:00Z\n',
+    "docker": '#!/usr/bin/env bash\necho "docker $*" >> "$TOOL_LOG"\n'
+              'case "$*" in *"imagetools inspect"*) printf \'{"digest": "sha256:%s"}\' "$DIGEST" ;; esac\n',
+    "gh": '#!/usr/bin/env bash\nprintf \'%s\\n\' "$@" > "$GH_LOG"\n',
+}
+BINDING_SHA = __import__("hashlib").sha256(BINDING_TEXT.encode()).hexdigest()
+
+
+def run_publish(tmp_path, record_binding, binding_file=False, factory_unreadable=False):
+    shim = tmp_path / "bin"
+    shim.mkdir()
+    for name, text in PUBLISH_FAKES.items():
+        (shim / name).write_text(text)
+        (shim / name).chmod(0o755)
+    (tmp_path / "out").mkdir()
+    (tmp_path / "out/manifests.yaml").write_text("kind: Deployment\n")
+    (tmp_path / "out/gate-record.json").write_text(json.dumps({"binding": record_binding}))
+    if binding_file:
+        (tmp_path / "out/binding.yaml").write_text(binding_file if isinstance(binding_file, str) else BINDING_TEXT)
+    if factory_unreadable:
+        (tmp_path / "out/factory-unreadable").touch()
+    script = step_named(gr_doc()["jobs"]["release"], "Sign, attest")["run"]
+    result = subprocess.run(["bash", "-c", script], cwd=tmp_path, capture_output=True, text=True, env={
+        "PATH": f"{shim}:/usr/bin:/bin", "GITHUB_REPOSITORY": "acme/notes", "GITHUB_REPOSITORY_OWNER": "acme", "GITHUB_SHA": "c" * 40,
+        "TAG": "test-20261020153000-ccccccc", "IMAGE": "ghcr.io/acme/notes", "REF": "ghcr.io/acme/notes@sha256:" + "d" * 64, "DIGEST": "d" * 64,
+        "GATE_PREDICATE": "https://example.test/gate", "GH_TOKEN": "t", "GITHUB_STEP_SUMMARY": str(tmp_path / "summary.md"),
+        "TOOL_LOG": str(tmp_path / "tools.log"), "GH_LOG": str(tmp_path / "gh.log")})
+    gh = (tmp_path / "gh.log").read_text().splitlines() if (tmp_path / "gh.log").exists() else None
+    return result, gh
+
+
+def release_assets(gh):
+    return gh[gh.index("create") + 2:gh.index("--repo")]
+
+
+def release_notes(gh):
+    return gh[gh.index("--notes") + 1:]
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq not installed")
+class TestPublishNamesAndAttachesTheBinding:
+    def test_a_binding_is_attached_and_named(self, tmp_path):
+        result, gh = run_publish(tmp_path, {"path": "bindings/acme/notes.yaml", "sha256": BINDING_SHA}, binding_file=True)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert release_assets(gh) == ["out/manifests.yaml", "out/gate-record.json", "out/binding.yaml"]
+        line = f"- Binding: bindings/acme/notes.yaml (sha256 {BINDING_SHA})"
+        assert line in release_notes(gh) and line in (tmp_path / "summary.md").read_text()
+
+    def test_no_binding(self, tmp_path):
+        result, gh = run_publish(tmp_path, None)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert release_assets(gh) == ["out/manifests.yaml", "out/gate-record.json"]
+        assert "- Binding: no binding" in release_notes(gh) and "- Binding: no binding" in (tmp_path / "summary.md").read_text()
+
+    def test_an_unreadable_factory_is_said_plainly(self, tmp_path):
+        result, gh = run_publish(tmp_path, None, factory_unreadable=True)
+        assert result.returncode == 0, result.stdout + result.stderr
+        line = "- Binding: none (the factory acme/scorecard-factory could not be read)"
+        assert line in release_notes(gh) and line in (tmp_path / "summary.md").read_text()
+        assert release_assets(gh) == ["out/manifests.yaml", "out/gate-record.json"]
+
+    @pytest.mark.parametrize("record_binding,binding_file,factory_unreadable", [
+        ({"path": "bindings/acme/notes.yaml\n- Image: evil", "sha256": BINDING_SHA}, True, False),
+        ({"path": "bindings/acme/notes.yaml", "sha256": "x"}, True, False),
+        ({"path": "bindings/acme/notes.yaml", "sha256": BINDING_SHA}, False, False),  # named but not fetched
+        ({"path": "bindings/acme/notes.yaml", "sha256": BINDING_SHA}, BINDING_TEXT + "# changed\n", False),  # not the named file
+        ({"path": "bindings/acme/notes.yaml", "sha256": BINDING_SHA}, True, True),  # a binding and an unreadable factory
+        (None, True, False),  # fetched but not recorded
+    ], ids=["line-break", "bad-sha", "not-fetched", "other-file", "marker-and-binding", "not-recorded"])
+    def test_a_record_and_files_that_disagree_stop_before_anything_is_signed(self, tmp_path, record_binding, binding_file, factory_unreadable):
+        result, gh = run_publish(tmp_path, record_binding, binding_file=binding_file, factory_unreadable=factory_unreadable)
+        assert result.returncode != 0 and gh is None and "::error::" in result.stdout
+        assert not (tmp_path / "tools.log").exists()  # neither cosign nor docker ran
+
+
+# ---- promote: the binding the test release carries goes to the prod release, checked against the attested gate record ----
+
+PROMO_REF = "ghcr.io/acme/notes@sha256:" + "d" * 64
+PROMO_COMMIT = "c" * 40
+PROMO_MANIFESTS = "kind: Deployment\n"
+# Stand-ins for the promote steps' tools. gh downloads the assets in $ASSETS that match each --pattern (a missing one fails as gh
+# does), answers the commit date and an empty release list, and logs a release create; cosign answers the attestation in $ATTEST.
+PROMOTE_FAKES = {
+    "cosign": '#!/usr/bin/env bash\necho "cosign $*" >> "$TOOL_LOG"\n'
+              'case "$1" in verify-attestation) cat "$ATTEST" ;; esac\n',
+    "docker": '#!/usr/bin/env bash\necho "docker $*" >> "$TOOL_LOG"\n'
+              'case "$*" in *"imagetools inspect"*) printf \'{"digest": "sha256:%s"}\' "$DIGEST" ;; esac\n',
+    "gh": r'''#!/usr/bin/env bash
+echo "gh $*" >> "$TOOL_LOG"
+case "$1 $2" in
+  "release download")
+    dir=""; pats=()
+    while [ $# -gt 0 ]; do case "$1" in --dir) dir="$2"; shift 2 ;; --pattern) pats+=("$2"); shift 2 ;; *) shift ;; esac; done
+    for p in "${pats[@]}"; do [ -e "$ASSETS/$p" ] || { echo "no assets match the file pattern" >&2; exit 1; }; cp "$ASSETS/$p" "$dir/"; done ;;
+  "release list") ;;
+  "api repos/"*) echo 2026-10-20T15:30:00Z ;;
+  "release create") printf '%s\n' "$@" > "$GH_LOG" ;;
+  *) echo "unexpected gh $*" >&2; exit 99 ;;
+esac
+''',
+}
+
+
+def promote_env(tmp_path, **extra):
+    shim = tmp_path / "bin"
+    if not shim.exists():
+        shim.mkdir()
+        for name, text in PROMOTE_FAKES.items():
+            (shim / name).write_text(text)
+            (shim / name).chmod(0o755)
+    return {"PATH": f"{shim}:/usr/bin:/bin", "GITHUB_REPOSITORY": "acme/notes", "GITHUB_REPOSITORY_OWNER": "acme",
+            "GITHUB_SERVER_URL": "https://github.com", "GITHUB_OUTPUT": str(tmp_path / "gh-out"), "GITHUB_STEP_SUMMARY": str(tmp_path / "summary.md"),
+            "RELEASE": REL, "GH_TOKEN": "t", "GATE_PREDICATE": "https://example.test/gate", "PROMOTION_PREDICATE": "https://example.test/promotion",
+            "TOOL_LOG": str(tmp_path / "tools.log"), "GH_LOG": str(tmp_path / "gh.log"), **extra}
+
+
+def run_promote_verify(tmp_path, record_binding, asset=None):
+    """The real verify step: the test release's assets are the manifests, a gate record and (asset) binding.yaml; the attested
+    predicate names record_binding."""
+    import hashlib
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "manifests.yaml").write_text(PROMO_MANIFESTS)
+    (assets / "gate-record.json").write_text(json.dumps({"image": PROMO_REF}))
+    if asset is not None:
+        (assets / "binding.yaml").write_text(asset)
+    predicate = {"release": REL, "status": "pass", "image": PROMO_REF, "repo": "acme/notes", "commit": PROMO_COMMIT,
+                 "manifests_sha256": hashlib.sha256(PROMO_MANIFESTS.encode()).hexdigest(), "binding": record_binding}
+    (tmp_path / "attest.jsonl").write_text(statement(**predicate) + "\n")
+    script = promote_step("Fetch and verify")["run"]
+    return subprocess.run(["bash", "-c", script], cwd=tmp_path, capture_output=True, text=True,
+                          env=promote_env(tmp_path, ASSETS=str(assets), ATTEST=str(tmp_path / "attest.jsonl")))
+
+
+def run_promote_publish(tmp_path, record_binding, binding_file=None):
+    """The real publish step, after verify: out/ holds the manifests, the attested gate record, the promotion record and maybe binding.yaml."""
+    (tmp_path / "out").mkdir(exist_ok=True)
+    (tmp_path / "out/manifests.yaml").write_text(PROMO_MANIFESTS)
+    (tmp_path / "out/gate-record.json").write_text(json.dumps({"image": PROMO_REF, "binding": record_binding}))
+    (tmp_path / "out/promotion-record.json").write_text(json.dumps({"approvals": [{"login": "boss"}], "self_approved": False,
+                                                                     "gate2_single_approver": False}))
+    if binding_file is not None:
+        (tmp_path / "out/binding.yaml").write_text(binding_file)
+    script = promote_step("Attest, tag")["run"]
+    result = subprocess.run(["bash", "-c", script], cwd=tmp_path, capture_output=True, text=True,
+                            env=promote_env(tmp_path, REF=PROMO_REF, COMMIT=PROMO_COMMIT, DIGEST="d" * 64))
+    gh = (tmp_path / "gh.log").read_text().splitlines() if (tmp_path / "gh.log").exists() else None
+    return result, gh
+
+
+def tool_log(tmp_path):
+    return (tmp_path / "tools.log").read_text() if (tmp_path / "tools.log").exists() else ""
+
+
+NAMED = {"path": "bindings/acme/notes.yaml", "sha256": BINDING_SHA}
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq not installed")
+class TestPromoteCarriesTheBinding:
+    def test_a_named_binding_is_downloaded_and_checked_against_the_attested_record(self, tmp_path):
+        result = run_promote_verify(tmp_path, NAMED, asset=BINDING_TEXT)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert (tmp_path / "out/binding.yaml").read_text() == BINDING_TEXT
+        assert "--pattern binding.yaml" in tool_log(tmp_path)
+
+    def test_no_binding_downloads_nothing(self, tmp_path):
+        result = run_promote_verify(tmp_path, None, asset=BINDING_TEXT)  # even when the test release somehow carries one
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert not (tmp_path / "out/binding.yaml").exists() and "binding.yaml" not in tool_log(tmp_path)
+
+    @pytest.mark.parametrize("record_binding,asset", [
+        (NAMED, None),  # named but not on the test release
+        (NAMED, BINDING_TEXT + "# changed\n"),  # on the release but not the attested file
+        ({"path": "bindings/acme/notes.yaml", "sha256": "x"}, BINDING_TEXT),
+        ({"path": "bindings/acme/notes.yaml"}, BINDING_TEXT),
+    ], ids=["missing", "mismatch", "bad-sha", "no-sha"])
+    def test_a_missing_or_different_binding_fails_the_verify_step(self, tmp_path, record_binding, asset):
+        result = run_promote_verify(tmp_path, record_binding, asset=asset)
+        assert result.returncode != 0 and "::error::" in result.stdout
+        assert "ref=" not in ((tmp_path / "gh-out").read_text() if (tmp_path / "gh-out").exists() else "")
+
+    def test_the_prod_release_attaches_the_named_binding(self, tmp_path):
+        result, gh = run_promote_publish(tmp_path, NAMED, binding_file=BINDING_TEXT)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert release_assets(gh) == ["out/manifests.yaml", "out/gate-record.json", "out/promotion-record.json", "out/binding.yaml"]
+        assert f"- Binding: bindings/acme/notes.yaml (sha256 {BINDING_SHA})" in "\n".join(release_notes(gh))
+
+    def test_the_prod_release_attaches_nothing_more_without_a_binding(self, tmp_path):
+        result, gh = run_promote_publish(tmp_path, None)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert release_assets(gh) == ["out/manifests.yaml", "out/gate-record.json", "out/promotion-record.json"]
+        assert "- Binding: no binding" in "\n".join(release_notes(gh))
+
+    @pytest.mark.parametrize("record_binding,binding_file", [
+        (NAMED, None),
+        (NAMED, BINDING_TEXT + "# changed\n"),
+        (None, BINDING_TEXT),
+        ({"path": "bindings/acme/notes.yaml\n- Image: evil", "sha256": BINDING_SHA}, BINDING_TEXT),
+    ], ids=["not-downloaded", "other-file", "not-recorded", "line-break"])
+    def test_a_record_and_file_that_disagree_stop_before_anything_is_signed(self, tmp_path, record_binding, binding_file):
+        result, gh = run_promote_publish(tmp_path, record_binding, binding_file=binding_file)
+        assert result.returncode != 0 and gh is None and "::error::" in result.stdout
+        assert "cosign" not in tool_log(tmp_path) and "docker" not in tool_log(tmp_path)

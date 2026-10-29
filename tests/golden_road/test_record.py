@@ -267,3 +267,12 @@ def test_schema_requires_gate2_single_approver_boolean():
     assert validate("promotion-record.v1", {k: v for k, v in record.items() if k != "gate2_single_approver"})
     assert validate("promotion-record.v1", {**record, "gate2_single_approver": "false"})
     assert validate("promotion-record.v1", {**record, "gate2_single_approver": 0})
+
+
+def test_the_gate_record_names_the_binding_or_none():
+    with_binding = gate(binding={"path": "bindings/acme/notes.yaml", "sha256": "c" * 64})
+    assert with_binding["binding"] == {"path": "bindings/acme/notes.yaml", "sha256": "c" * 64}
+    assert validate("gate-record.v1", with_binding) == []
+    assert gate()["binding"] is None
+    with pytest.raises(InputError):
+        gate(binding={"path": "../evil.yaml", "sha256": "c" * 64})

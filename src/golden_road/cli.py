@@ -17,6 +17,7 @@ from .gate import evaluate, load_overrides
 from .io import InputError, load_findings, load_json, write_json, write_text_atomic
 from .normalize import from_builder_result, normalize_sarif
 from .preflight import case_collisions, forged_guard_markers
+from .render import load_binding
 from .render import render as render_manifests
 from .summary import annotations
 from .summary import render as render_summary
@@ -91,6 +92,8 @@ def _parser() -> argparse.ArgumentParser:
     rn.set_defaults(handler=_cmd_render)
     rn.add_argument("--repo-root", required=True, type=Path)
     rn.add_argument("--image", required=True)
+    rn.add_argument("--binding", type=Path, default=None, help="the app's binding (binding/v1) the release fetched from the factory")
+    rn.add_argument("--repo", default=None, help="OWNER/REPO being released; the binding must name exactly this repo")
     rn.add_argument("--output", required=True, type=Path)
     rc = sub.add_parser("record")
     rc.set_defaults(handler=_cmd_record)
@@ -99,6 +102,7 @@ def _parser() -> argparse.ArgumentParser:
     rc.add_argument("--manifests", required=True, type=Path)
     for flag in ("--drift", "--checks", "--authz"):
         rc.add_argument(flag, required=True, type=Path)
+    rc.add_argument("--binding", type=Path, default=None, help="the binding render used; the record names its path and sha256")
     rc.add_argument("--output", required=True, type=Path)
     pr = sub.add_parser("promotion-record")
     pr.set_defaults(handler=_cmd_promotion_record)
@@ -242,15 +246,27 @@ def _cmd_render(args) -> int:
     app_name = spec.get("app_name") if isinstance(spec, dict) else None
     if not isinstance(app_name, str):
         raise InputError("builder-spec.json has no app_name")
-    write_text_atomic(args.output, render_manifests(args.repo_root, args.image, app_name))
+    if args.binding is not None and not args.repo:
+        raise InputError("--binding needs --repo, the repository the binding must name")
+    binding = load_binding(args.binding, args.repo) if args.binding is not None else None
+    write_text_atomic(args.output, render_manifests(args.repo_root, args.image, app_name, binding=binding))
     return EXIT_PASS
+
+
+def _binding_ref(args):
+    """The gate record's {path, sha256} for the binding, checked as render checks it so the record never names one render refused."""
+    if args.binding is None:
+        return None
+    load_binding(args.binding, args.repo)
+    owner, name = args.repo.split("/")
+    return {"path": f"bindings/{owner}/{name}.yaml", "sha256": _sha256_file(args.binding)}
 
 
 def _cmd_record(args) -> int:
     result = record.build_gate_record(
         repo=args.repo, commit=args.commit, image=args.image, builder_image=args.builder_image,
         drift=load_json(args.drift), checks=load_json(args.checks), authz=load_json(args.authz),
-        created=_now(), release=args.release, manifests_sha256=_sha256_file(args.manifests))
+        created=_now(), release=args.release, manifests_sha256=_sha256_file(args.manifests), binding=_binding_ref(args))
     write_json(args.output, result)
     return EXIT_PASS if result["status"] == "pass" else EXIT_FAIL
 

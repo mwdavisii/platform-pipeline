@@ -75,3 +75,14 @@ def test_mixed_python_and_node_asks(make_app):
     out = detect(make_app({"app.py": "", "package.json": "{}"}))
     assert out["draft_spec"]["app_type"] is None
     assert any("python or node" in q for q in out["questions"])
+
+
+def test_the_draft_leaves_out_names_the_platform_sets(make_app):
+    root = make_app({
+        "main.py": 'import os\nA = os.environ["AZURE_CLIENT_ID"]\nB = os.getenv("DATABRICKS_HOST")\nM = os.environ["APP_MODE"]\nH = os.environ["HOME"]\n',
+    })
+    out = detect(root)
+    assert out["draft_spec"]["env"] == [{"name": "APP_MODE", "secret": False}]
+    assert out["needs"]["env"] == ["APP_MODE", "AZURE_CLIENT_ID", "DATABRICKS_HOST", "HOME"]
+    assert out["needs"]["set_by_platform"] == ["AZURE_CLIENT_ID", "DATABRICKS_HOST", "HOME"]
+    assert any("AZURE_CLIENT_ID" in q and "DATABRICKS_HOST" in q and "binding" in q for q in out["questions"])

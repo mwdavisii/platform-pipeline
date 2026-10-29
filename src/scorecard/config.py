@@ -220,6 +220,25 @@ def gate1_list(factory, config: dict | None = None) -> list[dict]:
 INTAKE_SCHEMAS = {"intake/v1": "intake.v1", "intake/v2": "intake.v2"}  # intake/v2 is what the portal's writer records
 
 
+def load_binding(factory, repo: str) -> dict | None:
+    """The app's binding (binding/v1, written by the portal's writer), or None when it has none. A binding needs the app's intake
+    record: the portal links connections only to registered apps."""
+    owner, name = repo_parts(repo)
+    path = Path(factory) / "bindings" / owner / f"{name}.yaml"
+    if not _is_file(path):
+        return None
+    doc = _checked(path, "binding.v1")
+    if doc["repo"] != repo:
+        raise InputError(f"{path} is for {doc['repo']}, not {repo}")
+    try:
+        intake = load_intake(factory, repo)
+    except InputError:  # the intake record's own error is reported where the intake record is checked
+        raise InputError(f"{path} has no valid intake record: fix intake/{repo}.yaml before linking its connections") from None
+    if intake is None:
+        raise InputError(f"{path} has no intake record: register {repo} before linking its connections")
+    return doc
+
+
 def load_intake(factory, repo: str) -> dict | None:
     """The intake record (intake/v1, or intake/v2 as the portal writes it), or None when the repo has none (trigger T-8)."""
     owner, name = repo_parts(repo)

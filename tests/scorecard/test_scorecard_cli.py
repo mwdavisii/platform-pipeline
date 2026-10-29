@@ -836,7 +836,7 @@ def check_factory(factory, capsys):
 
 def test_check_factory_passes_a_good_factory_and_counts_its_records(factory, capsys):
     code, out, err = check_factory(factory, capsys)
-    assert code == 0 and err is None and json.loads(out) == {"intake": 2, "na": 1, "suppressions": 1}
+    assert code == 0 and err is None and json.loads(out) == {"intake": 2, "na": 1, "suppressions": 1, "bindings": 0}
 
 
 def test_check_factory_accepts_an_intake_v2_record(factory, capsys):

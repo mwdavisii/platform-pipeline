@@ -112,10 +112,10 @@ def test_no_sample_is_a_live_record():
 def assert_codeowners_protect_the_records(factory):
     lines = [l.split() for l in (Path(factory) / ".github/CODEOWNERS").read_text().splitlines() if l.strip() and not l.startswith("#")]
     owners = {line[0]: line[1:] for line in lines}
-    assert set(owners) == {"*", "/intake/", "/suppressions/", "/na/", "/config/registration.yaml"}
+    assert set(owners) == {"*", "/intake/", "/bindings/", "/suppressions/", "/na/", "/config/registration.yaml"}
     assert all(o for o in owners.values())
     if all(o.count("/") == 1 for os_ in owners.values() for o in os_):  # every owner is an @org/team: security must be a different team
-        for path in ("/intake/", "/suppressions/", "/na/", "/config/registration.yaml"):
+        for path in ("/intake/", "/bindings/", "/suppressions/", "/na/", "/config/registration.yaml"):
             assert owners[path] != owners["*"], f"{path} needs the security team, not only platform review"
     else:  # owners are users (a personal account, or single-approver mode): one set of people may own everything, but every path must be listed
         assert not any("/" in o[1:] for os_ in owners.values() for o in os_)
@@ -712,3 +712,13 @@ def test_the_readme_names_the_registration_rules_and_the_0_3_11_pin_rule():
     text = " ".join((FACTORY / "README.md").read_text().split())
     assert "`config/registration.yaml`" in text and "`registration-rules/v1`" in text
     assert "Builder 0.3.11 requires `config/registration.yaml`" in text and "same pull request" in text
+
+
+def test_bindings_are_owned_by_security():
+    owners = (FACTORY / ".github/CODEOWNERS").read_text().splitlines()
+    rule = next(l.split() for l in owners if l.startswith("/bindings/ "))
+    if "ORG_PLACEHOLDER" in "\n".join(owners) or "/" in rule[1][1:]:  # team owners: the security team, as for /intake/
+        assert rule[1:] == next(l.split() for l in owners if l.startswith("/intake/ "))[1:]
+    assert (FACTORY / "bindings/README.md").is_file()
+    from scorecard.cli import _records
+    assert list(_records(FACTORY, "bindings")) == []  # the README is allowed directly under bindings/, and there are no live records

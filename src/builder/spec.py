@@ -127,7 +127,15 @@ RESERVED_ENV_PREFIXES = {
     "UVICORN_": "UVICORN_* variables change how the server starts and can't be set from config; the platform sets the server command",
     "NODE_": "NODE_* variables change how Node loads code and can't be set from config",
     "NPM_": "NPM_* variables change how npm runs and can't be set from config",
+    "AZURE_": "AZURE_* variables are set by the platform from the app's binding (its Azure identity, linked in the portal), never from builder-spec.json",
+    "DATABRICKS_": "DATABRICKS_* variables are set by the platform from the app's binding (its Databricks connection, linked in the portal), never from builder-spec.json",
 }
+BINDING_ENV_PREFIXES = ("AZURE_", "DATABRICKS_")
+
+
+def reserved_reason(name: str) -> str | None:
+    """Why the platform owns this env name, or None when builder-spec.json may declare it."""
+    return RESERVED_ENV.get(name) or next((why for prefix, why in RESERVED_ENV_PREFIXES.items() if name.startswith(prefix)), None)
 
 
 def _env_errors(spec: dict) -> list[str]:
@@ -137,7 +145,7 @@ def _env_errors(spec: dict) -> list[str]:
         if name in seen:
             errors.append(f"env name {name} is listed more than once. Each variable can be declared only once.")
         seen.add(name)
-        reason = RESERVED_ENV.get(name) or next((why for prefix, why in RESERVED_ENV_PREFIXES.items() if name.startswith(prefix)), None)
+        reason = reserved_reason(name)
         if reason:
             errors.append(f"env name {name} is reserved: {reason}.")
     return errors

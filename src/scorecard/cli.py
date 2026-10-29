@@ -20,7 +20,7 @@ from .agent.runner import assess
 from .blocking import override_by
 from .build import NotAssessed, agent_scope, build_scorecard, prepare
 from .asvs import check_ids, load_asvs
-from .config import engine, gate1_list, load_config, load_confirmed_na, load_intake, load_registration_rules, runner_env
+from .config import engine, gate1_list, load_binding, load_config, load_confirmed_na, load_intake, load_registration_rules, runner_env
 from .factory_digest import factory_digest
 from .observations import checks_from_doc, checks_sha
 from .precondition import RERUN_HINT, not_assessed
@@ -157,10 +157,10 @@ def _cmd_poll(args, registry, model) -> int:
 
 
 def _symlinks(factory: Path) -> list[str]:
-    """Every symlink under config/, intake/, na/ and suppressions/ (the directories themselves included), found the way the
-    intake action looks for them, and every directory the scan could not enter. Links are never followed."""
+    """Every symlink under config/, intake/, na/, suppressions/ and bindings/ (the directories themselves included), found the
+    way the intake action looks for them, and every directory the scan could not enter. Links are never followed."""
     problems = []
-    for kind in ("config", "intake", "na", "suppressions"):
+    for kind in ("config", "intake", "na", "suppressions", "bindings"):
         top = factory / kind
         if top.is_symlink():
             problems.append(f"{kind} is a symlink")
@@ -217,7 +217,7 @@ def _cmd_factory_digest(args, registry, model) -> int:
 def _cmd_check_factory(args, registry, model) -> int:
     """Every problem in the factory, found with the loaders the scorecard uses, so a bad record fails the factory's own pull
     request instead of sending an app (or every app) to "not assessed"."""
-    factory, problems, counts = args.factory, [], {"intake": 0, "na": 0, "suppressions": 0}
+    factory, problems, counts = args.factory, [], {"intake": 0, "na": 0, "suppressions": 0, "bindings": 0}
     config, warnings = None, []
     problems += _symlinks(factory)
     try:
@@ -249,6 +249,8 @@ def _cmd_check_factory(args, registry, model) -> int:
                     entries = load_confirmed_na(factory, repo)
                     if config and requirements:
                         check_ids(requirements, config, entries)
+                elif kind == "bindings":
+                    load_binding(factory, repo)
                 else:
                     load_suppressions(factory, repo)
                 counts[kind] += 1

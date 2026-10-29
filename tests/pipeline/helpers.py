@@ -179,8 +179,9 @@ def unconfigure_hello_app(app_dir):
 COMMITTED_FACTORY_CODEOWNERS = """\
 # The factory decides how every app's pull requests are classified, so every change needs a platform owner's review.
 * @ORG_PLACEHOLDER/platform-reviewers
-# An app's tier and purpose, its accepted findings, and its confirmed N/A requirements are the security team's call.
+# An app's tier and purpose, its accepted findings, its confirmed N/A requirements, and which identity and data connection it runs with, are the security team's call.
 /intake/ @ORG_PLACEHOLDER/security
+/bindings/ @ORG_PLACEHOLDER/security
 /suppressions/ @ORG_PLACEHOLDER/security
 /na/ @ORG_PLACEHOLDER/security
 /config/registration.yaml @ORG_PLACEHOLDER/security

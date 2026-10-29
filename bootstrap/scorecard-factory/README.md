@@ -13,10 +13,11 @@ App authors have no write access here. Everything an app could otherwise influen
 | `config/scorecard.yaml` | Tier and classification to ASVS level, the level floor, the triggers, the Gate 1 checks, the reviewer teams, the review agent's model, gateway and budget |
 | `config/registration.yaml` | `registration-rules/v1`: the minimum tier and classification the portal computes for a registration from the repo itself (no spec means `high` and `restricted`). The scorecard reads it too, for T-21. Security owns it. A change is a reviewed pull request. |
 | `intake/<owner>/<repo>.yaml` | The app's `tier`, `purpose`, `owner` and `data_classification`: `intake/v1`, or `intake/v2` as the golden road portal's writer records it (the owner of record is a portal person, plus who registered and approved it, when and why, and a review date). The only source of the purpose. No intake record means `security_review` (T-8) |
+| `bindings/<owner>/<repo>.yaml` | `binding/v1`: the Azure identity and Databricks connection the app runs with, as the golden road portal's writer records them when the app's admin picks them on the app's page. The release renders it into the app's signed manifests (a workload identity and plain environment variables, no secrets). `factory-check` refuses a binding without the app's intake record (see `bindings/README.md`) |
 | `na/<owner>/<repo>.yaml` | ASVS requirements a person confirmed do not apply (see `na/README.md`) |
 | `suppressions/<owner>/<repo>/*.json` | Accepted scorecard findings, at most 90 days each (see `suppressions/README.md`) |
 | `.github/workflows/factory-check.yml` | This repo's own check: on every pull request here it loads the config and every record with the scorecard's own loaders, so a typo can't send an app to "not assessed". The ruleset requires it |
-| `.github/CODEOWNERS`, `.github/rulesets/main.json` | Platform review for everything; security review for `intake/`, `suppressions/` and `na/`; a protected `main` |
+| `.github/CODEOWNERS`, `.github/rulesets/main.json` | Platform review for everything; security review for `intake/`, `bindings/`, `suppressions/` and `na/`; a protected `main` |
 
 The scorecard code itself is not here. It ships inside the platform's builder image, pinned by digest in `BUILDER_IMAGE` at the top of `scorecard.yml`, together with the ASVS 5.0.0 requirements and the review prompts (each checked by SHA-256 when loaded). Nothing the workflow runs comes from the pull request.
 

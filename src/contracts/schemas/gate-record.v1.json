@@ -193,6 +193,38 @@
           }
         }
       ]
+    },
+    "binding": {
+      "description": "The app's binding the release rendered (bindings/<owner>/<repo>.yaml from the factory's main) and its sha256, or null for none.",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "sha256"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "pattern": "^bindings/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\\.yaml$",
+              "not": {
+                "pattern": "[\\r\\n]"
+              }
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$",
+              "not": {
+                "pattern": "[\\r\\n]"
+              }
+            }
+          }
+        }
+      ]
     }
   },
   "$defs": {

@@ -16,7 +16,7 @@ def _authz_ok(authz) -> bool:
     return status == "not-declared" or (type(authz.get("denied")) is int and authz["denied"] >= 1)
 
 
-def build_gate_record(*, repo, commit, image, builder_image, drift, checks, authz, created, release, manifests_sha256) -> dict:
+def build_gate_record(*, repo, commit, image, builder_image, drift, checks, authz, created, release, manifests_sha256, binding=None) -> dict:
     if validate("gate-result.v1", drift):
         raise InputError("drift input is not a gate result")
     if not isinstance(checks, dict) or not isinstance(checks.get("required_checks"), list) \
@@ -39,6 +39,7 @@ def build_gate_record(*, repo, commit, image, builder_image, drift, checks, auth
         "required_checks": checks["required_checks"],
         "authz_probe": authz,
         "created": created,
+        "binding": binding,
     }
     errors = validate("gate-record.v1", record)
     if errors:

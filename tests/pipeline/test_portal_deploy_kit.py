@@ -191,6 +191,11 @@ REQUIRED = {
 }
 
 
+# Settings a process may go without that the kit still passes (from the ConfigMap, where an empty value means unset).
+OPTIONAL_PASSED = {"web": {"PORTAL_DIRECTORY", "PORTAL_IDENTITY_PROCESS_URL", "PORTAL_DATA_PROCESS_URL", "PORTAL_REPO_ADMINS_STALE_AFTER"},
+                   "writer": {"PORTAL_DIRECTORY", "PORTAL_REPO_ADMINS_STALE_AFTER"}}
+
+
 def provided(built, o):
     """name -> where each env var of the pod's one container comes from; config keys must exist in the generated ConfigMap."""
     out = {}
@@ -213,7 +218,7 @@ def test_the_env_the_kit_provides_is_what_each_process_requires(built):
             "collector": ("Deployment", "golden-road-portal-collector"), "migrate": ("Job", "golden-road-portal-migrate")}
     for proc, k in pods.items():
         have = {n for n in provided(built, built[k]) if n.startswith("PORTAL_")}
-        need = REQUIRED[proc]()
+        need = REQUIRED[proc]() | OPTIONAL_PASSED.get(proc, set())
         assert need and have == need, (proc, sorted(have ^ need))
     assert REQUIRED["web"]() == {"PORTAL_BASE_URL", "PORTAL_ORG", "PORTAL_GITHUB_HOST", "PORTAL_OIDC_ISSUER", "PORTAL_OIDC_CLIENT_ID",
                                  "PORTAL_OIDC_CLIENT_SECRET", "PORTAL_ROLE_GROUPS", "PORTAL_GITHUB_OAUTH_CLIENT_ID",
@@ -271,6 +276,25 @@ def test_the_configmap_holds_the_poc_values_and_placeholders(built):
     for name in ["PORTAL_WRITE_APP_ID", "PORTAL_WRITE_INSTALLATION_ID", "PORTAL_READ_APP_ID", "PORTAL_READ_INSTALLATION_ID"]:
         assert name in data
     assert "replace-me" in data["PORTAL_MODEL_GATEWAY_HOSTS"]  # the platform's model_gateway_hosts: the operator sets it
+
+
+@needs_kustomize
+def test_the_kit_s_writer_gets_the_directory_setting_the_web_gets(built):
+    """The web shows a binding from the directory and the writer re-checks it against the same one: both read the same key."""
+    web = provided(built, built[("Deployment", "golden-road-portal")])
+    writer = provided(built, built[("Deployment", "golden-road-portal-writer")])
+    assert web["PORTAL_DIRECTORY"] == writer["PORTAL_DIRECTORY"] == ("config", "PORTAL_DIRECTORY")
+    assert web["PORTAL_REPO_ADMINS_STALE_AFTER"] == writer["PORTAL_REPO_ADMINS_STALE_AFTER"] == ("config", "PORTAL_REPO_ADMINS_STALE_AFTER")
+    data = built[("ConfigMap", "golden-road-portal-config")]["data"]
+    assert data["PORTAL_REPO_ADMINS_STALE_AFTER"] == "", "empty: the default (600 seconds) for both"
+    assert data["PORTAL_DIRECTORY"] == "" and data["PORTAL_IDENTITY_PROCESS_URL"] == "" and data["PORTAL_DATA_PROCESS_URL"] == "", \
+        "off until the SRE turns it on (personal-poc 19)"
+
+
+def test_the_kit_s_writer_yaml_passes_the_directory_setting():
+    writer = yaml.safe_load((KIT / "writer.yaml").read_text())
+    names = [e["name"] for c in writer["spec"]["template"]["spec"]["containers"] for e in c.get("env", [])]
+    assert "PORTAL_DIRECTORY" in names
 
 
 def test_no_secret_object_or_value_is_in_the_kit():

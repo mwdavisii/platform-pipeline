@@ -488,8 +488,8 @@ find . -name __pycache__ -prune -exec rm -rf {} +
 jq -r '.required[] | "  - " + tostring' platform/required-checks.json > ../gate1-extra.txt
 sed -i '/name: "golden-road \/ preview"/r ../gate1-extra.txt' bootstrap/scorecard-factory/config/scorecard.yaml
 <src>/.venv/bin/python -c 'import json, pathlib, sys; p = pathlib.Path(sys.argv[1]); p.write_text(p.read_text().replace("version: pinned-1}", "version: " + json.dumps(sys.argv[2]) + "}"))' bootstrap/scorecard-factory/config/scorecard.yaml '<model version string>'
-printf '%s\n' '* @<you> @<deputy>' '/intake/ @<you> @<deputy>' '/suppressions/ @<you> @<deputy>' '/na/ @<you> @<deputy>' '/config/registration.yaml @<you> @<deputy>' > bootstrap/scorecard-factory/.github/CODEOWNERS
-# Single-approver mode: printf '%s\n' '* @<you>' '/intake/ @<you>' '/suppressions/ @<you>' '/na/ @<you>' '/config/registration.yaml @<you>' > bootstrap/scorecard-factory/.github/CODEOWNERS
+printf '%s\n' '* @<you> @<deputy>' '/intake/ @<you> @<deputy>' '/bindings/ @<you> @<deputy>' '/suppressions/ @<you> @<deputy>' '/na/ @<you> @<deputy>' '/config/registration.yaml @<you> @<deputy>' > bootstrap/scorecard-factory/.github/CODEOWNERS
+# Single-approver mode: printf '%s\n' '* @<you>' '/intake/ @<you>' '/bindings/ @<you>' '/suppressions/ @<you>' '/na/ @<you>' '/config/registration.yaml @<you>' > bootstrap/scorecard-factory/.github/CODEOWNERS
 ```
 **Check:** `grep -n 'gate1_checks:' -A8 bootstrap/scorecard-factory/config/scorecard.yaml` lists drift, preview and then every entry of `platform/required-checks.json`; `grep -n 'model:' bootstrap/scorecard-factory/config/scorecard.yaml` prints `model: {version: "<your version string>"}` (no `pinned-1`); `PYTHONPATH=src <src>/.venv/bin/pytest -q tests/pipeline/test_scorecard_factory.py tests/kit` passes (the factory test accepts a changed model version and the extra Gate 1 entries, and checks that `gate1_checks` covers every required check; the kit tests run against the configured kit); and `grep -rn 'replace-me\|ORG_PLACEHOLDER' platform bootstrap` prints nothing. (The factory's `BUILDER_IMAGE` still has the all-zero digest; it is pinned below.)
 
@@ -1161,7 +1161,7 @@ Work on a branch of `<you>/scorecard-factory`. Every step below goes into this o
    ```bash
    docker run --rm --network none --read-only --tmpfs /tmp --user "$(id -u):$(id -g)" -v "$PWD:/factory:ro" "$BUILDER_IMAGE" scorecard check-factory --factory /factory
    ```
-   **Check:** it prints one line of counts (`{"intake": ..., "na": ..., "suppressions": ...}`), with no `error` and no `warnings`. A refusal names the file and the problem: fix it and run again. A `warnings` list (a fact no rule uses) does not fail, but read it.
+   **Check:** it prints one line of counts (`{"intake": ..., "na": ..., "suppressions": ..., "bindings": ...}`), with no `error` and no `warnings`. A refusal names the file and the problem: fix it and run again. A `warnings` list (a fact no rule uses) does not fail, but read it.
 8. Open the pull request. **Check:** `factory-check` passes. Merge it.
 
 ### 17.2 Check it on a pull request
@@ -1210,6 +1210,55 @@ An open PR gets the check at its next assessment: push to it. If the API rejects
 ### 18.4 Roll back
 Delete the ruleset, for each app: `gh api -X DELETE repos/<you>/<app>/rulesets/$(gh api repos/<you>/<app>/rulesets --jq '.[] | select(.name=="scorecard-findings") | .id')`. The check is still posted and no longer holds anything.
 
+## 19. App connections (mock)
+Each app gets a page in the portal with two options, "Associate Azure Identity" and "Enable Databricks Connection". You pick from a directory, and the portal's writer records the choice in the factory as `bindings/<owner>/<repo>.yaml`. The next release adds what the binding says to the signed manifests: the workload identity's client ID on the service account, plain `AZURE_*` and `DATABRICKS_*` env vars, and egress to the hosts they need.
+
+### 19.0 What changes
+In the PoC the directory is a dummy one, the portal's `mock_directory.json`: three service principals and three warehouses, each tagged for a repo or granted to a principal. Nothing calls Azure or Databricks. The demo proves the path from the page to the manifests, not that the identity works. `DATABRICKS_HOST` is a bare hostname (`adb-<id>.<n>.azuredatabricks.net`, no `https://`): an app that needs a URL adds the scheme itself.
+
+Requirements: a builder release that carries bindings (the lead's version bump; this section names no number), released as in 13.2. `hello-app` has its intake record (13), and the portal runs from `deploy-kits/portal-homelab` with its writer (13.8).
+
+### 19.1 Roll out
+1. Release the builder as in 13.2. That release reserves the env names that start with `AZURE_` or `DATABRICKS_`: an app whose `builder-spec.json` declares one fails drift on that release, so rename it in the app before you move the app to it.
+2. One factory PR: move the four `BUILDER_IMAGE` pins to the new release (as in 16.3), and add the owner of the bindings to `.github/CODEOWNERS`, after the `*` line:
+   ```bash
+   printf '%s\n' '/bindings/ @<you>' >> .github/CODEOWNERS
+   ```
+   (In single-approver mode that is you; with a deputy, add `@<deputy>` too.) **Check:** `factory-check` passes, and its counts line has `"bindings": 0`. Merge it. Do this before the first binding: an older `factory-check` doesn't read `bindings/`, so it would pass a file it can't check.
+3. Bump `hello-app` and the portal to the new builder (regenerate and merge their PRs, as in 14.6).
+4. Turn the connections on in the portal. In the kit's `kustomization.yaml` set `PORTAL_DIRECTORY=mock` (empty means off). The web and the writer read the same key, so they can't differ; the same goes for `PORTAL_REPO_ADMINS_STALE_AFTER`. Optionally set `PORTAL_IDENTITY_PROCESS_URL` and `PORTAL_DATA_PROCESS_URL` to pages that say how to ask for a principal or a grant. Release the portal and roll it out as in the kit README's "Upgrade": the release brings migration 0006.
+   Migration 0006 is forward-only (there is no down migration). An older portal image still handles registrations on a database at 0006, but its writer fails every binding request it claims. So don't roll the image back once bindings exist; if you must, expect open binding requests to fail, and link them again after rolling forward.
+   **Check:** the portal starts (a bad `PORTAL_DIRECTORY` stops it at startup), and `/admin/directory` lists the mock directory.
+
+### 19.2 The demo
+1. Sign in. My requests lists `hello-app` under My apps (you are its admin as the collector sees it). Open its page.
+2. Under "Associate Azure Identity" pick `sp-hello-app` and submit. **Check:** the page says a change is pending; the writer opens a PR to the factory that adds `bindings/<you>/hello-app.yaml`, and merges it once `factory-check` passes; the page then shows `sp-hello-app` as linked.
+3. Under "Enable Databricks Connection" pick `wh-notes-readonly` and submit. **Check:** the same flow, and the writer's PR modifies the file (one file, `modified`).
+4. Merge a small change to `hello-app`'s `main` (a README PR, as in 12, item 3), so the release runs. Then:
+   ```bash
+   gh release download <test tag> --repo <you>/hello-app -p manifests.yaml -p gate-record.json -p binding.yaml
+   grep -n 'AZURE_CLIENT_ID\|DATABRICKS_HOST\|azure.workload.identity' manifests.yaml
+   jq .binding gate-record.json && sha256sum binding.yaml
+   ```
+   **Check:** the grep shows the env vars (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `DATABRICKS_HOST`, `DATABRICKS_HTTP_PATH` and the catalog and schema), the pod label `azure.workload.identity/use: "true"` and the service account's `azure.workload.identity/client-id` annotation. The CiliumNetworkPolicy allows `login.microsoftonline.com` and the workspace host on 443. The gate record's `binding` names `bindings/<you>/hello-app.yaml` with the same sha256 as `binding.yaml`, and the release notes have the same "Binding:" line.
+5. Promote that release (Gate 2, as in 12, item 5). **Check:** the prod release carries the same manifests and the same `binding.yaml` (promote checks it against the sha256 in the attested gate record, and fails before signing if it is missing or differs), and its notes have the same "Binding:" line. Promote ships the binding the test release recorded: a change on the page after the test release (an unlink, say) reaches prod only with the next release.
+
+### 19.3 What is refused
+- `/admin/directory` lists `sp-finance-reports` (tagged for `finance-reports`), but `hello-app`'s page doesn't offer it. A hand-made POST to the page's form with it is refused ("This principal isn't tagged for <you>/hello-app."); the portal's tests cover it.
+- `wh-finance` is never offered: it isn't granted to `sp-hello-app`.
+- A `hello-app` PR whose `builder-spec.json` declares `AZURE_CLIENT_ID` fails drift ("env name AZURE_CLIENT_ID is reserved: AZURE_* variables are set by the platform from the app's binding ...").
+- If the release can't read the factory, it goes on with no binding and says so: a warning, and "Binding: none (the factory <you>/scorecard-factory could not be read)" in the release notes.
+
+### 19.4 Proof items (record the results)
+1. The writer's two factory PRs (added, then modified) and their `factory-check` runs.
+2. The grep output of 19.2, step 4, the gate record's `binding` and the release notes' "Binding:" line.
+3. The refusal of the hand-made POST, and `/admin/directory` listing `sp-finance-reports`.
+4. The drift failure for a declared `AZURE_CLIENT_ID`.
+5. After 19.5: the next release has "Binding:" with the new sha256 and no `AZURE_` or `DATABRICKS_` lines in `manifests.yaml`.
+
+### 19.5 Roll back
+On the app's page remove the Azure identity: that removes the Databricks connection too, and the writer rewrites the file with neither (who unlinked it and when stay on record; the file is never deleted). The next release adds nothing. To turn the page off, empty `PORTAL_DIRECTORY` and restart the pods (the kit README's "Change a setting"). Keep the portal image: migration 0006 stays (19.1, step 4).
+
 ## PoC gaps to record
 - The scans are open-source reference scans (Semgrep CE with a small vendored rule set plus `p/default`, Trivy, CodeQL default setup), not the security team's tools, thresholds, or triage. Until step 11, Gate 1 waits on nothing beyond drift and the authz probe. Gate 1 sees only a CodeQL check run's conclusion, so it proves the analysis ran, not that no alert exists; the alert threshold is enforced at merge time.
 - **Scan results can be forged.** Every check that a GitHub Actions workflow posts comes from the same app (id 15368), so pinning `app_id` cannot tell the `security-scans` workflow's `security-scans / semgrep` from a job of the same name that anyone with write access adds to a workflow in `hello-app` (or by editing `security-scans.yml` to stop calling the real scans). CodeQL's results can likewise be imitated by a workflow with `security-events: write`. What holds today is code-owner review of `.github/` and a deputy who rejects changes there. **The real fix is signed scan results**: the scan workflow signs its result with its own identity and the release verifies that signature instead of a check name. It is out of scope for this PoC.
@@ -1232,6 +1281,12 @@ Delete the ruleset, for each app: `gh api -X DELETE repos/<you>/<app>/rulesets/$
 - **Fixture repos are private on a personal account.** On GitHub Free they have no rulesets: doctor's `ruleset` and `pr-checks` checks warn, nothing requires their checks, and the scorecard doesn't assess them (no key).
 - **`golden-road remediate` reads the platform's PR comments,** which anyone with write access can imitate (as the checks): it treats them as evidence, never as what is failing, and never follows text in them.
 - **Windows is supported by design but untested** until the cross-agent evaluation; the agents' personal skill folders were checked on 2026-10-22 and have moved before.
+- **App connections are checked only against the portal's mock directory** (19). Nothing proves the principal or the warehouse exists or belongs to the app.
+- **The release reads the factory's binding with the job's own token,** which works because the PoC factory is public. If it can't read the factory, the release goes on with no binding and says so.
+- **A binding is checked once, before the writer opens its PR.** The writer checks the directory entries (principal tagged, warehouse granted) and the requester's admin rights then, not again at merge: a tag, grant or admin right removed while the PR waits for its checks doesn't stop the merge.
+- **The portal doesn't pin the Host header to `PORTAL_BASE_URL`'s host.** Its trailing-slash redirect builds the `Location` from the request's Host. A separate change (a trusted-host check on that one host) closes it; it is not part of the app connections.
+- **A case-only rename of a repo leaves the old binding file behind.** The binding's path keeps the repo's name as GitHub gives it (`bindings/<owner>/<repo>.yaml`), so after renaming `Notes` to `notes` the next change writes a new file and the old-case one stays in the factory until someone deletes it by hand. The release reads only the file at the current name.
+- **The app page shows the portal's record, not the factory file.** The writer builds each change from the binding the portal last merged, so a hand edit of `bindings/<owner>/<repo>.yaml` in the factory is not shown on the page and is overwritten by the next change made there.
 
 ## If something fails
 The workflows fail closed, so a failure means no release was published. Keep the failing step's log and the command output.

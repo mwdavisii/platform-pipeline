@@ -88,6 +88,17 @@ jobs:
           want=$(jq -r .manifests_sha256 out/predicate.json)
           have=$(sha256sum out/manifests.yaml | cut -d' ' -f1)
           [ "$have" = "$want" ] || { echo "::error::manifests.yaml does not match the attested digest"; exit 1; }
+          # The app's binding goes to the prod release exactly when the attested record names one, and only as the file it names.
+          rm -f out/binding.yaml
+          if jq -e '.binding != null' out/predicate.json > /dev/null; then
+            want_binding=$(jq -r '.binding.sha256 // empty' out/predicate.json)
+            [[ "$want_binding" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::the attested gate record names a binding with no sha256"; exit 1; }
+            gh release download "$RELEASE" --repo "$GITHUB_REPOSITORY" --dir out --pattern binding.yaml \
+              || { echo "::error::the gate record names a binding but $RELEASE has no binding.yaml"; exit 1; }
+            { [ -f out/binding.yaml ] && [ ! -L out/binding.yaml ]; } || { echo "::error::binding.yaml from $RELEASE is not a regular file"; exit 1; }
+            [ "$(sha256sum out/binding.yaml | cut -d' ' -f1)" = "$want_binding" ] \
+              || { echo "::error::binding.yaml does not match the attested digest"; exit 1; }
+          fi
           cp out/predicate.json out/gate-record.json
           { echo "ref=$ref"; echo "commit=$commit"; } >> "$GITHUB_OUTPUT"
 
@@ -116,6 +127,17 @@ jobs:
         run: |
           set -euo pipefail
           digest="${REF##*@}"
+          # The binding line for the notes, and the file attached exactly when the attested record names it, read before anything is signed.
+          binding=$(jq -r 'if .binding == null then "no binding" else "\(.binding.path) (sha256 \(.binding.sha256))" end' out/gate-record.json)
+          [[ "$binding" == "no binding" || "$binding" =~ ^bindings/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.yaml\ \(sha256\ [0-9a-f]{64}\)$ ]] || { echo "::error::the gate record names no readable binding"; exit 1; }
+          assets=(out/manifests.yaml out/gate-record.json out/promotion-record.json)
+          if [ "$binding" = "no binding" ]; then
+            [ ! -e out/binding.yaml ] || { echo "::error::a binding was downloaded but the gate record names none"; exit 1; }
+          else
+            { [ -f out/binding.yaml ] && [ ! -L out/binding.yaml ]; } || { echo "::error::the gate record names a binding that was not downloaded"; exit 1; }
+            [ "$(sha256sum out/binding.yaml | cut -d' ' -f1)" = "$(jq -r .binding.sha256 out/gate-record.json)" ] || { echo "::error::binding.yaml is not the binding the gate record names"; exit 1; }
+            assets+=(out/binding.yaml)
+          fi
           existing=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName --jq '.[].tagName')
           while IFS= read -r t; do
             [[ "$t" == prod-*-"${COMMIT::7}" ]] || continue
@@ -139,9 +161,9 @@ jobs:
           poc_warning=false
           if [ "$self_approved" = "true" ] || [ "$single_mode" = "true" ]; then poc_warning=true; fi
           self_note='Single-approver PoC mode: approved by the person who triggered it. Not valid for production use.'
-          notes=$(printf 'Prod release promoted from %s.\n\n- Image: %s\n- Commit: %s\n- Commit date: %s\n- Approved by: %s\n- Deploy-ready manifests attached (identical to the test release).' "$RELEASE" "$REF" "$COMMIT" "$commit_date" "$approvers")
+          notes=$(printf 'Prod release promoted from %s.\n\n- Image: %s\n- Commit: %s\n- Commit date: %s\n- Approved by: %s\n- Binding: %s\n- Deploy-ready manifests attached (identical to the test release), and the binding when there is one.' "$RELEASE" "$REF" "$COMMIT" "$commit_date" "$approvers" "$binding")
           if [ "$poc_warning" = "true" ]; then notes+=$'\n\n'"$self_note"; fi
-          gh release create "$tag" out/manifests.yaml out/gate-record.json out/promotion-record.json \
+          gh release create "$tag" "${assets[@]}" \
             --repo "$GITHUB_REPOSITORY" --target "$COMMIT" --title "$tag" --notes "$notes"
-          { echo "### Prod release \`$tag\`"; echo "- Image: \`$REF\`"; echo "- Approved by: $approvers"; } >> "$GITHUB_STEP_SUMMARY"
+          { echo "### Prod release \`$tag\`"; echo "- Image: \`$REF\`"; echo "- Approved by: $approvers"; echo "- Binding: $binding"; } >> "$GITHUB_STEP_SUMMARY"
           if [ "$poc_warning" = "true" ]; then echo "- **$self_note**" >> "$GITHUB_STEP_SUMMARY"; fi

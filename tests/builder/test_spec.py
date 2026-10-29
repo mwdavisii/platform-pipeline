@@ -238,3 +238,16 @@ def test_duplicate_env_names_are_rejected(notes_spec, python_app):
 def test_similar_but_unreserved_env_names_pass(notes_spec, python_app, name):
     notes_spec["env"].append({"name": name, "secret": False})
     assert check(notes_spec, python_app)[0] == []
+
+
+@pytest.mark.parametrize("name", ["AZURE_CLIENT_ID", "AZURE_TENANT_ID", "AZURE_ANYTHING", "DATABRICKS_HOST", "DATABRICKS_TOKEN"])
+def test_binding_env_names_are_reserved(notes_spec, python_app, name):
+    notes_spec["env"].append({"name": name, "secret": False})
+    errors = check(notes_spec, python_app)[0]
+    assert any(f"env name {name} is reserved" in e and "binding" in e for e in errors), errors
+
+
+@pytest.mark.parametrize("name", ["AZURE", "MY_AZURE_KEY", "DATABRICKS", "AZUREAD_X"])
+def test_names_near_the_binding_prefixes_pass(notes_spec, python_app, name):
+    notes_spec["env"].append({"name": name, "secret": False})
+    assert check(notes_spec, python_app)[0] == []

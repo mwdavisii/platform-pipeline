@@ -58,6 +58,18 @@ spec:
             configMapKeyRef:
               name: golden-road-portal-config
               key: PORTAL_WRITE_INSTALLATION_ID
+        - name: PORTAL_DIRECTORY  # the directory the web links from; the writer re-checks every binding against the same one
+          valueFrom:
+            configMapKeyRef:
+              name: golden-road-portal-config
+              key: PORTAL_DIRECTORY
+              optional: true
+        - name: PORTAL_REPO_ADMINS_STALE_AFTER  # the web's limit: a binding's requester must be a recent admin of the repo
+          valueFrom:
+            configMapKeyRef:
+              name: golden-road-portal-config
+              key: PORTAL_REPO_ADMINS_STALE_AFTER
+              optional: true
         - name: PORTAL_WRITE_APP_KEY_FILE
           value: /secrets/write-app/write-app.pem
         - name: PORTAL_DATABASE_URL

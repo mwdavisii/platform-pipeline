@@ -354,13 +354,14 @@ def test_personal_poc_doc_covers_the_scans_codeql_dependabot_and_the_known_gap()
                    "Scan results can be forged", "signed scan results", "can_approve_pull_request_reviews", "Checks: Read-only", "Dry run first",
                    "GOLDEN_ROAD_SCANS_TRIVY", "rulesets --input .github/rulesets/main.json", "Base-image findings", "Gate 1 on a push",
                    "## 18. High findings hold the merge", "rulesets/scorecard-findings.json", "rule-suites",
-                   "Merge without waiting for requirements"):
+                   "Merge without waiting for requirements", "## 19. App connections (mock)", "PORTAL_DIRECTORY=mock",
+                   "sp-finance-reports", "AZURE_CLIENT_ID", "bindings/<you>/hello-app.yaml"):
         assert needle in text, needle
     steps = [int(m) for m in re.findall(r"^## (\d+)\.", text, re.M)]
-    assert steps == list(range(0, 19))
+    assert steps == list(range(0, 20))
     # the scans repo is published before hello-app is pushed, and the builder is released again only after both exist
     assert text.index("## 4. Publish `security-scans`") < text.index("## 5. Create `hello-app`") < text.index("## 11.") < text.index("## 12.")
-    assert text.index("## 13. Risk scorecard") < text.index("## 14. ") < text.index("## 16. Central AI review") < text.index("## 17. Switch the review to risk routing") < text.index("## 18. High findings hold the merge") < text.index("## PoC gaps to record")
+    assert text.index("## 13. Risk scorecard") < text.index("## 14. ") < text.index("## 16. Central AI review") < text.index("## 17. Switch the review to risk routing") < text.index("## 18. High findings hold the merge") < text.index("## 19. App connections (mock)") < text.index("## PoC gaps to record")
 
 
 def test_enforcement_doc_has_neutral_rows_for_the_scans_and_the_forgery_gap():

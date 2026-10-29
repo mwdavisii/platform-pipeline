@@ -32,8 +32,13 @@ def test_the_portal_lock_pins_every_direct_dependency_with_hashes():
     assert "--hash=sha256:" in lock and "uvicorn==" in lock
 
 
+def test_the_portal_s_bindings_module_is_the_release_s():
+    """The app page shows what the release renders: the same effects(), byte for byte (spec 2026-10-29 app bindings)."""
+    assert (PORTAL / "portal/bindings.py").read_bytes() == (ROOT / "src/golden_road/bindings.py").read_bytes()
+
+
 def test_the_portal_s_vendored_schemas_are_the_contracts():
-    names = ("builder-spec.v1.json", "identity-link.v1.json", "intake.v2.json", "registration-draft.v1.json", "registration-evidence.v1.json", "registration-rules.v1.json")
+    names = ("binding.v1.json", "builder-spec.v1.json", "identity-link.v1.json", "intake.v2.json", "registration-draft.v1.json", "registration-evidence.v1.json", "registration-rules.v1.json")
     for name in names:
         assert (PORTAL / "portal/schemas" / name).read_bytes() == (ROOT / "src/contracts/schemas" / name).read_bytes(), name
     assert sorted(p.name for p in (PORTAL / "portal/schemas").glob("*.json")) == sorted(names)
@@ -131,3 +136,11 @@ def test_the_readme_lists_the_writer_s_github_calls_including_the_ones_that_trac
 def test_the_readme_names_the_actions_read_permission_and_the_merge_confirmation_rule():
     readme = " ".join((PORTAL / "README.md").read_text().split())
     assert "`actions` read" in readme and "never fails the request for want of an answer" in readme
+
+
+def test_the_portal_declares_its_directory_settings():
+    env = {e["name"]: e["secret"] for e in json.loads((PORTAL / "builder-spec.json").read_text())["env"]}
+    assert env["PORTAL_REPO_ADMINS_STALE_AFTER"] is False
+    assert env["PORTAL_DIRECTORY"] is False and env["PORTAL_IDENTITY_PROCESS_URL"] is False and env["PORTAL_DATA_PROCESS_URL"] is False
+    deployment = (PORTAL / "deploy/base/deployment.yaml").read_text()
+    assert all(f"key: {name}" in deployment for name in ("PORTAL_DIRECTORY", "PORTAL_IDENTITY_PROCESS_URL", "PORTAL_DATA_PROCESS_URL"))

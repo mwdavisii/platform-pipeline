@@ -274,3 +274,70 @@ def test_render_command_spec_not_an_object(tmp_path, doc, capsys):
     out = tmp_path / "m.yaml"
     code = main(["render", "--repo-root", str(app), "--image", "ghcr.io/org/a@sha256:" + "b" * 64, "--output", str(out)])
     assert code == 2 and "AttributeError" not in capsys.readouterr().err
+
+
+BINDING_YAML = """schema: binding/v1
+repo: acme/notes
+linked_by: p_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+linked_at: '2026-10-29T15:00:00Z'
+request: r_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+azure_identity:
+  directory_id: sp-notes
+  tenant_id: 00000000-0000-4000-8000-00000000a2e0
+  client_id: 11111111-1111-4111-8111-111111111111
+  verified_by: mock-directory
+"""
+
+
+def _golden_app(tmp_path):
+    import shutil
+    from pathlib import Path
+
+    app = tmp_path / "app"
+    shutil.copytree(Path(__file__).resolve().parents[1] / "builder/golden/python-fastapi", app)
+    return app
+
+
+def test_render_command_with_a_binding(tmp_path, capsys):
+    app, out, binding = _golden_app(tmp_path), tmp_path / "manifests.yaml", tmp_path / "binding.yaml"
+    binding.write_text(BINDING_YAML)
+    ref = "ghcr.io/org/notes-api@sha256:" + "b" * 64
+    assert main(["render", "--repo-root", str(app), "--image", ref, "--binding", str(binding), "--repo", "acme/notes", "--output", str(out)]) == 0
+    assert "AZURE_CLIENT_ID" in out.read_text() and "azure.workload.identity/client-id" in out.read_text()
+    capsys.readouterr()
+    assert main(["render", "--repo-root", str(app), "--image", ref, "--binding", str(binding), "--output", str(out)]) == 2
+    assert "--repo" in json.loads(capsys.readouterr().err)["error"] and not out.exists()
+    assert main(["render", "--repo-root", str(app), "--image", ref, "--binding", str(binding), "--repo", "acme/other", "--output", str(out)]) == 2
+    assert "not acme/other" in json.loads(capsys.readouterr().err)["error"] and not out.exists()
+    assert main(["render", "--repo-root", str(app), "--image", ref, "--binding", str(tmp_path / "missing.yaml"), "--repo", "acme/notes",
+                 "--output", str(out)]) == 2
+    assert not out.exists()
+
+
+def _record_args(tmp_path, *extra):
+    drift = write(tmp_path / "d.json", {"status": "pass", "counts": {"by_severity": {s: 0 for s in ("critical", "high", "medium", "low", "info")}, "by_layer": {}}, "blocking": [], "overrides_applied": []})
+    checks = write(tmp_path / "c.json", {"passed": True, "required_checks": []})
+    authz = write(tmp_path / "a.json", {"status": "not-declared"})
+    manifests = tmp_path / "manifests.yaml"
+    manifests.write_bytes(b"kind: Deployment\n")
+    return ["record", "--release", "test-20261020153000-ccccccc", "--manifests", str(manifests), "--repo", "acme/notes", "--commit", "c" * 40,
+            "--image", "ghcr.io/org/app@sha256:" + "d" * 64, "--builder-image", "ghcr.io/org/b@sha256:" + "e" * 64,
+            "--drift", drift, "--checks", checks, "--authz", authz, "--output", str(tmp_path / "r.json"), *extra]
+
+
+def test_record_command_names_the_binding(tmp_path):
+    import hashlib
+    binding = tmp_path / "binding.yaml"
+    binding.write_text(BINDING_YAML)
+    assert main(_record_args(tmp_path, "--binding", str(binding))) == 0
+    assert json.loads((tmp_path / "r.json").read_text())["binding"] == {
+        "path": "bindings/acme/notes.yaml", "sha256": hashlib.sha256(BINDING_YAML.encode()).hexdigest()}
+    assert main(_record_args(tmp_path)) == 0
+    assert json.loads((tmp_path / "r.json").read_text())["binding"] is None
+
+
+def test_record_command_refuses_a_binding_render_would_refuse(tmp_path):
+    binding = tmp_path / "binding.yaml"
+    binding.write_text(BINDING_YAML.replace("repo: acme/notes", "repo: acme/other"))
+    assert main(_record_args(tmp_path, "--binding", str(binding))) == 2
+    assert not (tmp_path / "r.json").exists()

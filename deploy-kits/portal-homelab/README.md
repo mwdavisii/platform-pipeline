@@ -68,6 +68,9 @@ The builder's baseline policy admits the web pods' port from the edge named in t
 | `PORTAL_READ_APP_ID`, `PORTAL_READ_INSTALLATION_ID` | collector | **REPLACE** |
 | `PORTAL_MODEL_GATEWAY_HOSTS` | collector | **REPLACE**: the platform's `model_gateway_hosts` (`platform/platform.json`), comma-separated. A host that is missing here is counted as other egress, which raises the floor the same way, so a mistake fails safe. It must equal the platform's `model_gateway_hosts`: the scorecard (T-21) reads `platform.json`, so a difference makes the portal's floor and the scorecard's floor disagree |
 | `PORTAL_WRITE_APP_ID`, `PORTAL_WRITE_INSTALLATION_ID` | writer | **REPLACE** |
+| `PORTAL_DIRECTORY` | web, writer | empty (app connections off), or `mock`: the web offers the mock directory's entries on each app's page and the writer re-checks every binding against the same directory before it writes `bindings/<owner>/<repo>.yaml` |
+| `PORTAL_REPO_ADMINS_STALE_AFTER` | web, writer | empty (the default, 600 seconds), or 60 to 604800: how old the collector's view of a person's admin repos may be for registering, approving and writing a binding. Both processes read this one key, so they can't differ |
+| `PORTAL_IDENTITY_PROCESS_URL`, `PORTAL_DATA_PROCESS_URL` | web | empty, or an `https://` page describing how security creates service principals and how analytics grants warehouses (link text on the app page) |
 
 ### Secrets (`secrets.example.yaml`, applied by you, never by the kit)
 
@@ -148,7 +151,7 @@ kubectl -n golden-road-portal wait --for=condition=complete --timeout=600s job/g
 kubectl -n golden-road-portal get pods
 ```
 
-Expect the web, writer and collector pods to roll to the new image at the same moment the migration runs, and to restart once or twice until it is done: a new pod that starts before the new migrations ran may fail and be restarted. That is the one chosen way; the writer is not scaled down. Migrations that were already applied are skipped, and one whose file changed after it was applied stops the run (then the Job fails and the pods stay on the old schema; write a new migration instead).
+Expect the web, writer and collector pods to roll to the new image at the same moment the migration runs, and to restart once or twice until it is done: a new pod that starts before the new migrations ran may fail and be restarted. That is the one chosen way; the writer is not scaled down. Migrations that were already applied are skipped, and one whose file changed after it was applied stops the run (then the Job fails and the pods stay on the old schema; write a new migration instead). Migrations are forward-only, so rolling back means an older image on a newer schema: after `0006` an older writer fails every binding request, so don't roll back once bindings exist (see the migrations paragraph of `bootstrap/golden-road-portal/README.md`).
 
 ### Change a setting
 

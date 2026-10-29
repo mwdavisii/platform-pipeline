@@ -35,6 +35,14 @@ configMapGenerator:
   - PORTAL_WRITE_INSTALLATION_ID=replace-me
   # REPLACE: the platform's model_gateway_hosts (platform/platform.json), comma-separated
   - PORTAL_MODEL_GATEWAY_HOSTS=litellm.replace-me.invalid
+  # App connections (an app's Azure identity and Databricks connection), off while empty. PORTAL_DIRECTORY=mock turns them on for
+  # the web and the writer at once; the two links are optional pages describing the owning teams' processes.
+  - PORTAL_DIRECTORY=
+  # Seconds after which the collector's view of a person's admin repos is too old to act on (60 to 604800). Empty is the default,
+  # 600. The web and the writer both read this one key, so they can't differ.
+  - PORTAL_REPO_ADMINS_STALE_AFTER=
+  - PORTAL_IDENTITY_PROCESS_URL=
+  - PORTAL_DATA_PROCESS_URL=
 
 # One image for every process: the writer, the collector and the migration job take the image of the release's web Deployment,
 # so they can never drift from it.

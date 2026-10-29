@@ -170,7 +170,10 @@ def detect(root: Path) -> dict:
         env_names = sorted((py_env | js_env) - _PLATFORM_ENV)
     else:
         hosts, env_names = [], []
-    draft["env"] = [{"name": n, "secret": bool(_SECRET_HINT.search(n))} for n in env_names]
+    from .spec import BINDING_ENV_PREFIXES, reserved_reason  # spec imports this module
+    # A name the platform sets would fail the spec check, so the draft leaves it out; needs still lists it.
+    platform_set = [n for n in env_names if reserved_reason(n)]
+    draft["env"] = [{"name": n, "secret": bool(_SECRET_HINT.search(n))} for n in env_names if n not in platform_set]
 
     gateways = ", ".join(platform["model_gateway_hosts"])
     for host in hosts:
@@ -184,12 +187,16 @@ def detect(root: Path) -> dict:
         questions.append(f"Found write endpoints ({listed}). Which roles exist, and which may write? This becomes the authz block.")
     if app_type == "node" and not node_reads_port(tree):
         questions.append("The server must listen on process.env.PORT.")
+    from_binding = [n for n in platform_set if n.startswith(BINDING_ENV_PREFIXES)]
+    if from_binding:
+        questions.append(f"The app reads {', '.join(from_binding)}. The platform sets these from the app's binding (its Azure identity and "
+                         "Databricks connection, linked on the app's page in the portal), so they are not in builder-spec.json.")
     questions.append("What data does this app handle: public, internal, restricted, or phi?")
 
     return {
         "status": "ok",
         "draft_spec": draft,
-        "needs": {"egress_hosts": hosts, "env": env_names, "routes": routes},
+        "needs": {"egress_hosts": hosts, "env": env_names, "set_by_platform": platform_set, "routes": routes},
         "warnings": warnings + tree.warnings,
         "questions": questions,
     }

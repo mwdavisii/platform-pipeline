@@ -192,8 +192,9 @@ REQUIRED = {
 
 
 # Settings a process may go without that the kit still passes (from the ConfigMap, where an empty value means unset).
-OPTIONAL_PASSED = {"web": {"PORTAL_DIRECTORY", "PORTAL_IDENTITY_PROCESS_URL", "PORTAL_DATA_PROCESS_URL", "PORTAL_REPO_ADMINS_STALE_AFTER"},
-                   "writer": {"PORTAL_DIRECTORY", "PORTAL_REPO_ADMINS_STALE_AFTER"}}
+OPTIONAL_PASSED = {"web": {"PORTAL_DIRECTORY", "PORTAL_IDENTITY_PROCESS_URL", "PORTAL_DATA_PROCESS_URL", "PORTAL_REPO_ADMINS_STALE_AFTER",
+                           "PORTAL_SECRET_SERVER", "PORTAL_SECRET_PROCESS_URL"},
+                   "writer": {"PORTAL_DIRECTORY", "PORTAL_REPO_ADMINS_STALE_AFTER", "PORTAL_SECRET_SERVER"}}
 
 
 def provided(built, o):
@@ -289,6 +290,30 @@ def test_the_kit_s_writer_gets_the_directory_setting_the_web_gets(built):
     assert data["PORTAL_REPO_ADMINS_STALE_AFTER"] == "", "empty: the default (600 seconds) for both"
     assert data["PORTAL_DIRECTORY"] == "" and data["PORTAL_IDENTITY_PROCESS_URL"] == "" and data["PORTAL_DATA_PROCESS_URL"] == "", \
         "off until the SRE turns it on (personal-poc 19)"
+
+
+@needs_kustomize
+def test_the_kit_s_writer_gets_the_secret_server_setting_the_web_gets(built):
+    """The web offers secrets from Secret Server and the writer re-checks them against the same one: both read the same key, and
+    the config map holds it and the process link empty (app secrets off until the SRE sets mock)."""
+    web = provided(built, built[("Deployment", "golden-road-portal")])
+    writer = provided(built, built[("Deployment", "golden-road-portal-writer")])
+    assert web["PORTAL_SECRET_SERVER"] == writer["PORTAL_SECRET_SERVER"] == ("config", "PORTAL_SECRET_SERVER")
+    assert web["PORTAL_SECRET_PROCESS_URL"] == ("config", "PORTAL_SECRET_PROCESS_URL") and "PORTAL_SECRET_PROCESS_URL" not in writer
+    data = built[("ConfigMap", "golden-road-portal-config")]["data"]
+    assert data["PORTAL_SECRET_SERVER"] == "" and data["PORTAL_SECRET_PROCESS_URL"] == ""
+    assert "PORTAL_SECRET_SERVER_URL" not in data and "PORTAL_SECRET_SERVER_URL" not in web and "PORTAL_SECRET_SERVER_URL" not in writer
+
+
+def test_the_kit_s_writer_yaml_passes_the_secret_server_setting():
+    writer = yaml.safe_load((KIT / "writer.yaml").read_text())
+    [env] = [e for c in writer["spec"]["template"]["spec"]["containers"] for e in c.get("env", []) if e["name"] == "PORTAL_SECRET_SERVER"]
+    assert env["valueFrom"]["configMapKeyRef"] == {"name": "golden-road-portal-config", "key": "PORTAL_SECRET_SERVER", "optional": True}
+
+
+def test_the_kit_s_readme_names_the_secret_server_settings():
+    readme = (KIT / "README.md").read_text()
+    assert "`PORTAL_SECRET_SERVER`" in readme and "`PORTAL_SECRET_PROCESS_URL`" in readme and "golden-road-eso" in readme
 
 
 def test_the_kit_s_writer_yaml_passes_the_directory_setting():

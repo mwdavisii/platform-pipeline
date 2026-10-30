@@ -64,6 +64,12 @@ spec:
               name: golden-road-portal-config
               key: PORTAL_DIRECTORY
               optional: true
+        - name: PORTAL_SECRET_SERVER  # the Secret Server the web picks from; the writer re-checks every binding secret against the same one
+          valueFrom:
+            configMapKeyRef:
+              name: golden-road-portal-config
+              key: PORTAL_SECRET_SERVER
+              optional: true
         - name: PORTAL_REPO_ADMINS_STALE_AFTER  # the web's limit: a binding's requester must be a recent admin of the repo
           valueFrom:
             configMapKeyRef:

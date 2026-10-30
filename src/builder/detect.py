@@ -189,8 +189,9 @@ def detect(root: Path) -> dict:
         questions.append("The server must listen on process.env.PORT.")
     from_binding = [n for n in platform_set if n.startswith(BINDING_ENV_PREFIXES)]
     if from_binding:
-        questions.append(f"The app reads {', '.join(from_binding)}. The platform sets these from the app's binding (its Azure identity and "
-                         "Databricks connection, linked on the app's page in the portal), so they are not in builder-spec.json.")
+        questions.append(f"The app reads {', '.join(from_binding)}. The platform sets these from the app's binding (its Azure identity, "
+                         "Databricks connection and Delinea Secret Server secrets, linked on the app's page in the portal), so they are "
+                         "not in builder-spec.json.")
     questions.append("What data does this app handle: public, internal, restricted, or phi?")
 
     return {

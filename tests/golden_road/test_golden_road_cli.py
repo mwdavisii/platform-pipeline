@@ -276,19 +276,6 @@ def test_render_command_spec_not_an_object(tmp_path, doc, capsys):
     assert code == 2 and "AttributeError" not in capsys.readouterr().err
 
 
-BINDING_YAML = """schema: binding/v1
-repo: acme/notes
-linked_by: p_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-linked_at: '2026-10-29T15:00:00Z'
-request: r_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-azure_identity:
-  directory_id: sp-notes
-  tenant_id: 00000000-0000-4000-8000-00000000a2e0
-  client_id: 11111111-1111-4111-8111-111111111111
-  verified_by: mock-directory
-"""
-
-
 def _golden_app(tmp_path):
     import shutil
     from pathlib import Path
@@ -298,20 +285,15 @@ def _golden_app(tmp_path):
     return app
 
 
-def test_render_command_with_a_binding(tmp_path, capsys):
-    app, out, binding = _golden_app(tmp_path), tmp_path / "manifests.yaml", tmp_path / "binding.yaml"
-    binding.write_text(BINDING_YAML)
+def test_render_no_longer_takes_a_binding(tmp_path, capsys):
+    """From builder 0.4.0 the signed release is the app and nothing else; bindings are composed per environment in golden-road-deploy."""
+    app, out = _golden_app(tmp_path), tmp_path / "manifests.yaml"
     ref = "ghcr.io/org/notes-api@sha256:" + "b" * 64
-    assert main(["render", "--repo-root", str(app), "--image", ref, "--binding", str(binding), "--repo", "acme/notes", "--output", str(out)]) == 0
-    assert "AZURE_CLIENT_ID" in out.read_text() and "azure.workload.identity/client-id" in out.read_text()
-    capsys.readouterr()
-    assert main(["render", "--repo-root", str(app), "--image", ref, "--binding", str(binding), "--output", str(out)]) == 2
-    assert "--repo" in json.loads(capsys.readouterr().err)["error"] and not out.exists()
-    assert main(["render", "--repo-root", str(app), "--image", ref, "--binding", str(binding), "--repo", "acme/other", "--output", str(out)]) == 2
-    assert "not acme/other" in json.loads(capsys.readouterr().err)["error"] and not out.exists()
-    assert main(["render", "--repo-root", str(app), "--image", ref, "--binding", str(tmp_path / "missing.yaml"), "--repo", "acme/notes",
-                 "--output", str(out)]) == 2
-    assert not out.exists()
+    with pytest.raises(SystemExit) as exc:
+        main(["render", "--repo-root", str(app), "--image", ref, "--binding", str(tmp_path / "b.yaml"), "--repo", "acme/notes", "--output", str(out)])
+    assert exc.value.code == 2 and "--binding" in json.loads(capsys.readouterr().err)["error"] and not out.exists()
+    assert main(["render", "--repo-root", str(app), "--image", ref, "--output", str(out)]) == 0
+    assert "azure.workload.identity" not in out.read_text()
 
 
 def _record_args(tmp_path, *extra):
@@ -325,19 +307,9 @@ def _record_args(tmp_path, *extra):
             "--drift", drift, "--checks", checks, "--authz", authz, "--output", str(tmp_path / "r.json"), *extra]
 
 
-def test_record_command_names_the_binding(tmp_path):
-    import hashlib
-    binding = tmp_path / "binding.yaml"
-    binding.write_text(BINDING_YAML)
-    assert main(_record_args(tmp_path, "--binding", str(binding))) == 0
-    assert json.loads((tmp_path / "r.json").read_text())["binding"] == {
-        "path": "bindings/acme/notes.yaml", "sha256": hashlib.sha256(BINDING_YAML.encode()).hexdigest()}
+def test_record_command_always_writes_a_null_binding(tmp_path, capsys):
     assert main(_record_args(tmp_path)) == 0
     assert json.loads((tmp_path / "r.json").read_text())["binding"] is None
-
-
-def test_record_command_refuses_a_binding_render_would_refuse(tmp_path):
-    binding = tmp_path / "binding.yaml"
-    binding.write_text(BINDING_YAML.replace("repo: acme/notes", "repo: acme/other"))
-    assert main(_record_args(tmp_path, "--binding", str(binding))) == 2
-    assert not (tmp_path / "r.json").exists()
+    with pytest.raises(SystemExit) as exc:
+        main(_record_args(tmp_path, "--binding", str(tmp_path / "b.yaml")))
+    assert exc.value.code == 2 and "--binding" in json.loads(capsys.readouterr().err)["error"]

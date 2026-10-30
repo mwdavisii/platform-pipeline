@@ -12,6 +12,11 @@ from .io import InputError
 KEY_ENV = "GOLDEN_ROAD_APP_KEY"
 # What the scorecard's steps may ask for (C1 plus commit statuses for Gate 1). Anything else is refused before any call.
 ALLOWED = {"contents": ("read",), "pull_requests": ("read", "write"), "checks": ("read", "write"), "statuses": ("read",), "issues": ("write",)}
+# The deploy App's one set (golden-road-deploy's bump workflow): it pushes a pin branch and opens its pull request. contents=write is
+# accepted only as exactly this set, never alone or alongside anything the scorecard asks for, and only for a repo named
+# golden-road-deploy.
+DEPLOY_PIN = {"contents": "write", "pull_requests": "write"}
+DEPLOY_REPO_SUFFIX = "/golden-road-deploy"
 _REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 # Installation tokens are opaque: since GitHub's stateless format (2026-10) they are ghs_<app id>_<JWT>, about 520 characters with dots.
 # Only the prefix, a URL-safe alphabet (no whitespace, so the token can't break a header or an output line) and a sane length are checked.
@@ -20,15 +25,20 @@ _SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,38}$")
 _EXPIRES = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 
-def parse_permissions(pairs) -> dict:
+def parse_permissions(pairs, repo=None) -> dict:
     perms: dict[str, str] = {}
     for pair in pairs:
         name, _, level = pair.partition("=")
-        if name in perms or level not in ALLOWED.get(name, ()):
-            raise InputError(f"permission {pair!r} is not one the scorecard may ask for")
+        if name in perms or (level not in ALLOWED.get(name, ()) and DEPLOY_PIN.get(name) != level):
+            raise InputError(f"permission {pair!r} is not one the scorecard or the deploy App may ask for")
         perms[name] = level
     if not perms:
         raise InputError("name at least one permission (name=read or name=write)")
+    if perms.get("contents") == "write":
+        if perms != DEPLOY_PIN:
+            raise InputError("contents=write is only for the deploy App, with exactly contents=write and pull_requests=write")
+        if not isinstance(repo, str) or not repo.lower().endswith(DEPLOY_REPO_SUFFIX):
+            raise InputError("contents=write is only for the deploy App's own repo, <org>/golden-road-deploy")
     return perms
 
 
@@ -51,6 +61,8 @@ def installation_token(api_url: str, app_id: int, key_pem: str, repo: str, permi
     if type(app_id) is not int or app_id <= 0:
         raise InputError("the App id must be a positive number")
     owner, name = _repo(repo)
+    if permissions.get("contents") == "write" and (permissions != DEPLOY_PIN or not repo.lower().endswith(DEPLOY_REPO_SUFFIX)):
+        raise InputError("contents=write is only for the deploy App's own repo, <org>/golden-road-deploy")
     if not key_pem:
         raise InputError(f"{KEY_ENV} is not set")
     app = checks.GitHubAPI(api_url, app_jwt(app_id, key_pem, int(time.time() if now is None else now)), opener=opener or checks._open)

@@ -181,7 +181,6 @@ COMMITTED_FACTORY_CODEOWNERS = """\
 * @ORG_PLACEHOLDER/platform-reviewers
 # An app's tier and purpose, its accepted findings, its confirmed N/A requirements, and which identity and data connection it runs with, are the security team's call.
 /intake/ @ORG_PLACEHOLDER/security
-/bindings/ @ORG_PLACEHOLDER/security
 /suppressions/ @ORG_PLACEHOLDER/security
 /na/ @ORG_PLACEHOLDER/security
 /config/registration.yaml @ORG_PLACEHOLDER/security
@@ -238,6 +237,40 @@ def unconfigure_factory(factory_dir, org):
                 directory.rename(factory / kind / "ORG_PLACEHOLDER")
         for path in (factory / "intake/ORG_PLACEHOLDER").glob("*.yaml"):
             path.write_text(path.read_text().replace(f"repo: {org}/", "repo: ORG_PLACEHOLDER/"))
+
+
+COMMITTED_DEPLOY_CODEOWNERS = """\
+# The platform owns this repo: every release pin, generated file, adapter and policy needs a platform owner's review.
+* @ORG_PLACEHOLDER/platform-reviewers
+# Which identity and data connection an app runs with, per environment, is security's and analytics' call. CODEOWNERS can't
+# own part of a file, so either team may approve a bindings.yaml (the Azure identity and the Databricks connection alike).
+/apps/**/bindings.yaml @ORG_PLACEHOLDER/security @ORG_PLACEHOLDER/analytics
+# The workflows, rulesets and owners stay the platform's, whatever matches above.
+/.github/ @ORG_PLACEHOLDER/platform-reviewers
+"""
+
+
+def unconfigure_deploy(deploy_dir, org):
+    """Reset bootstrap/golden-road-deploy to the committed placeholder state. configure.py replaced ORG_PLACEHOLDER with `org` (None
+    when the live tree is pristine) and, in single-approver mode, relaxed the review ruleset (main-review) and set deploy-check's
+    SINGLE_APPROVER_PROMOTIONS to accept. The setup doc may have the owner replace CODEOWNERS with personal logins, so the committed
+    text is restored, and has the owner pin the workflows' BUILDER_IMAGE digest, so the placeholder digest is restored."""
+    deploy = Path(deploy_dir)
+    if not deploy.is_dir():
+        return
+    if org:  # the org only where configure.py put it: a path segment (github.com/<org>/, ghcr.io/<org>/)
+        segment = re.compile(rf"(?<=/){re.escape(org)}(?=/)")
+        for path in deploy.rglob("*"):
+            if path.is_file() and not path.is_symlink():
+                text = path.read_text()
+                if segment.search(text):
+                    path.write_text(segment.sub("ORG_PLACEHOLDER", text))
+    (deploy / ".github/CODEOWNERS").write_text(COMMITTED_DEPLOY_CODEOWNERS)
+    _restore_default_approval(deploy, with_env=False, ruleset_name="main-review.json")
+    # The workflows: the builder digest the setup doc has the owner pin, and deploy-check's single-approver setting.
+    for workflow in sorted((deploy / ".github/workflows").glob("*.yml")):
+        text = re.sub(r"(?m)^(  BUILDER_IMAGE: ).*$", rf"\g<1>{ZERO_IMAGE}", workflow.read_text())
+        workflow.write_text(re.sub(r"(?m)^(  SINGLE_APPROVER_PROMOTIONS: )accept$", r"\g<1>refuse", text))
 
 
 def unconfigure_portal(app_dir):

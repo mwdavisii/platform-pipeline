@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from helpers import builder_cmd, builder_env, unconfigure_agents, unconfigure_factory, unconfigure_hello_app, unconfigure_platform, unconfigure_portal
+from helpers import unconfigure_deploy, builder_cmd, builder_env, unconfigure_agents, unconfigure_factory, unconfigure_hello_app, unconfigure_platform, unconfigure_portal
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -23,6 +23,7 @@ def workspace(tmp_path):
     unconfigure_hello_app(tmp_path / "bootstrap/hello-app")
     unconfigure_portal(tmp_path / "bootstrap/golden-road-portal")
     unconfigure_factory(tmp_path / "bootstrap/scorecard-factory", org)
+    unconfigure_deploy(tmp_path / "bootstrap/golden-road-deploy", org)
     unconfigure_agents(tmp_path / "bootstrap/golden-road-agents", org, live.get("github_host"), live.get("actions_oidc_issuer"))
     return tmp_path
 
@@ -280,6 +281,9 @@ def test_default_approval_files_are_not_placeholder_state():
     keys = ("required_approving_review_count", "require_code_owner_review", "require_last_push_approval")
     assert FACTORY_RULESET not in state
     assert tuple(factory_pr_params(ROOT)[k] for k in keys) == tuple(params[k] for k in keys)
+    deploy = next(r for r in json.loads((ROOT / "bootstrap/golden-road-deploy/.github/rulesets/main-review.json").read_text())["rules"]
+                  if r["type"] == "pull_request")["parameters"]
+    assert tuple(deploy[k] for k in keys) == tuple(params[k] for k in keys)
     if single:
         assert tuple(params[k] for k in keys) == (0, False, False)
         assert env["prevent_self_review"] is False
@@ -374,6 +378,78 @@ def test_a_rename_that_fails_partway_says_how_to_restore(workspace):
     finally:
         locked.chmod(0o755)
     assert out.returncode != 0 and "rename" in out.stderr and RESTORE in out.stderr
+
+
+DEPLOY_REVIEW_RULESET = "bootstrap/golden-road-deploy/.github/rulesets/main-review.json"  # the review half of the deploy repo's pair, like the factory's
+DEPLOY_MAIN_RULESET = "bootstrap/golden-road-deploy/.github/rulesets/main.json"
+
+
+def test_single_approver_flag_relaxes_the_deploy_review_ruleset_the_same_way(workspace):
+    before = json.loads((workspace / DEPLOY_REVIEW_RULESET).read_text())
+    main_before = (workspace / DEPLOY_MAIN_RULESET).read_bytes()
+    assert configure(workspace, *GOOD, "--single-approver").returncode == 0
+    after = json.loads((workspace / DEPLOY_REVIEW_RULESET).read_text())
+    next(r for r in before["rules"] if r["type"] == "pull_request")["parameters"].update(
+        required_approving_review_count=0, require_code_owner_review=False, require_last_push_approval=False)
+    assert after == before
+    assert (workspace / DEPLOY_MAIN_RULESET).read_bytes() == main_before, "deploy-check stays required"
+
+
+DEPLOY_CHECK = "bootstrap/golden-road-deploy/.github/workflows/deploy-check.yml"
+
+
+def test_single_approver_lets_deploy_check_accept_single_approver_promotions_and_nothing_else(workspace):
+    before = (workspace / DEPLOY_CHECK).read_text()
+    assert "\n  SINGLE_APPROVER_PROMOTIONS: refuse\n" in before
+    assert configure(workspace, *GOOD, "--single-approver").returncode == 0
+    after = (workspace / DEPLOY_CHECK).read_text()
+    assert after == before.replace("ORG_PLACEHOLDER", "example-org").replace("PROMOTIONS: refuse", "PROMOTIONS: accept")
+
+
+def test_the_default_mode_keeps_deploy_check_refusing_single_approver_promotions(workspace):
+    assert configure(workspace, *GOOD).returncode == 0
+    assert "\n  SINGLE_APPROVER_PROMOTIONS: refuse\n" in (workspace / DEPLOY_CHECK).read_text()
+
+
+def test_a_deploy_check_that_is_not_as_expected_stops_single_approver_before_anything_changes(workspace):
+    path = workspace / DEPLOY_CHECK
+    path.write_text(path.read_text().replace("SINGLE_APPROVER_PROMOTIONS: refuse", "SINGLE_APPROVER_PROMOTIONS: maybe"))
+    before = {p: p.read_bytes() for d in ("platform", "bootstrap") for p in (workspace / d).rglob("*") if p.is_file()}
+    out = configure(workspace, *GOOD, "--single-approver")
+    assert out.returncode != 0 and "SINGLE_APPROVER_PROMOTIONS" in out.stderr
+    assert {p: p.read_bytes() for d in ("platform", "bootstrap") for p in (workspace / d).rglob("*") if p.is_file()} == before
+
+
+@pytest.mark.parametrize("extra", ["    SINGLE_APPROVER_PROMOTIONS: accept\n", "\tSINGLE_APPROVER_PROMOTIONS:accept\n"], ids=["indented", "tab"])
+@pytest.mark.parametrize("flags", [[], ["--single-approver"]], ids=["default", "single-approver"])
+def test_an_accept_at_any_indentation_stops_configure_before_anything_changes(workspace, extra, flags):
+    path = workspace / DEPLOY_CHECK
+    path.write_text(path.read_text().replace("jobs:\n", "jobs:\n" + extra, 1))
+    before = {p: p.read_bytes() for d in ("platform", "bootstrap") for p in (workspace / d).rglob("*") if p.is_file()}
+    out = configure(workspace, *GOOD, *flags)
+    assert out.returncode != 0 and "SINGLE_APPROVER_PROMOTIONS" in out.stderr
+    assert {p: p.read_bytes() for d in ("platform", "bootstrap") for p in (workspace / d).rglob("*") if p.is_file()} == before
+
+
+def test_the_default_mode_leaves_the_deploy_rulesets_alone(workspace):
+    before = {rel: (workspace / rel).read_bytes() for rel in (DEPLOY_REVIEW_RULESET, DEPLOY_MAIN_RULESET)}
+    assert configure(workspace, *GOOD).returncode == 0
+    assert {rel: (workspace / rel).read_bytes() for rel in before} == before
+
+
+def test_a_deploy_review_ruleset_that_is_not_as_expected_stops_single_approver_before_anything_changes(workspace):
+    (workspace / DEPLOY_REVIEW_RULESET).write_text('{"rules": []}')
+    before = {p: p.read_bytes() for d in ("platform", "bootstrap") for p in (workspace / d).rglob("*") if p.is_file()}
+    out = configure(workspace, *GOOD, "--single-approver")
+    assert out.returncode != 0 and "--single-approver" in out.stderr and DEPLOY_REVIEW_RULESET in out.stderr
+    assert {p: p.read_bytes() for d in ("platform", "bootstrap") for p in (workspace / d).rglob("*") if p.is_file()} == before
+
+
+def test_the_committed_deploy_code_owners_text_in_helpers_is_the_committed_file():
+    from helpers import COMMITTED_DEPLOY_CODEOWNERS
+    live = (ROOT / "bootstrap/golden-road-deploy/.github/CODEOWNERS").read_text()
+    if "ORG_PLACEHOLDER" in live:  # a pristine tree; a configured one holds the org or personal logins
+        assert live == COMMITTED_DEPLOY_CODEOWNERS
 
 
 AGENTS_RULESET = "bootstrap/golden-road-agents/.github/rulesets/main.json"

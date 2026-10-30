@@ -2,7 +2,7 @@
 
 > **PUBLIC, PERSONAL, PROOF OF CONCEPT ONLY.** This is the one approved exception to "every repo is private or internal". It creates five **public** repos (`platform-pipeline`, `security-scans`, `hello-app`, `scorecard-factory` and `golden-road-agents`) on a **personal** GitHub account so that free-tier rulesets and environment required reviewers are available. Repos in any employer's or organization's GitHub Enterprise stay private or internal and are set up with their own document, not this one. **Nothing from an employer or organization goes into these repos**: no org names, hostnames, tickets, or internal documents. Everything you publish here is world-readable, including the values you pass to `configure.py` (gateway host, edge namespace and labels, identity header name) because they are baked into the public builder image and manifests.
 
-You run these steps; each step ends with a **Check**. Replace `<you>` with your personal GitHub login and `<deputy>` with the second account for Gate 2 (if you have one; see the deployment note below). The three repos are `<you>/platform-pipeline` (the platform), `<you>/security-scans` (the stand-in for the security team's scans) and `<you>/hello-app` (the sample app), `<you>/scorecard-factory` (the risk scorecard's trusted inputs, step 13) and `<you>/golden-road-agents` (the agent kit, step 14).
+You run these steps; each step ends with a **Check**. Replace `<you>` with your personal GitHub login and `<deputy>` with the second account for Gate 2 (if you have one; see the deployment note below). The three repos are `<you>/platform-pipeline` (the platform), `<you>/security-scans` (the stand-in for the security team's scans) and `<you>/hello-app` (the sample app), `<you>/scorecard-factory` (the risk scorecard's trusted inputs, step 13) `<you>/golden-road-agents` (the agent kit, step 14) and `<you>/golden-road-deploy` (the deploy repo, step 20).
 
 ## 0. Before you start
 - Tools: `gh`, `git`, `jq`, `docker`, `cosign` (v3), `rekor-cli`, `kubectl`, `uv`, and a Python 3.12+ virtualenv with `jsonschema`, `PyYAML`, and `pytest` (`configure.py` needs the first two; the optional test runs in steps 1 and 4 need the third).
@@ -10,7 +10,7 @@ You run these steps; each step ends with a **Check**. Replace `<you>` with your 
   **Check:** `gh api users/<you> --jq .type` prints exactly `User`. If it prints `Organization`, stop: this document is not for organizations, and `push-bootstrap.sh --public` refuses them.
 - Pick the Gate 2 deputy (`<deputy>`): a second GitHub account you control or trust. Prevent self-review stops you approving your own promotions, and `promotion-record` independently rejects an approval by the person who triggered the run. So with the default configuration the deputy is required: **without one, Gate 2 cannot complete, by design.** If you have none, either use single-approver mode (next bullet) or stop before step 12.5 and record Gate 2 as an unproven gap.
 - **No second account? Single-approver mode.** Pass `--single-approver` to `configure.py` in step 1 and skip every deputy-specific step; each one is marked "if you have a deputy" or "Single-approver mode: skip" below.
-  > **Deployment note (PoC only).** `--single-approver` exists so one person can exercise the whole pipeline. It sets `gate2_single_approver: true` in `platform/platform.json`, sets the `main` ruleset to **0 approvals** (no required review, no code-owner review, no last-push approval; a PR and the status checks are still required) and turns `prevent_self_review` off on `prod`. You merge your own PRs and approve your own promotions. The promotion record and the prod release notes then say so: `self_approved: true`, "Single-approver PoC mode: approved by the person who triggered it. Not valid for production use." This proves the mechanics, not separation of duties: nothing here is a second pair of eyes, and the verification contract in `docs/enforcement.md` tells deployers to reject such a record. Never use it on a real org or for anything that deploys to a real environment. The choice is recorded in the tree: running `configure.py` again with a different setting is refused until you restore it with `git checkout -- bootstrap platform` (in the exported tree).
+  > **Deployment note (PoC only).** `--single-approver` exists so one person can exercise the whole pipeline. It sets `gate2_single_approver: true` in `platform/platform.json`, sets the `main` ruleset to **0 approvals** (no required review, no code-owner review, no last-push approval; a PR and the status checks are still required) and turns `prevent_self_review` off on `prod`; the deploy repo's `deploy-check` then accepts a self-approved promotion as a prod pin, with a warning (step 20). You merge your own PRs and approve your own promotions. The promotion record and the prod release notes then say so: `self_approved: true`, "Single-approver PoC mode: approved by the person who triggered it. Not valid for production use." This proves the mechanics, not separation of duties: nothing here is a second pair of eyes, and the verification contract in `docs/enforcement.md` tells deployers to reject such a record. Never use it on a real org or for anything that deploys to a real environment. The choice is recorded in the tree: running `configure.py` again with a different setting is refused until you restore it with `git checkout -- bootstrap platform` (in the exported tree).
 - Know the three deploy values for your cluster: the edge namespace, the edge pod label(s), and the identity header the edge sets after stripping client copies. For the homelab they are namespace `cloudflared`, label `app=cloudflared`, header `X-Platform-Roles`, plus your model gateway's hostname (`<gateway host>` below). Remember that all four become public.
 - Pin the host for every `gh` command in this document: `export GH_HOST=github.com`.
 - Work from a clean checkout of the platform repo (`<src>` below). You will **not** publish from it: its history is never published.
@@ -488,8 +488,8 @@ find . -name __pycache__ -prune -exec rm -rf {} +
 jq -r '.required[] | "  - " + tostring' platform/required-checks.json > ../gate1-extra.txt
 sed -i '/name: "golden-road \/ preview"/r ../gate1-extra.txt' bootstrap/scorecard-factory/config/scorecard.yaml
 <src>/.venv/bin/python -c 'import json, pathlib, sys; p = pathlib.Path(sys.argv[1]); p.write_text(p.read_text().replace("version: pinned-1}", "version: " + json.dumps(sys.argv[2]) + "}"))' bootstrap/scorecard-factory/config/scorecard.yaml '<model version string>'
-printf '%s\n' '* @<you> @<deputy>' '/intake/ @<you> @<deputy>' '/bindings/ @<you> @<deputy>' '/suppressions/ @<you> @<deputy>' '/na/ @<you> @<deputy>' '/config/registration.yaml @<you> @<deputy>' > bootstrap/scorecard-factory/.github/CODEOWNERS
-# Single-approver mode: printf '%s\n' '* @<you>' '/intake/ @<you>' '/bindings/ @<you>' '/suppressions/ @<you>' '/na/ @<you>' '/config/registration.yaml @<you>' > bootstrap/scorecard-factory/.github/CODEOWNERS
+printf '%s\n' '* @<you> @<deputy>' '/intake/ @<you> @<deputy>' '/suppressions/ @<you> @<deputy>' '/na/ @<you> @<deputy>' '/config/registration.yaml @<you> @<deputy>' > bootstrap/scorecard-factory/.github/CODEOWNERS
+# Single-approver mode: printf '%s\n' '* @<you>' '/intake/ @<you>' '/suppressions/ @<you>' '/na/ @<you>' '/config/registration.yaml @<you>' > bootstrap/scorecard-factory/.github/CODEOWNERS
 ```
 **Check:** `grep -n 'gate1_checks:' -A8 bootstrap/scorecard-factory/config/scorecard.yaml` lists drift, preview and then every entry of `platform/required-checks.json`; `grep -n 'model:' bootstrap/scorecard-factory/config/scorecard.yaml` prints `model: {version: "<your version string>"}` (no `pinned-1`); `PYTHONPATH=src <src>/.venv/bin/pytest -q tests/pipeline/test_scorecard_factory.py tests/kit` passes (the factory test accepts a changed model version and the extra Gate 1 entries, and checks that `gate1_checks` covers every required check; the kit tests run against the configured kit); and `grep -rn 'replace-me\|ORG_PLACEHOLDER' platform bootstrap` prints nothing. (The factory's `BUILDER_IMAGE` still has the all-zero digest; it is pinned below.)
 
@@ -521,14 +521,14 @@ gh run watch --repo <you>/platform-pipeline
 If the tag is already in use (`git ls-remote` prints it), this source's version was already released: bump in `<src>` with the script and export again. In `<src>`: `<src>/.venv/bin/python scripts/bump-builder-version.py <new version>`, then `git diff --stat` (it shows `src/builder/__init__.py` and, in `bootstrap/hello-app`, `.builder.lock` and `Dockerfile`), then `git add -A && git commit -m "Builder <new version>"`, and start this step again from the export. Never move or reuse a tag.
 The run's `release` job builds, pushes and signs the image; its `kit` job fails at the token step unless you did 14.2 to 14.4 first ("kit" is the agent kit: see the note at the top of this step). The `release` job's result is the one that matters here.
 
-Pin the new digest (`ghcr.io/<you>/golden-road-builder@sha256:...` from the `release` job's summary) in **every** workflow that runs the image (today six: `golden-road.yml`, `golden-road-promote.yml`, and the factory's `scorecard.yml`, `scorecard-poll.yml`, `scorecard-assess.yml` and `factory-check.yml`). The command finds them by their `BUILDER_IMAGE` line, so a workflow added later is pinned too:
+Pin the new digest (`ghcr.io/<you>/golden-road-builder@sha256:...` from the `release` job's summary) in **every** workflow that runs the image (today eight: `golden-road.yml`, `golden-road-promote.yml`, the factory's `scorecard.yml`, `scorecard-poll.yml`, `scorecard-assess.yml` and `factory-check.yml`, and the deploy repo's `deploy-check.yml` and `bump.yml`). The command finds them by their `BUILDER_IMAGE` line, so a workflow added later is pinned too:
 ```bash
 ref=ghcr.io/<you>/golden-road-builder@sha256:<digest>
 grep -rlE '^  BUILDER_IMAGE: ' .github/workflows bootstrap | xargs sed -i "s|^  BUILDER_IMAGE: .*|  BUILDER_IMAGE: $ref|"
 git add -A && git commit -m "Pin builder $version" && git push origin main
 ```
 (Run it in the terminal where `version` is set, or set it again with the first line of the release block.) From here `hello-app`'s drift check runs the new builder, which expects the `AGENTS.md` and `CLAUDE.md` blocks and a new lock: every PR on `hello-app` fails drift until 13.6's PR is merged, because 13.6 regenerates them.
-**Check:** `grep -rh '^  BUILDER_IMAGE:' .github/workflows bootstrap | sort | uniq -c` prints one line, `6   BUILDER_IMAGE: $ref`; `grep -rlE '^  BUILDER_IMAGE: .*@sha256:0{64}$' .github bootstrap` prints nothing (no placeholder digest is left anywhere); the package is still public (step 3, Check 2), and `docker run --rm --network none "$ref" git --version` prints a git version.
+**Check:** `grep -rh '^  BUILDER_IMAGE:' .github/workflows bootstrap | sort | uniq -c` prints one line, `8   BUILDER_IMAGE: $ref`; `grep -rlE '^  BUILDER_IMAGE: .*@sha256:0{64}$' .github bootstrap` prints nothing (no placeholder digest is left anywhere); the package is still public (step 3, Check 2), and `docker run --rm --network none "$ref" git --version` prints a git version.
 
 ### 13.3 Optional, before any PR: the golden set against your gateway
 The golden set is 13 small PRs with known answers (an IDOR, a deleted test, a hallucinated package, prompt injections, clean PRs, ...). Running it live measures what your model gets right and wrong, and what one assessment costs, before it reviews anything real. It costs tokens; it never touches GitHub.
@@ -857,7 +857,7 @@ Publish the draft (both cases):
 gh release edit builder-v$version --repo <you>/golden-road-agents --draft=false --latest=false
 ```
 Always publish a builder release with `--latest=false`. If a builder release ever becomes the latest, the stub download in `INSTALL_FOR_AGENTS.md` fails closed ("no assets match"); the fix is `gh release edit skill-v<newest> --repo <you>/golden-road-agents --latest`.
-**Check:** `grep -rh '^  BUILDER_IMAGE:' .github/workflows bootstrap | sort | uniq -c` prints one line, `6   BUILDER_IMAGE: $ref` (`$ref` is the digest pinned in 13.2 in case A), and `gh release list --repo <you>/golden-road-agents --exclude-drafts --json tagName,isLatest --jq '.[] | [.tagName, .isLatest] | @tsv'` prints `builder-v<version> false` and `skill-v0.4.0 true`.
+**Check:** `grep -rh '^  BUILDER_IMAGE:' .github/workflows bootstrap | sort | uniq -c` prints one line, `8   BUILDER_IMAGE: $ref` (`$ref` is the digest pinned in 13.2 in case A), and `gh release list --repo <you>/golden-road-agents --exclude-drafts --json tagName,isLatest --jq '.[] | [.tagName, .isLatest] | @tsv'` prints `builder-v<version> false` and `skill-v0.4.0 true`.
 
 Case B only: regenerate `hello-app` by pull request (its `main` is protected):
 ```bash
@@ -1161,7 +1161,7 @@ Work on a branch of `<you>/scorecard-factory`. Every step below goes into this o
    ```bash
    docker run --rm --network none --read-only --tmpfs /tmp --user "$(id -u):$(id -g)" -v "$PWD:/factory:ro" "$BUILDER_IMAGE" scorecard check-factory --factory /factory
    ```
-   **Check:** it prints one line of counts (`{"intake": ..., "na": ..., "suppressions": ..., "bindings": ...}`), with no `error` and no `warnings`. A refusal names the file and the problem: fix it and run again. A `warnings` list (a fact no rule uses) does not fail, but read it.
+   **Check:** it prints one line of counts (`{"intake": ..., "na": ..., "suppressions": ...}`), with no `error` and no `warnings`. A refusal names the file and the problem: fix it and run again. A `warnings` list (a fact no rule uses) does not fail, but read it.
 8. Open the pull request. **Check:** `factory-check` passes. Merge it.
 
 ### 17.2 Check it on a pull request
@@ -1211,60 +1211,213 @@ An open PR gets the check at its next assessment: push to it. If the API rejects
 Delete the ruleset, for each app: `gh api -X DELETE repos/<you>/<app>/rulesets/$(gh api repos/<you>/<app>/rulesets --jq '.[] | select(.name=="scorecard-findings") | .id')`. The check is still posted and no longer holds anything.
 
 ## 19. App connections (mock)
-Each app gets a page in the portal with two options, "Associate Azure Identity" and "Enable Databricks Connection". You pick from a directory, and the portal's writer records the choice in the factory as `bindings/<owner>/<repo>.yaml`. The next release adds what the binding says to the signed manifests: the workload identity's client ID on the service account, plain `AZURE_*` and `DATABRICKS_*` env vars, and egress to the hosts they need.
+Each app gets a page in the portal with two options, "Associate Azure Identity" and "Enable Databricks Connection", on one tab per environment, `test` and `prod`. You pick from a directory, and the portal's writer records the choice in `golden-road-deploy` (section 20) as `apps/<owner>/<repo>/<env>/bindings.yaml`, together with that environment's `composed.yaml`: the release's signed manifests plus what the binding says (the workload identity's client ID on the service account, plain `AZURE_*` and `DATABRICKS_*` env vars, and egress to the hosts they need). The signed release itself no longer changes: it carries no binding, and test and prod can have different ones.
 
 ### 19.0 What changes
-In the PoC the directory is a dummy one, the portal's `mock_directory.json`: three service principals and three warehouses, each tagged for a repo or granted to a principal. Nothing calls Azure or Databricks. The demo proves the path from the page to the manifests, not that the identity works. `DATABRICKS_HOST` is a bare hostname (`adb-<id>.<n>.azuredatabricks.net`, no `https://`): an app that needs a URL adds the scheme itself.
+In the PoC the directory is a dummy one, the portal's `mock_directory.json`: three service principals and three warehouses, each tagged for a repo or granted to a principal. Nothing calls Azure or Databricks. The demo proves the path from the page to the composed manifests, not that the identity works. `DATABRICKS_HOST` is a bare hostname (`adb-<id>.<n>.azuredatabricks.net`, no `https://`): an app that needs a URL adds the scheme itself.
 
-Requirements: a builder release that carries bindings (the lead's version bump; this section names no number), released as in 13.2. `hello-app` has its intake record (13), and the portal runs from `deploy-kits/portal-homelab` with its writer (13.8).
+Requirements: the deploy repo exists and `hello-app`'s `test` environment pins a release (20.1 and 20.2: do them first; the writer refuses a binding for an environment with no pin). `hello-app` has its intake record (13), and the portal runs from `deploy-kits/portal-homelab` with its writer (13.8).
 
 ### 19.1 Roll out
-1. Release the builder as in 13.2. That release reserves the env names that start with `AZURE_` or `DATABRICKS_`: an app whose `builder-spec.json` declares one fails drift on that release, so rename it in the app before you move the app to it.
-2. One factory PR: move the four `BUILDER_IMAGE` pins to the new release (as in 16.3), and add the owner of the bindings to `.github/CODEOWNERS`, after the `*` line:
-   ```bash
-   printf '%s\n' '/bindings/ @<you>' >> .github/CODEOWNERS
-   ```
-   (In single-approver mode that is you; with a deputy, add `@<deputy>` too.) **Check:** `factory-check` passes, and its counts line has `"bindings": 0`. Merge it. Do this before the first binding: an older `factory-check` doesn't read `bindings/`, so it would pass a file it can't check.
-3. Bump `hello-app` and the portal to the new builder (regenerate and merge their PRs, as in 14.6).
-4. Turn the connections on in the portal. In the kit's `kustomization.yaml` set `PORTAL_DIRECTORY=mock` (empty means off). The web and the writer read the same key, so they can't differ; the same goes for `PORTAL_REPO_ADMINS_STALE_AFTER`. Optionally set `PORTAL_IDENTITY_PROCESS_URL` and `PORTAL_DATA_PROCESS_URL` to pages that say how to ask for a principal or a grant. Release the portal and roll it out as in the kit README's "Upgrade": the release brings migration 0006.
-   Migration 0006 is forward-only (there is no down migration). An older portal image still handles registrations on a database at 0006, but its writer fails every binding request it claims. So don't roll the image back once bindings exist; if you must, expect open binding requests to fail, and link them again after rolling forward.
-   **Check:** the portal starts (a bad `PORTAL_DIRECTORY` stops it at startup), and `/admin/directory` lists the mock directory.
+1. The builder release of 20.1 reserves the env names that start with `AZURE_` or `DATABRICKS_`: an app whose `builder-spec.json` declares one fails drift on that release, so rename it in the app before you move the app to it (`hello-app` moves in 20.2).
+2. Bump the portal to that builder (regenerate and merge its PR, as in 14.6).
+3. Give the portal's write App the deploy repo: install it on `golden-road-deploy` too (it keeps the factory install and its permissions), and add it as the `pull_request`-mode bypass actor on the deploy repo's `main-review` only, as 13.8 does for the factory (the same commands with `golden-road-deploy` for `scorecard-factory`). Never add it to the deploy repo's `main`. `PORTAL_WRITER_DEPLOY_REQUIRED_CHECKS` (optional) adds checks to `deploy-check`, which is always required there.
+4. Turn the connections on in the portal. In the kit's `kustomization.yaml` set `PORTAL_DIRECTORY=mock` (empty means off). The web and the writer read the same key, so they can't differ; the same goes for `PORTAL_REPO_ADMINS_STALE_AFTER`. Optionally set `PORTAL_IDENTITY_PROCESS_URL` and `PORTAL_DATA_PROCESS_URL` to pages that say how to ask for a principal or a grant. Release the portal and roll it out as in the kit README's "Upgrade": the release brings migrations 0006 and 0007.
+   Both migrations are forward-only (there is no down migration). 0007 makes the one-open-request rule per environment and takes only `binding/v2`, so an older portal image can't record a binding on a database at 0007. Don't roll the image back once bindings exist; if you must, expect open binding requests to fail, and link them again after rolling forward.
+   **Check:** the portal starts (a bad `PORTAL_DIRECTORY` stops it at startup), `/admin/directory` lists the mock directory, and the writer starts: its log (`kubectl -n golden-road-portal logs deploy/golden-road-portal-writer`) has no "refusing to start". It checks both repos' rulesets, so it won't start until step 3 is done.
 
 ### 19.2 The demo
-1. Sign in. My requests lists `hello-app` under My apps (you are its admin as the collector sees it). Open its page.
-2. Under "Associate Azure Identity" pick `sp-hello-app` and submit. **Check:** the page says a change is pending; the writer opens a PR to the factory that adds `bindings/<you>/hello-app.yaml`, and merges it once `factory-check` passes; the page then shows `sp-hello-app` as linked.
-3. Under "Enable Databricks Connection" pick `wh-notes-readonly` and submit. **Check:** the same flow, and the writer's PR modifies the file (one file, `modified`).
-4. Merge a small change to `hello-app`'s `main` (a README PR, as in 12, item 3), so the release runs. Then:
-   ```bash
-   gh release download <test tag> --repo <you>/hello-app -p manifests.yaml -p gate-record.json -p binding.yaml
-   grep -n 'AZURE_CLIENT_ID\|DATABRICKS_HOST\|azure.workload.identity' manifests.yaml
-   jq .binding gate-record.json && sha256sum binding.yaml
-   ```
-   **Check:** the grep shows the env vars (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `DATABRICKS_HOST`, `DATABRICKS_HTTP_PATH` and the catalog and schema), the pod label `azure.workload.identity/use: "true"` and the service account's `azure.workload.identity/client-id` annotation. The CiliumNetworkPolicy allows `login.microsoftonline.com` and the workspace host on 443. The gate record's `binding` names `bindings/<you>/hello-app.yaml` with the same sha256 as `binding.yaml`, and the release notes have the same "Binding:" line.
-5. Promote that release (Gate 2, as in 12, item 5). **Check:** the prod release carries the same manifests and the same `binding.yaml` (promote checks it against the sha256 in the attested gate record, and fails before signing if it is missing or differs), and its notes have the same "Binding:" line. Promote ships the binding the test release recorded: a change on the page after the test release (an unlink, say) reaches prod only with the next release.
+1. Sign in. My requests lists `hello-app` under My apps (you are its admin as the collector sees it). Open its page: it shows the `test` tab.
+2. On `test`, under "Associate Azure Identity" pick `sp-hello-app` and submit. **Check:** the page says a change is pending; the writer opens a PR to `golden-road-deploy` that adds `apps/<you>/hello-app/test/bindings.yaml` and modifies `apps/<you>/hello-app/test/composed.yaml` (two files, nothing else), and merges it once `deploy-check` passes; the page then shows `sp-hello-app` as linked.
+3. Under "Enable Databricks Connection" pick `wh-notes-readonly` and submit. **Check:** the same flow, and the writer's PR modifies the same two files.
+4. Open the `prod` tab. **Check:** nothing is linked there, and `prod/composed.yaml` (if prod is pinned) has no `AZURE_` line. If prod has no pin yet, a link on that tab fails, and the page says "The last change could not be recorded: not_deployed."
+5. Read what the binding did: 20.3.
+
+The writer fails a binding with `not_registered` (no intake record for the repo in the factory), `not_deployed` (the environment has no `release.yaml` or `base/manifests.yaml`), `compose_refused` (the pin isn't valid for that repo and environment, or compose refuses the manifests) or `base_moved` (the deploy repo's `main` moved while the change waited; make it again).
 
 ### 19.3 What is refused
 - `/admin/directory` lists `sp-finance-reports` (tagged for `finance-reports`), but `hello-app`'s page doesn't offer it. A hand-made POST to the page's form with it is refused ("This principal isn't tagged for <you>/hello-app."); the portal's tests cover it.
 - `wh-finance` is never offered: it isn't granted to `sp-hello-app`.
 - A `hello-app` PR whose `builder-spec.json` declares `AZURE_CLIENT_ID` fails drift ("env name AZURE_CLIENT_ID is reserved: AZURE_* variables are set by the platform from the app's binding ...").
-- If the release can't read the factory, it goes on with no binding and says so: a warning, and "Binding: none (the factory <you>/scorecard-factory could not be read)" in the release notes.
 
 ### 19.4 Proof items (record the results)
-1. The writer's two factory PRs (added, then modified) and their `factory-check` runs.
-2. The grep output of 19.2, step 4, the gate record's `binding` and the release notes' "Binding:" line.
+1. The writer's two deploy-repo PRs (added, then modified) and their `deploy-check` runs.
+2. The `prod` tab with nothing linked while `test` has both.
 3. The refusal of the hand-made POST, and `/admin/directory` listing `sp-finance-reports`.
 4. The drift failure for a declared `AZURE_CLIENT_ID`.
-5. After 19.5: the next release has "Binding:" with the new sha256 and no `AZURE_` or `DATABRICKS_` lines in `manifests.yaml`.
+5. After 19.5: the writer's PR that rewrites `test/bindings.yaml` with neither, and a `test/composed.yaml` with no `AZURE_` or `DATABRICKS_` lines.
 
 ### 19.5 Roll back
-On the app's page remove the Azure identity: that removes the Databricks connection too, and the writer rewrites the file with neither (who unlinked it and when stay on record; the file is never deleted). The next release adds nothing. To turn the page off, empty `PORTAL_DIRECTORY` and restart the pods (the kit README's "Change a setting"). Keep the portal image: migration 0006 stays (19.1, step 4).
+On the `test` tab remove the Azure identity: that removes the Databricks connection too, and the writer rewrites `bindings.yaml` with neither, and `composed.yaml` to match (who unlinked it and when stay on record; the file is never deleted). To turn the page off, empty `PORTAL_DIRECTORY` and restart the pods (the kit README's "Change a setting"). Keep the portal image: migrations 0006 and 0007 stay (19.1, step 4).
+
+## 20. The deploy repo (mock)
+`golden-road-deploy` is the platform's record of what runs where, as whom: each app's environment pins one signed release (`release.yaml`), has its own bindings (`bindings.yaml`), and holds the plain Kustomize a GitOps controller would apply, generated from the two and checked in CI. Promoting is a reviewed PR here. Read the repo's `README.md` (in `bootstrap/golden-road-deploy/`) for the layout.
+
+**Mock only.** Nothing in this section is applied to a cluster. The proof is what you can read in git and in release assets: the generated files, the `deploy-check` runs and the PRs. The Flux and Argo CD adapters and the image policy are files, and every one is off (20.6).
+
+### 20.1 Create the repo from the bootstrap
+Requirements: a builder release that carries the deploy repo (the lead's version bump; this section names no number). Bring the tree in and release it as in 13.2: a fresh export, `configure.py` with your usual flags (with `--single-approver` if you use it), the copy over the published tree, the release, and the pin in every workflow (the pin's check prints `8   BUILDER_IMAGE: $ref`: `deploy-check.yml` and `bump.yml` are two of them). Releases from now on carry no binding: the gate record's `binding` is `null`, and there is no `binding.yaml` asset.
+
+The committed CODEOWNERS names three teams (`platform-reviewers`, `security` and `analytics`), which a personal account doesn't have, so name people instead (you are in `~/poc/platform-pipeline`; carry the file over on later exports, as 13.2 does for `hello-app`'s):
+```bash
+printf '%s\n' '* @<you> @<deputy>' '/apps/**/bindings.yaml @<you> @<deputy>' '/.github/ @<you> @<deputy>' > bootstrap/golden-road-deploy/.github/CODEOWNERS
+# Single-approver mode: printf '%s\n' '* @<you>' '/apps/**/bindings.yaml @<you>' '/.github/ @<you>' > bootstrap/golden-road-deploy/.github/CODEOWNERS
+git add bootstrap/golden-road-deploy/.github/CODEOWNERS && git commit -m "Deploy repo code owners" && git push origin main
+```
+Create the repo and its two rulesets, as the factory's in 13.4:
+```bash
+GOLDEN_ROAD_PUBLIC_POC=<you> scripts/push-bootstrap.sh <you> golden-road-deploy --public
+gh repo view <you>/golden-road-deploy --json visibility --jq .visibility
+gh api -X PUT repos/<you>/golden-road-deploy/actions/permissions/fork-pr-contributor-approval -f approval_policy=all_external_contributors
+gh api -X POST repos/<you>/golden-road-deploy/rulesets --input bootstrap/golden-road-deploy/.github/rulesets/main.json
+gh api -X POST repos/<you>/golden-road-deploy/rulesets --input bootstrap/golden-road-deploy/.github/rulesets/main-review.json
+```
+`main` holds no deletion, no force push and the strict `deploy-check` requirement; `main-review` holds only the pull request rule (in single-approver mode `configure.py` already relaxed it to no approval). In single-approver mode `configure.py` also set `deploy-check.yml`'s `SINGLE_APPROVER_PROMOTIONS` to `accept` (20.4); otherwise it is `refuse`.
+
+The `bump` workflow opens the pin PRs with a token of its own GitHub App, the deploy App: a PR opened with the workflow's own token wouldn't start `deploy-check`. Make it in the browser, like 16.1:
+1. Settings -> Developer settings -> GitHub Apps -> **New GitHub App**. Name: `<deploy app name>` (it is public). Homepage URL: `https://github.com/<you>/golden-road-deploy`. Webhook: clear **Active**. Repository permissions, exactly these: **Contents: Read and write** and **Pull requests: Read and write** (Metadata: Read-only is added by itself). Where can this GitHub App be installed: **Only on this account**. Create it.
+2. Note the **App ID** (a number, not the Client ID). Under Private keys, **Generate a private key**: the browser downloads a `.pem` file.
+3. **Install App** -> your account -> **Only select repositories** -> `golden-road-deploy` alone -> Install.
+
+Store the key in a `bump` environment that only `main` can use, and the App ID as a repository variable:
+```bash
+gh api -X PUT repos/<you>/golden-road-deploy/environments/bump --input - <<<'{"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}'
+gh api -X POST repos/<you>/golden-road-deploy/environments/bump/deployment-branch-policies -f name=main -f type=branch
+pem=~/Downloads/<downloaded key file>.pem
+gh secret set DEPLOY_APP_KEY --env bump --repo <you>/golden-road-deploy < "$pem" && rm -- "$pem"; unset pem
+gh variable set DEPLOY_APP_ID --repo <you>/golden-road-deploy --body '<deploy app id>'
+```
+Never add the deploy App to either ruleset's bypass list. The portal's write App gets its install and its `main-review` bypass in 19.1, step 3.
+
+**Check:** the second command prints `PUBLIC`; `gh api repos/<you>/golden-road-deploy/rulesets --jq '.[] | {name, enforcement}'` prints `main` and `main-review`, both `active`, and neither lists a bypass actor; `gh secret list --env bump --repo <you>/golden-road-deploy` lists `DEPLOY_APP_KEY`; `gh variable list --repo <you>/golden-road-deploy` lists `DEPLOY_APP_ID`; the App's Configure page shows `golden-road-deploy` alone, with read and write access to code and pull requests. From now on, change the repo by PR.
+
+### 20.2 Bootstrap `hello-app`
+First move `hello-app` to the new builder: regenerate it and merge its PR (as in 14.6), so its newest test release is one that builder made. A release from an older builder may have a binding baked into its signed manifests, and compose refuses it ("... which only the platform's binding may set").
+
+`deploy-check` and `bump` read `hello-app`'s image (its signatures and attestations) with the deploy repo's own token, which can't read another repo's private package. Make the package public: on GitHub, the package `hello-app` -> Package settings -> Change visibility -> Public.
+
+**Check:** `gh release list --repo <you>/hello-app --limit 1` shows a test release made after the merge, and `gh api /users/<you>/packages/container/hello-app --jq .visibility` prints `public`.
+
+`bump` runs every 15 minutes for the apps under `apps/`. The first time, name the app:
+```bash
+gh workflow run bump.yml --repo <you>/golden-road-deploy -f repo=<you>/hello-app
+gh run watch --repo <you>/golden-road-deploy
+gh pr list --repo <you>/golden-road-deploy
+```
+It opens one PR per environment that has a published release, `Pin <you>/hello-app test to <test tag>` on branch `bump/<you>-hello-app-test` (if `hello-app` has an older prod release, `bump` tries `prod` too: it either opens a prod PR or reports that compose refused the release; leave either until 20.4, which promotes a release the new builder made). Read the test one:
+```bash
+gh pr diff <number> --repo <you>/golden-road-deploy --name-only
+gh pr diff <number> --repo <you>/golden-road-deploy | grep -n 'namespace:\|suspend:\|kind: Namespace'
+```
+**Check:** the PR changes exactly `apps/<you>/hello-app/test/release.yaml`, `base/manifests.yaml`, `composed.yaml` and `kustomization.yaml`, and the two adapters `clusters/home/flux/<you>-hello-app-test.yaml` and `clusters/office/argo/<you>-hello-app-test.yaml`. `release.yaml` has `namespace: hello-app-test`: each environment has its own namespace, `<repo>-<env>`, and `composed.yaml` starts with the `Namespace` object that creates it. The Flux adapter has `suspend: true`. `deploy-check` passes: it verified the signature and the gate-record attestation of the release, the hashes of its `manifests.yaml` and `gate-record.json`, the app's intake record in the factory, the generated files and that nothing is switched on. Merge it (review it first if you have a deputy).
+
+From now on every new test release of `hello-app` gets its pin PR from the next scheduled `bump` run: merge a small change to `hello-app` (as in 12, item 3) and watch a new PR pin the new tag.
+
+### 20.3 Link a binding for `test`
+Do 19.1 and 19.2, steps 1 to 3, if you haven't. Then compare the signed manifests with what would be applied:
+```bash
+cd ~/poc && gh repo clone <you>/golden-road-deploy && cd golden-road-deploy
+diff apps/<you>/hello-app/test/base/manifests.yaml apps/<you>/hello-app/test/composed.yaml
+```
+**Check:** the diff shows the `Namespace` object, the service account's `azure.workload.identity/client-id` annotation, the pod label `azure.workload.identity/use: "true"`, the env vars (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `DATABRICKS_HOST`, `DATABRICKS_HTTP_PATH` and the catalog and schema) and the CiliumNetworkPolicy's egress to `login.microsoftonline.com` and the workspace host on 443. `base/manifests.yaml` is unchanged: its sha256 is still `release.yaml`'s `manifests_sha256`.
+
+### 20.4 Promote
+Promote a test release the new builder made (20.2's, or a later one) as in 12, item 5 (Gate 2). Never pin a prod release from before 20.2: it may carry a baked-in binding. The next `bump` run opens (or updates) `Pin <you>/hello-app prod to <prod tag>`, which changes `apps/<you>/hello-app/prod/...` and the prod adapters, with `namespace: hello-app-prod`. Prod has no bindings until you link them on the portal's `prod` tab.
+
+**Check:** `deploy-check` passes on it. Besides the test checks, it verified Gate 2's signed promotion of the same image and manifests. With a deputy, the promotion must have been approved by someone other than the person who triggered it, or the check fails ("... approved by someone other than the person who triggered it"). In single-approver mode a self-approved promotion is accepted only because `SINGLE_APPROVER_PROMOTIONS` is `accept`, and it says so: a warning on the run and in its summary ("accepted a single-approver (self-approved) promotion; PoC only, never valid for production"), and the PR body says "Single-approver promotion". Merge it.
+
+### 20.5 What is refused
+Open each as a PR from a branch of your clone (20.3), record `deploy-check`'s failure, and close the PR.
+- **A hand edit to `composed.yaml`** (change one value): "apps/<you>/hello-app/test/composed.yaml differs from what golden-road compose writes".
+- **A `release.yaml` naming a release whose manifests differ** (set `release:` to an older test tag and leave the hashes): "the release's manifests.yaml does not match manifests_sha256".
+- **A path outside the layout** (add `notes.txt` at the root): "the pull request changes paths outside the deploy layout".
+- **An adapter switched on** (set `suspend: false` in the Flux adapter): "clusters/home/flux/<you>-hello-app-test.yaml differs from what golden-road compose writes ..." and "... a Flux Kustomization must have spec.suspend: true".
+- **A factory `bindings/` file** (a factory PR that adds `bindings/<you>/hello-app.yaml`, once the factory is on the new pins, 20.7): `factory-check` fails with "bindings moved to golden-road-deploy".
+
+### 20.6 Mock only: nothing reconciles
+Each Flux `Kustomization` is written with `suspend: true`, each Argo CD `Application` has no `syncPolicy.automated`, and `policy/cluster-image-policy.yaml` (a Sigstore policy-controller `ClusterImagePolicy`) is in `mode: warn`. `deploy-check` and the public export both refuse a tree where any of these is switched on. Resuming would take, on the cluster and by hand: Flux applying `clusters/home/flux/` (the `GitRepository` and the environment's `Kustomization`) and then `flux resume kustomization <you>-hello-app-test`, or a manual sync of the Argo CD `Application`; and the policy-controller installed with the policy, moved to `enforce` once it warns on nothing. None of it is part of this PoC.
+
+### 20.7 The migration from factory bindings
+Only if section 19 ran on an older builder, so the factory holds `bindings/<you>/<repo>.yaml` files:
+1. For each one, link the same principal and warehouse on the app's `test` and `prod` tabs (19.2). The writer writes each environment's `binding/v2` and its `composed.yaml`.
+2. Then one factory PR deletes the files under `bindings/` (keep `bindings/README.md`) and moves the four `BUILDER_IMAGE` pins to the new release (as in 16.3). **Check:** `factory-check` passes. Until this PR, keep the factory on its old pins: the new `factory-check` refuses every file under `bindings/` except the README.
+
+With no factory bindings, move the factory's pins in one PR now (as in 16.3).
+
+### 20.8 Proof items (record the results), and roll back
+1. The `bump` run and its test PR: the file list, `namespace: hello-app-test`, and the `deploy-check` run.
+2. The diff of 20.3.
+3. The prod pin PR and its `deploy-check` run (in single-approver mode, its warning).
+4. Each refusal of 20.5.
+5. A new test release of `hello-app`: `gh release download <test tag> --repo <you>/hello-app -p gate-record.json && jq .binding gate-record.json` prints `null`, and the release has no `binding.yaml`.
+6. Nothing is on: `grep -h 'suspend:' clusters/home/flux/*.yaml` prints only `suspend: true`, `grep -l 'automated:' clusters/office/argo/*.yaml` prints nothing, and `grep -n 'mode:' policy/cluster-image-policy.yaml` prints `mode: warn`.
+
+**Roll back.** Nothing on a cluster changed, so there is nothing to undo there. To stop the pin PRs, `gh workflow disable bump.yml --repo <you>/golden-road-deploy`, and remove the deploy App's install. Unlink bindings on the portal's tabs (19.5). Going back to bindings in the release is a restore of the platform tree and the builder pins from git; keep the portal image (19.1, step 4).
+
+## 21. Delinea Secret Server secrets (mock)
+Beside the Azure identity and the Databricks connection, each environment's tab on an app's page has a Secrets section. An admin of the repo picks a Delinea Secret Server secret they can see, one of its fields, and the env var it arrives in. The writer records only a reference in that environment's `bindings.yaml` (the secret's id, name, folder and field), and `golden-road compose` turns it into one External Secrets Operator `ExternalSecret`, `<app>-delinea`, plus a `secretKeyRef` env entry, both in `composed.yaml`.
+
+**Mock only.** There is no Secret Server, no External Secrets Operator and no cluster. The portal talks to a mock Secret Server (`portal/mock_secret_server.json`) through a client written against the real REST API. The proof stops at git: the writer's PR, the generated files and the `deploy-check` runs.
+
+### 21.0 What changes
+- The value never passes through the portal, git or a release. The portal's client never asks Secret Server for a value; on a cluster ESO would read it with the platform's reader account, `golden-road-eso`.
+- A secret can be added only if the person can see it in Secret Server and it is shared with `golden-road-eso`. The portal checks both on submit; the writer checks the sharing again as `golden-road-eso` before it writes.
+- Secrets need neither an Azure identity nor the mock directory: they work with `PORTAL_DIRECTORY` empty.
+- The mock knows a person through a GitHub link they verified themselves (OAuth, on their own page): its user `mwdavisii` is the GitHub login `mwdavisii`. An admin-made link never maps. If `<you>` is another login, change that user's `github_login` in `portal/mock_secret_server.json` before you release the portal.
+
+Requirements: section 20 is done (the deploy repo exists and `hello-app`'s `test` pins a release), and section 19.1, step 3 (the write App on the deploy repo).
+
+### 21.1 Turn it on
+1. Move the factory, `hello-app` and the portal to the builder release that carries secrets (the lead's version bump; this section names no number), as in 20.1 and 14.6. It reserves env names that start with `SECRETSERVER_`.
+2. In the kit's `kustomization.yaml` set `PORTAL_SECRET_SERVER=mock` (empty means off). The web and the writer read the same key. Optionally set `PORTAL_SECRET_PROCESS_URL` to a page that says how to ask security to share a secret with `golden-road-eso`. Leave `PORTAL_SECRET_SERVER_URL` out: it is for a real Secret Server, and while only the mock exists the web and the writer refuse to start with it set. Roll out as in the kit README's "Change a setting". No migration is needed.
+
+**Check:** the web starts, the writer's log has no "refusing to start", and `hello-app`'s page shows "Secrets (Delinea Secret Server)" on each tab.
+
+### 21.2 The demo
+1. Open `hello-app`'s page, `test` tab. The Secrets section lists nothing until you search ("Search to list the secrets you can see."). Search `notes`. Secret Server is searched only when you submit, and only its first page of 20 is shown; with more, the page says "Only the first 20 are shown: narrow the search."
+2. **Check:** three results. `notes-api-key` shows a disabled "Not available" button and "Ask security to share it with `golden-road-eso`": it is not shared with the platform's account. `notes-tls` offers only its passphrase (its certificate is a file field, never offered). `notes-db` offers its fields.
+3. On `notes-db` pick the field `password`, name it `NOTES_DB_PASSWORD`, and add it. **Check:** the page says a change is pending; the writer opens a PR to `golden-road-deploy` that changes `apps/<you>/hello-app/test/bindings.yaml` and `apps/<you>/hello-app/test/composed.yaml` (two files, nothing else), `deploy-check` passes, and the writer merges it. The tab then lists `NOTES_DB_PASSWORD` from `notes-db` / `password`.
+4. Read what it wrote, in your clone of the deploy repo (20.3):
+   ```bash
+   cd ~/poc/golden-road-deploy && git pull
+   grep -n -A6 'secrets:' apps/<you>/hello-app/test/bindings.yaml
+   grep -n -A16 'kind: ExternalSecret' apps/<you>/hello-app/test/composed.yaml
+   grep -n -B1 -A4 'secretKeyRef' apps/<you>/hello-app/test/composed.yaml
+   ```
+   **Check:** `bindings.yaml` holds `env: NOTES_DB_PASSWORD`, `secret_id: 1042`, `secret_name: notes-db`, `field_slug: password` and `verified_by: mock-secret-server`, and no value. The last object in `composed.yaml` is the `ExternalSecret` `hello-app-delinea`, with `secretStoreRef` `kind: ClusterSecretStore`, `name: delinea-secret-server`, target `hello-app-delinea`, and one `data` entry: `secretKey: NOTES_DB_PASSWORD`, `remoteRef` `key: '1042'`, `property: password`. The Deployment's container has the env entry `NOTES_DB_PASSWORD` with `valueFrom.secretKeyRef` `name: hello-app-delinea`, `key: NOTES_DB_PASSWORD`.
+
+The writer fails a change with `secret_not_shared` (the secret is no longer shared with `golden-road-eso`), `secret_field_gone` (the field is no longer a non-file field of the secret's template), `secret_env_reserved` (the env name is one the platform reserves), `no_secret_server` (the writer has no `PORTAL_SECRET_SERVER`), `secret_verified_elsewhere` (the reference was checked by another Secret Server than the writer's), `secret_server_unavailable` (Secret Server didn't answer) or `compose_refused` (also when the app's own `builder-spec.json` sets the same env name), besides the reasons of 19.2. The page then says "The last change could not be recorded: <reason>."
+
+### 21.3 What is refused
+On the page (a hand-made POST to the add form, as in 19.3; the portal's tests cover each):
+- `finance-db` (id 2001, in a folder you can't see): "You can't see this secret in Secret Server."
+- `notes-api-key`: "This secret isn't shared with golden-road-eso: ask security to share it."
+- `notes-tls`'s `certificate` field: "That is not a field this secret can deliver: choose one of its template's fields (never a file)."
+- The env name `SECRETSERVER_X`: "SECRETSERVER_X is set by the platform and can't hold a secret."
+- A 21st secret in one environment: "An environment has at most 20 secrets."
+
+In the deploy repo (a PR from a branch of your clone, as in 20.5; record `deploy-check`'s failure and close the PR):
+- **The ExternalSecret edited** (set its `remoteRef` `key` to `'2001'`): "apps/<you>/hello-app/test/composed.yaml differs from what golden-road compose writes" and "...: the ExternalSecret's data is not the binding's secrets (not in the binding: NOTES_DB_PASSWORD=2001/password)".
+- **A `SecretStore`** (add `policy/secret-store.yaml` with `kind: SecretStore`): "policy/secret-store.yaml: a SecretStore is refused anywhere: secrets come only from the platform's ClusterSecretStore".
+
+### 21.4 The cluster side
+`external-secrets/` in the deploy repo holds the documented cluster side: `cluster-secret-store.yaml` (the `ClusterSecretStore` `delinea-secret-server`, whose username and password are `secretRef`s to the Secret `golden-road-eso` in the `external-secrets` namespace, never a value, and whose `conditions` let only `<repo>-test` and `<repo>-prod` namespaces use it), `cilium-egress.yaml` (ESO's pods may reach kube-dns, the Kubernetes API server and the Secret Server on 443, nothing else) and its `README.md`. Nothing points at the directory, and `deploy-check` refuses anything that does. On a real cluster the operators would install ESO, create that Secret by hand and apply both files by hand, never through Flux or Argo CD. None of it is part of this PoC.
+
+### 21.5 Proof items (record the results), and roll back
+1. The search result with `notes-api-key` disabled.
+2. The writer's PR (the two files) and its `deploy-check` run.
+3. The `bindings.yaml`, `ExternalSecret` and `secretKeyRef` lines of 21.2, step 4.
+4. The refusal for `finance-db`, and each `deploy-check` failure of 21.3.
+5. After the roll back: the writer's PR that removes the secret from `test/bindings.yaml`, and a `test/composed.yaml` with no `ExternalSecret` and no `secretKeyRef`.
+
+**Roll back.** On the `test` tab press **Remove** beside `NOTES_DB_PASSWORD`: the writer rewrites `bindings.yaml` without it and `composed.yaml` to match. To turn the section off, empty `PORTAL_SECRET_SERVER` and restart the pods. Nothing on a cluster changed.
 
 ## PoC gaps to record
 - The scans are open-source reference scans (Semgrep CE with a small vendored rule set plus `p/default`, Trivy, CodeQL default setup), not the security team's tools, thresholds, or triage. Until step 11, Gate 1 waits on nothing beyond drift and the authz probe. Gate 1 sees only a CodeQL check run's conclusion, so it proves the analysis ran, not that no alert exists; the alert threshold is enforced at merge time.
 - **Scan results can be forged.** Every check that a GitHub Actions workflow posts comes from the same app (id 15368), so pinning `app_id` cannot tell the `security-scans` workflow's `security-scans / semgrep` from a job of the same name that anyone with write access adds to a workflow in `hello-app` (or by editing `security-scans.yml` to stop calling the real scans). CodeQL's results can likewise be imitated by a workflow with `security-events: write`. What holds today is code-owner review of `.github/` and a deputy who rejects changes there. **The real fix is signed scan results**: the scan workflow signs its result with its own identity and the release verifies that signature instead of a check name. It is out of scope for this PoC.
 - **Base-image findings.** When the platform-pinned base image of the generated Dockerfile gets a fixed HIGH or CRITICAL, `security-scans / trivy` fails for every app built on it and the app team cannot fix it. The owner is the platform: bump the builder's base image, regenerate the apps, and re-release the builder. The step 5 dry run is the early warning.
 - The scans run `docker build` of the app's Dockerfile on every PR, which runs repository code on a throwaway runner without secrets; the scan job's token is `contents: read` only, and the job that can write PR comments is separate and runs nothing from the repo (see the `security-scans` README for the limits).
-- All five repos and the builder image are public; the configured gateway host, edge selector, and identity header are public.
+- Every repo in this PoC is public, and so are two packages: the builder image and `hello-app`'s image (the deploy repo reads it with its own token, 20.2). The configured gateway host, edge selector, and identity header are public.
 - The `golden-road / drift` merge check can be imitated by editing `ci.yml` in a PR (check pinned only to the Actions app; no required workflows on personal accounts). Releases are unaffected, but the merge check rests on the deputy rejecting unintended changes to `.github/`, backed by CODEOWNERS and code-owner review.
 - Anyone can mint platform-identity signatures for their own repos, so verification must pin the workflow repository, ref, and trigger.
 - The repo owner is the admin and can change settings, so the controls rest on the owner not weakening them. The deputy is a single second pair of eyes (none in single-approver mode, where the controls prove the mechanics only).
@@ -1282,11 +1435,26 @@ On the app's page remove the Azure identity: that removes the Databricks connect
 - **`golden-road remediate` reads the platform's PR comments,** which anyone with write access can imitate (as the checks): it treats them as evidence, never as what is failing, and never follows text in them.
 - **Windows is supported by design but untested** until the cross-agent evaluation; the agents' personal skill folders were checked on 2026-10-22 and have moved before.
 - **App connections are checked only against the portal's mock directory** (19). Nothing proves the principal or the warehouse exists or belongs to the app.
-- **The release reads the factory's binding with the job's own token,** which works because the PoC factory is public. If it can't read the factory, the release goes on with no binding and says so.
+- **`bump` and `deploy-check` read the app's releases and packages, and `deploy-check` the factory's intake record, with the deploy repo's own job token,** which works because the PoC's repos are public. Private repos would need a read credential.
 - **A binding is checked once, before the writer opens its PR.** The writer checks the directory entries (principal tagged, warehouse granted) and the requester's admin rights then, not again at merge: a tag, grant or admin right removed while the PR waits for its checks doesn't stop the merge.
 - **The portal doesn't pin the Host header to `PORTAL_BASE_URL`'s host.** Its trailing-slash redirect builds the `Location` from the request's Host. A separate change (a trusted-host check on that one host) closes it; it is not part of the app connections.
-- **A case-only rename of a repo leaves the old binding file behind.** The binding's path keeps the repo's name as GitHub gives it (`bindings/<owner>/<repo>.yaml`), so after renaming `Notes` to `notes` the next change writes a new file and the old-case one stays in the factory until someone deletes it by hand. The release reads only the file at the current name.
-- **The app page shows the portal's record, not the factory file.** The writer builds each change from the binding the portal last merged, so a hand edit of `bindings/<owner>/<repo>.yaml` in the factory is not shown on the page and is overwritten by the next change made there.
+- **A case-only rename of a repo needs a hand clean-up.** The deploy repo's paths keep the repo's name as GitHub gives it (`apps/<owner>/<repo>/<env>/`), so after renaming `Notes` to `notes` the next pin or binding writes a new directory, and `deploy-check` refuses the tree ("... are one repo under two cases") until someone removes the old-case directory by PR.
+- **The app page shows the portal's record, not the deploy repo's file.** The writer builds each change from the binding the portal last merged for that environment, so a hand edit of `apps/<owner>/<repo>/<env>/bindings.yaml` is not shown on the page and is overwritten by the next change made there.
+- **Bindings are owned per file, not per block.** CODEOWNERS can't own part of a file, so either security or analytics may approve a whole `bindings.yaml`, the Databricks part included (on a personal account both are you, or you and the deputy).
+- **Nothing reconciles in the PoC** (20.6). The composed files are checked in CI and never applied, so nothing proves they deploy, and the image policy is a file, not a running admission check.
+- **The deploy repo is a new place a platform App can write.** The deploy App can write any branch of `golden-road-deploy` (what holds `main` is the ruleset, which lists no bypass actor), and the portal's write App can merge there past `main-review`.
+- **The portal's writer can change prod's identity, env and egress with only `deploy-check`.** Its PRs bypass `main-review` (13.8, 19.1), so a repo admin of the app who links a principal on the `prod` tab changes what prod would run as, with no security or platform review. The recommended fix (to decide; not built in the mock): no bypass for `prod/`, so the writer leaves a prod binding PR open for review.
+- **`bump` stops after 60 days without activity,** like the factory's poller (16.8): GitHub disables a public repo's scheduled workflows then, and pin PRs just stop coming. `gh api repos/<you>/golden-road-deploy/actions/workflows/bump.yml --jq .state` prints `disabled_inactivity` then; `gh workflow enable bump.yml --repo <you>/golden-road-deploy` turns it back on.
+- **Single-approver mode accepts a self-approved promotion as a prod pin** (20.4). The warning on the `deploy-check` run and the PR body record it; nothing here is a second person.
+- **One reader account.** `golden-road-eso` can read every secret shared with it (21). What keeps one app from naming another app's secret is that bindings are generated and checked, not the account. A `SecretStore` per app, each with its own account, is the stronger option if security wants it.
+- **A secret's visibility to the person is checked once, at submit.** The writer has no token of the person's, so it re-checks only the sharing with `golden-road-eso` and the field. The real version needs the person's own Secret Server token from their sign-in (Secret Server federated with the same identity provider).
+- **Secrets carry over to a later change under the new person's name.** When another admin of the repo later changes the environment's Azure identity or Databricks connection (or adds or removes another secret), the secrets already there are kept in the new binding, recorded as linked by that admin. The writer re-checks their sharing with `golden-road-eso` and their fields, not whether the new admin can see them.
+- **The mock knows a person only through a GitHub link they verified with OAuth.** The portal mints the person's mock token with a placeholder password, which only the mock allows; it refuses to do that for anything but the mock.
+- **Secret Server's API details are to be confirmed** against the instance's own API documentation (`RestApiDocs`) before a real deployment: paging with `skip`/`take` (and `hasNext`), the template's `fields[].fieldSlugName`, and `/summary` as the sharing check. Each is one function in `portal/secretserver.py`.
+- **A secret's `secret_name` must match a strict pattern** (letters, digits, spaces, `.`, `_`, `-`). Real names may not, and such a secret can't be added until it is renamed.
+- **No real Secret Server credentials are wired.** `PORTAL_SECRET_SERVER_URL` is refused, and the writer fails a binding with secrets as `no_secret_server` on anything but the mock.
+- **A secret renamed or moved in Secret Server isn't re-checked.** The id and field are what ESO reads; the name and folder in `bindings.yaml` are for display and stay as they were at submit.
+- **Nothing runs for secrets:** no running Secret Server or ESO, so no pod proves a secret is delivered (21.4).
 
 ## If something fails
 The workflows fail closed, so a failure means no release was published. Keep the failing step's log and the command output.

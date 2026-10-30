@@ -240,14 +240,21 @@ def test_similar_but_unreserved_env_names_pass(notes_spec, python_app, name):
     assert check(notes_spec, python_app)[0] == []
 
 
-@pytest.mark.parametrize("name", ["AZURE_CLIENT_ID", "AZURE_TENANT_ID", "AZURE_ANYTHING", "DATABRICKS_HOST", "DATABRICKS_TOKEN"])
+@pytest.mark.parametrize("name", ["AZURE_CLIENT_ID", "AZURE_TENANT_ID", "AZURE_ANYTHING", "DATABRICKS_HOST", "DATABRICKS_TOKEN",
+                                  "SECRETSERVER_URL", "SECRETSERVER_TOKEN"])
 def test_binding_env_names_are_reserved(notes_spec, python_app, name):
     notes_spec["env"].append({"name": name, "secret": False})
     errors = check(notes_spec, python_app)[0]
     assert any(f"env name {name} is reserved" in e and "binding" in e for e in errors), errors
 
 
-@pytest.mark.parametrize("name", ["AZURE", "MY_AZURE_KEY", "DATABRICKS", "AZUREAD_X"])
+@pytest.mark.parametrize("name", ["AZURE", "MY_AZURE_KEY", "DATABRICKS", "AZUREAD_X", "SECRETSERVER", "MY_SECRETSERVER_URL"])
 def test_names_near_the_binding_prefixes_pass(notes_spec, python_app, name):
     notes_spec["env"].append({"name": name, "secret": False})
     assert check(notes_spec, python_app)[0] == []
+
+
+def test_secretserver_names_are_the_platform_s(notes_spec, python_app):
+    notes_spec["env"].append({"name": "SECRETSERVER_URL", "secret": False})
+    errors = check(notes_spec, python_app)[0]
+    assert any("SECRETSERVER_" in e and "Secret Server" in e for e in errors), errors

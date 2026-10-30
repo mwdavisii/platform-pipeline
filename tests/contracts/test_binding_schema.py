@@ -69,3 +69,48 @@ def test_a_trailing_newline_or_an_impossible_instant_is_refused():
     doc["databricks"]["host"] += "\n"
     assert validate("binding.v1", doc)
     assert validate("binding.v1", {**GOOD, "linked_at": "2026-02-30T15:00:00Z"})
+
+
+V2 = {"schema": "binding/v2", "repo": "acme/notes", "environment": "test", "secrets": [],
+      "linked_by": "p_" + "0" * 32, "linked_at": "2026-10-29T15:00:00Z", "request": "r_" + "0" * 32}
+SECRET = {"env": "NOTES_DB_PASSWORD", "secret_id": 1042, "secret_name": "notes-db", "folder_id": 17, "field_slug": "password",
+          "verified_by": "mock-secret-server"}
+
+
+def with_secrets(*items):
+    doc = copy.deepcopy(V2)
+    doc["secrets"] = list(items)
+    return doc
+
+
+def test_a_binding_may_carry_secret_references():
+    assert validate("binding.v2", with_secrets(SECRET)) == []
+    assert validate("binding.v2", V2) == []  # every document written before this still validates
+
+
+def test_secrets_need_no_azure_identity():
+    assert validate("binding.v2", with_secrets(SECRET)) == []
+
+
+@pytest.mark.parametrize("change", [
+    {"env": "notes_db"}, {"env": "1ABC"}, {"env": "A\n"}, {"secret_id": 0}, {"secret_id": "1042"}, {"secret_id": True},
+    {"folder_id": -1}, {"field_slug": "Password"}, {"field_slug": "-x"}, {"field_slug": "a" * 65}, {"secret_name": ""},
+    {"secret_name": "a" * 201}, {"secret_name": "a\nb"}, {"verified_by": "mock-directory"}, {"value": "x"},
+    {"secret_name": "a" * 129}, {"secret_name": " notes"}, {"secret_name": "notes "}, {"secret_name": "notes<script>"},
+    {"secret_name": "notes/db"}, {"secret_name": "notes\tdb"}, {"secret_name": "{{ x }}"}, {"secret_name": "-notes"},
+])
+def test_a_bad_secret_reference_is_refused(change):
+    item = {**SECRET, **change}
+    assert validate("binding.v2", with_secrets(item))
+
+
+def test_at_most_20_secrets_and_env_names_are_unique():
+    many = [{**SECRET, "env": f"S{i}"} for i in range(21)]
+    assert validate("binding.v2", with_secrets(*many))
+    assert validate("binding.v2", with_secrets(*many[:20])) == []
+    assert validate("binding.v2", with_secrets(SECRET, {**SECRET, "secret_id": 1050}))  # the same env twice
+
+
+@pytest.mark.parametrize("name", ["notes-db", "a", "Notes DB.v2_prod", "a" * 128, "1042"])
+def test_a_secret_server_like_name_is_accepted(name):
+    assert validate("binding.v2", with_secrets({**SECRET, "secret_name": name})) == []

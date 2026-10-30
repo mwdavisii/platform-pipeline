@@ -375,7 +375,7 @@ def test_each_agent_run_starts_from_a_clean_install_with_scripted_answers_and_th
     assert "gh run list" in five[five.index("stale draft"):]
     six = sub("14.6")
     assert "In case A, first set `ref` to the digest you pinned in 13.2" in " ".join(six.split())
-    assert "All five repos" in POC.read_text()[POC.read_text().index("## PoC gaps to record"):]
+    assert "Every repo in this PoC is public, and so are two packages" in POC.read_text()[POC.read_text().index("## PoC gaps to record"):]
 
 
 # ---- version-agnostic docs, the bump script, and not repeating what 13.2 already did ----

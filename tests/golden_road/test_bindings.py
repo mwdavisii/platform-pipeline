@@ -7,15 +7,15 @@ DBX = {"directory_id": "wh-notes", "host": "adb-1111111111111111.1.azuredatabric
 
 
 def test_no_binding_adds_nothing():
-    assert effects(None) == {"client_id": None, "env": [], "egress": []}
-    assert effects({"schema": "binding/v1", "repo": "acme/notes"}) == {"client_id": None, "env": [], "egress": []}
+    assert effects(None) == {"client_id": None, "env": [], "egress": [], "secrets": []}
+    assert effects({"schema": "binding/v1", "repo": "acme/notes"}) == {"client_id": None, "env": [], "egress": [], "secrets": []}
 
 
 def test_identity_only():
     assert effects({"azure_identity": AZ}) == {
         "client_id": AZ["client_id"],
         "env": [("AZURE_CLIENT_ID", AZ["client_id"]), ("AZURE_TENANT_ID", AZ["tenant_id"])],
-        "egress": [AZURE_LOGIN]}
+        "egress": [AZURE_LOGIN], "secrets": []}
 
 
 def test_identity_and_databricks():
@@ -39,3 +39,26 @@ def test_databricks_without_identity_adds_nothing():
 def test_each_call_returns_a_fresh_result():
     effects(None)["env"].append(("X", "y"))
     assert effects(None)["env"] == []
+
+
+S = {"env": "NOTES_DB_PASSWORD", "secret_id": 1042, "secret_name": "notes-db", "folder_id": 17, "field_slug": "password",
+     "verified_by": "mock-secret-server"}
+
+
+def test_secrets_are_an_effect_without_an_identity():
+    fx = effects({"secrets": [S]})
+    assert fx["client_id"] is None and fx["env"] == [] and fx["egress"] == []
+    assert fx["secrets"] == [("NOTES_DB_PASSWORD", 1042, "password")]
+
+
+def test_secrets_are_an_effect_with_an_identity_too():
+    assert effects({"azure_identity": AZ, "secrets": [S]})["secrets"] == [("NOTES_DB_PASSWORD", 1042, "password")]
+
+
+def test_secrets_are_sorted_by_env_name():
+    fx = effects({"secrets": [{**S, "env": "B"}, {**S, "env": "A", "secret_id": 7}]})
+    assert [e for e, _, _ in fx["secrets"]] == ["A", "B"]
+
+
+def test_no_secrets_is_an_empty_list():
+    assert effects(None)["secrets"] == [] and effects({"secrets": []})["secrets"] == []

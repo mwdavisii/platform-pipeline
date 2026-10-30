@@ -1,0 +1,9 @@
+# The source every app's Flux Kustomization in this directory reads. Applying it reconciles nothing by itself: each
+# Kustomization is written with suspend: true.
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata: {name: golden-road-deploy, namespace: flux-system}
+spec:
+  interval: 5m
+  url: https://github.com/mwdavisii/golden-road-deploy
+  ref: {branch: main}

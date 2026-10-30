@@ -34,13 +34,13 @@ Create an OAuth2/OpenID provider and an application for the portal:
 |---|---|---|
 | Repository permissions | Metadata: read. Contents: read. Actions: read. Checks: read. | Contents: write. Pull requests (`pull_requests`): write. Metadata: read. Checks: read. Actions (`actions`): read (to trace a check run to its workflow run). Administration (`administration`): read (only to read the bypass lists the writer checks). |
 | Organization permissions | Members (`members`): read | none |
-| Repositories | all the platform repositories | **selected: `mwdavisii/scorecard-factory` only** |
+| Repositories | all the platform repositories | **selected: `mwdavisii/scorecard-factory` and `mwdavisii/golden-road-deploy` only**. The writer files intake records in the factory and each environment's `bindings.yaml` and `composed.yaml` in the deploy repo, so it needs Contents and Pull requests write on both; its startup check refuses an installation that misses either or covers anything else |
 | Note | Contents read is used by the evidence collector: it reads each registered repo's default branch and the factory's `config/registration.yaml`. Actions and Checks read are for the planned collectors. Members read has no effect on a personal account (there is no organization). | |
 | User authorization | the read App's OAuth client signs a person's GitHub login in. Callback URL: `https://viber.mwdavisii.com/link/github/callback` | none; no OAuth, no webhook |
 
 Generate one private key for each. Note each App's id, and the id of each installation (the number at the end of the installation's settings URL). Put the four ids in `kustomization.yaml`, the read App's OAuth client id as `PORTAL_GITHUB_OAUTH_CLIENT_ID`, and everything secret in the Secrets below. Turn webhooks off on both.
 
-The writer will not start until the factory's rulesets are split as the writer's bypass check requires (see "Checks after deploy").
+The writer will not start until the factory's and golden-road-deploy's rulesets are split as the writer's bypass check requires (see "Checks after deploy"): in each repo the write App bypasses only `main-review` (by pull request), and `main` requires that repo's check, `factory-check` in the factory and `deploy-check` in the deploy repo.
 
 ### 3. Cloudflare tunnel and the identity header
 
@@ -68,9 +68,11 @@ The builder's baseline policy admits the web pods' port from the edge named in t
 | `PORTAL_READ_APP_ID`, `PORTAL_READ_INSTALLATION_ID` | collector | **REPLACE** |
 | `PORTAL_MODEL_GATEWAY_HOSTS` | collector | **REPLACE**: the platform's `model_gateway_hosts` (`platform/platform.json`), comma-separated. A host that is missing here is counted as other egress, which raises the floor the same way, so a mistake fails safe. It must equal the platform's `model_gateway_hosts`: the scorecard (T-21) reads `platform.json`, so a difference makes the portal's floor and the scorecard's floor disagree |
 | `PORTAL_WRITE_APP_ID`, `PORTAL_WRITE_INSTALLATION_ID` | writer | **REPLACE** |
-| `PORTAL_DIRECTORY` | web, writer | empty (app connections off), or `mock`: the web offers the mock directory's entries on each app's page and the writer re-checks every binding against the same directory before it writes `bindings/<owner>/<repo>.yaml` |
+| `PORTAL_DIRECTORY` | web, writer | empty (app connections off), or `mock`: the web offers the mock directory's entries on each app's page and the writer re-checks every binding against the same directory before it writes `apps/<owner>/<repo>/<env>/bindings.yaml` and `apps/<owner>/<repo>/<env>/composed.yaml` in `golden-road-deploy` |
 | `PORTAL_REPO_ADMINS_STALE_AFTER` | web, writer | empty (the default, 600 seconds), or 60 to 604800: how old the collector's view of a person's admin repos may be for registering, approving and writing a binding. Both processes read this one key, so they can't differ |
 | `PORTAL_IDENTITY_PROCESS_URL`, `PORTAL_DATA_PROCESS_URL` | web | empty, or an `https://` page describing how security creates service principals and how analytics grants warehouses (link text on the app page) |
+| `PORTAL_SECRET_SERVER` | web, writer | empty (app secrets off), or `mock`: the web offers secrets from the mock Delinea Secret Server (`portal/mock_secret_server.json`) on each app's page, searching as the signed-in person and checking each is shared with the platform account `golden-road-eso`, and the writer re-checks every binding secret against the same one. There is no real Secret Server yet, so the kit has no `PORTAL_SECRET_SERVER_URL`; the portal refuses one |
+| `PORTAL_SECRET_PROCESS_URL` | web | empty, or an `https://` page describing how security shares a secret with `golden-road-eso` (link text on the app page) |
 
 ### Secrets (`secrets.example.yaml`, applied by you, never by the kit)
 

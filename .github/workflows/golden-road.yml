@@ -383,54 +383,6 @@ jobs:
             -v "$PWD/src:/src:ro" -v "$PWD/out:/out" "$BUILDER_IMAGE" \
             golden-road authz-probe --repo-root /src --base-url "http://127.0.0.1:$port" --output /out/authz.json
 
-      # The app's binding (its Azure identity and Databricks connection), as the portal's writer recorded it in the factory. The
-      # factory is read first: if it answers 404 (not created yet, as before the personal PoC's step 13, or not readable with this
-      # token) the release goes on with no binding, says so in a warning and in the release notes, and leaves the marker
-      # out/factory-unreadable. Then a missing file (404) is no binding. Any other answer, or anything but one small regular
-      # file at exactly that path, stops the release. The render checks the file against binding/v1 and this repo itself, and the
-      # render, the gate record and the release assets use this one copy.
-      - name: Fetch the app's binding from the factory
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          rm -f out/binding.yaml out/binding.json out/factory.json out/factory-unreadable
-          owner="${GITHUB_REPOSITORY%%/*}"
-          name="${GITHUB_REPOSITORY#*/}"
-          [[ "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "::error::unexpected repository name"; exit 1; }
-          for part in "$owner" "$name"; do [[ "$part" != "." && "$part" != ".." ]] || { echo "::error::unexpected repository name"; exit 1; }; done
-          path="bindings/$owner/$name.yaml"
-          factory="$GITHUB_REPOSITORY_OWNER/scorecard-factory"
-          code=$(curl -sS --proto '=https' --max-time 60 --retry 3 --max-filesize 1048576 -o out/factory.json -w '%{http_code}' \
-            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" \
-            "$GITHUB_API_URL/repos/$factory") || { echo "::error::the factory $factory could not be read (curl exit $?)"; exit 1; }
-          rm -f out/factory.json
-          case "$code" in
-            200) ;;
-            404) touch out/factory-unreadable
-                 echo "::warning::the factory $factory could not be read (HTTP 404), so this release has no binding. Create the factory, or give the release read access to it, for the app's binding to apply."
-                 exit 0 ;;
-            *) echo "::error::reading the factory $factory answered HTTP $code"; exit 1 ;;
-          esac
-          # Read at main, not at the factory's default branch: the factory's default branch must be `main` (the writer merges its
-          # binding PRs into the default branch, so a factory whose default is another branch would never reach a release).
-          url="$GITHUB_API_URL/repos/$factory/contents/$path?ref=main"
-          code=$(curl -sS --proto '=https' --max-time 60 --retry 3 --max-filesize 262144 -o out/binding.json -w '%{http_code}' \
-            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github.object+json" -H "X-GitHub-Api-Version: 2022-11-28" \
-            "$url") || { echo "::error::the factory could not be read for $path (curl exit $?)"; exit 1; }
-          case "$code" in
-            200) ;;
-            404) rm -f out/binding.json; echo "The app has no binding ($path is not in the factory)."; exit 0 ;;
-            *) echo "::error::reading $path from the factory answered HTTP $code"; exit 1 ;;
-          esac
-          # The object form says what is at the path: a directory or a symlink is never read as the binding.
-          jq -e --arg path "$path" '.type == "file" and .path == $path and .encoding == "base64" and (.size | type == "number") and .size > 0 and .size <= 65536' \
-            out/binding.json > /dev/null || { echo "::error::$path in the factory is not a regular file of at most 64 KiB"; exit 1; }
-          jq -r .content out/binding.json | base64 -d > out/binding.yaml || { echo "::error::$path in the factory could not be decoded"; exit 1; }
-          [ "$(wc -c < out/binding.yaml)" -eq "$(jq .size out/binding.json)" ] || { echo "::error::$path in the factory was not read whole"; exit 1; }
-          rm -f out/binding.json
-          echo "The app has a binding: $path (sha256 $(sha256sum out/binding.yaml | cut -d' ' -f1))"
-
       - name: Render manifests and the gate record
         id: render
         env:
@@ -440,16 +392,9 @@ jobs:
           tag="test-$(date -u +%Y%m%d%H%M%S)-${GITHUB_SHA::7}"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           gr() { docker run --rm --network none --read-only --tmpfs /tmp --user "$(id -u):$(id -g)" -v "$PWD/src:/src:ro" -v "$PWD/out:/out" "$BUILDER_IMAGE" "$@"; }
-          # The binding the previous step fetched, if any: render checks it names exactly this repo, and the record names it.
-          render_binding=()
-          record_binding=()
-          if [ -e out/binding.yaml ]; then
-            render_binding=(--binding /out/binding.yaml --repo "$GITHUB_REPOSITORY")
-            record_binding=(--binding /out/binding.yaml)
-          fi
-          gr golden-road render --repo-root /src --image "$REF" "${render_binding[@]}" --output /out/manifests.yaml
+          gr golden-road render --repo-root /src --image "$REF" --output /out/manifests.yaml
           gr golden-road record --release "$tag" --manifests /out/manifests.yaml --repo "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" --image "$REF" --builder-image "$BUILDER_IMAGE" \
-            "${record_binding[@]}" --drift /out/drift-gate.json --checks /out/checks.json --authz /out/authz.json --output /out/gate-record.json
+            --drift /out/drift-gate.json --checks /out/checks.json --authz /out/authz.json --output /out/gate-record.json
 
       - name: Sign, attest, tag, and publish the test release
         env:
@@ -464,25 +409,12 @@ jobs:
           # Fetch the commit date first so a failure here happens before anything is signed or tagged.
           commit_date=$(git -C src show -s --format=%cI "$GITHUB_SHA")
           [[ "$commit_date" =~ ^[0-9T:+-]+Z?$ ]] || { echo "::error::no commit date for $GITHUB_SHA"; exit 1; }
-          # The binding line for the notes, also read before anything is signed.
-          binding=$(jq -r 'if .binding == null then "no binding" else "\(.binding.path) (sha256 \(.binding.sha256))" end' out/gate-record.json)
-          [[ "$binding" == "no binding" || "$binding" =~ ^bindings/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.yaml\ \(sha256\ [0-9a-f]{64}\)$ ]] || { echo "::error::the gate record names no readable binding"; exit 1; }
-          # The gate record, the fetched file and the assets must agree: the file is attached exactly when the record names it.
-          assets=(out/manifests.yaml out/gate-record.json)
-          if [ "$binding" = "no binding" ]; then
-            [ ! -e out/binding.yaml ] || { echo "::error::a binding was fetched but the gate record names none"; exit 1; }
-            if [ -e out/factory-unreadable ]; then binding="none (the factory $GITHUB_REPOSITORY_OWNER/scorecard-factory could not be read)"; fi
-          else
-            { [ -f out/binding.yaml ] && [ ! -L out/binding.yaml ] && [ ! -e out/factory-unreadable ]; } || { echo "::error::the gate record names a binding the release did not fetch"; exit 1; }
-            [ "$(sha256sum out/binding.yaml | cut -d' ' -f1)" = "$(jq -r .binding.sha256 out/gate-record.json)" ] || { echo "::error::binding.yaml is not the binding the gate record names"; exit 1; }
-            assets+=(out/binding.yaml)
-          fi
           cosign sign --yes "$REF"
           cosign attest --yes --type "$GATE_PREDICATE" --predicate out/gate-record.json "$REF"
           docker buildx imagetools create --tag "$IMAGE:$tag" "$REF"
           got=$(docker buildx imagetools inspect "$IMAGE:$tag" --format '{{json .Manifest}}' | jq -r .digest)
           [ "$got" = "${REF##*@}" ] || { echo "::error::tag $tag points at $got, not the signed ${REF##*@}"; exit 1; }
-          notes=$(printf 'Test release.\n\n- Image: %s\n- Commit: %s\n- Commit date: %s\n- Binding: %s\n- Gate record and deploy-ready manifests attached, and the binding when there is one.\n\nPromote with the promote workflow (Gate 2).' "$REF" "$GITHUB_SHA" "$commit_date" "$binding")
-          gh release create "$tag" "${assets[@]}" --repo "$GITHUB_REPOSITORY" \
+          notes=$(printf 'Test release.\n\n- Image: %s\n- Commit: %s\n- Commit date: %s\n- Gate record and deploy-ready manifests attached.\n\nPromote with the promote workflow (Gate 2).' "$REF" "$GITHUB_SHA" "$commit_date")
+          gh release create "$tag" out/manifests.yaml out/gate-record.json --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" --title "$tag" --notes "$notes" --prerelease
-          { echo "### Test release \`$tag\`"; echo "- Image: \`$REF\`"; echo "- Binding: $binding"; } >> "$GITHUB_STEP_SUMMARY"
+          { echo "### Test release \`$tag\`"; echo "- Image: \`$REF\`"; } >> "$GITHUB_STEP_SUMMARY"

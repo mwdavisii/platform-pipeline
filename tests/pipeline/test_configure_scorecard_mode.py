@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from helpers import COMMITTED_FINDINGS_RULESET, COMMITTED_SCORECARD_CALLER, unconfigure_agents, unconfigure_factory, unconfigure_hello_app, unconfigure_platform, unconfigure_portal
+from helpers import unconfigure_deploy, COMMITTED_FINDINGS_RULESET, COMMITTED_SCORECARD_CALLER, unconfigure_agents, unconfigure_factory, unconfigure_hello_app, unconfigure_platform, unconfigure_portal
 from test_configure import GOOD, configure, live_tree_is_pristine, workspace  # noqa: F401 - workspace is the fixture
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -165,6 +165,7 @@ def test_the_helpers_restore_a_central_tree_to_the_committed_state(workspace):
     unconfigure_hello_app(workspace / "bootstrap/hello-app")
     unconfigure_portal(workspace / "bootstrap/golden-road-portal")
     unconfigure_factory(workspace / "bootstrap/scorecard-factory", "example-org")
+    unconfigure_deploy(workspace / "bootstrap/golden-road-deploy", "example-org")
     unconfigure_agents(workspace / "bootstrap/golden-road-agents", "example-org", live.get("github_host"), live.get("actions_oidc_issuer"))
     platform = platform_of(workspace)
     assert "scorecard_mode" not in platform and "scorecard_app_id" not in platform and "findings_bypass_team" not in platform

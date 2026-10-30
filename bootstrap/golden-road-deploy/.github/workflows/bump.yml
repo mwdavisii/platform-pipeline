@@ -1,0 +1,288 @@
+# Opens the release-pin pull requests: for each app under apps/ (or the one app a dispatch names, which may be new), the newest
+# published test- release and the newest prod- release become apps/<owner>/<repo>/<env>/release.yaml and base/manifests.yaml
+# (golden-road deploy-pin), plus the files golden-road compose generates from them, as one commit on bump/<owner>-<repo>-<env>,
+# made through the git data API. It never merges: deploy-check verifies the signatures and the platform reviews.
+#
+# A pin pull request that is still open is left alone while its commit sits on the current main, and rebuilt on main (the branch
+# force-updated) once main moves on. One closed without merging is opened again on the next run, as long as its release is still
+# the newest: to stop that, pin the environment by hand or remove the app. An app that can't be bumped (no releases, a missing
+# asset, a refused pin, an API error) is reported and skipped; the run goes on with the others and fails at the end.
+#
+# The pull requests are opened with the deploy App's token, not this workflow's: a pull request opened with GITHUB_TOKEN does not
+# trigger workflows, so deploy-check would never run on it. The App key lives in the `bump` environment (main only), and the token
+# is minted for this one repository with exactly contents=write and pull_requests=write, and only when some environment has a
+# newer release than it pins. The releases are read with this workflow's own read-only token.
+name: bump
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: One app to bump (owner/name), even one not under apps/ yet; empty for every app under apps/
+        required: false
+        type: string
+        default: ""
+
+permissions: {}
+
+env:
+  BUILDER_IMAGE: ghcr.io/mwdavisii/golden-road-builder@sha256:0000000000000000000000000000000000000000000000000000000000000000
+
+concurrency:
+  group: bump
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    runs-on: ubuntu-24.04
+    environment: bump
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Refuse the placeholder builder image
+        run: |
+          set -euo pipefail
+          if [[ "$BUILDER_IMAGE" =~ @sha256:0{64}$ ]]; then
+            echo "::error::BUILDER_IMAGE in bump.yml is still the placeholder digest. Pin the released builder image's digest first."
+            exit 1
+          fi
+
+      - name: Check the repo input
+        env:
+          REPO_INPUT: ${{ inputs.repo }}
+        run: |
+          set -euo pipefail
+          [ "$GITHUB_REF" = refs/heads/main ] || { echo "::error::bump runs on main only"; exit 1; }
+          if [ -n "$REPO_INPUT" ]; then
+            [[ "$REPO_INPUT" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "::error::the repo input must be owner/name"; exit 1; }
+            case "/$REPO_INPUT/" in */./*|*/../*) echo "::error::the repo input must be owner/name"; exit 1;; esac
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: deploy
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      # Pull the builder image, then drop the registry credential.
+      - name: Pull the builder image and log out
+        run: |
+          set -euo pipefail
+          docker pull -q "$BUILDER_IMAGE" > /dev/null
+          docker logout ghcr.io
+
+      - name: Read the pins
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          docker run --rm --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --network none --read-only --tmpfs /tmp --user "$(id -u):$(id -g)" \
+            -v "$PWD/deploy:/deploy:ro" -v "$PWD/out:/out" "$BUILDER_IMAGE" golden-road deploy-pins --root /deploy --output /out/pins.json
+
+      # Which environments have a newer published release than they pin, read with this workflow's own token. When none has,
+      # the deploy App's token is never minted.
+      - name: Find the releases to pin
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO_INPUT: ${{ inputs.repo }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+          skip() { echo "::error::$1"; echo "$1" >> out/plan-errors.txt; }  # reported; the pin step fails the run at the end
+          : > out/plan.tsv
+          : > out/plan-errors.txt
+          if [ -n "$REPO_INPUT" ]; then
+            echo "$REPO_INPUT" > out/repos.txt
+          else
+            jq -r 'keys[] | split("/") | .[1] + "/" + .[2]' out/pins.json | sort -u > out/repos.txt
+          fi
+          mapfile -t repos < out/repos.txt
+          for repo in "${repos[@]}"; do
+            [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || fail "unexpected repo name"
+            case "/$repo/" in */./*|*/../*) fail "unexpected repo name";; esac
+            owner="${repo%%/*}"
+            if [ "${owner,,}" != "${GITHUB_REPOSITORY_OWNER,,}" ]; then skip "apps/$repo: $repo is not in $GITHUB_REPOSITORY_OWNER"; continue; fi
+            if ! gh release list --repo "$repo" --limit 100 --json tagName,isPrerelease,isDraft,publishedAt > out/releases.json; then
+              skip "apps/$repo: cannot list the releases of $repo"
+              continue
+            fi
+            for env in test prod; do
+              env_path="apps/$repo/$env"
+              tag=$(jq -r --arg env "$env" '[.[] | select(.isDraft != true and (.tagName | test("^" + $env + "-[0-9]{14}-[0-9a-f]{7}$")))]
+                | sort_by(.publishedAt) | last | .tagName // ""' out/releases.json)
+              if [ -z "$tag" ]; then echo "$env_path: no published $env release"; continue; fi
+              [[ "$tag" =~ ^${env}-[0-9]{14}-[0-9a-f]{7}$ ]] || fail "$env_path: unexpected tag"
+              if [ "$(jq -r --arg k "$env_path" '.[$k].release // ""' out/pins.json)" = "$tag" ]; then
+                echo "$env_path: already pins $tag"
+                continue
+              fi
+              printf '%s\t%s\t%s\n' "$repo" "$env" "$tag" >> out/plan.tsv
+            done
+          done
+          if [ -s out/plan.tsv ]; then
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+            echo "$(wc -l < out/plan.tsv) environments to pin"
+          else
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+            echo "nothing to pin: the deploy App token is not minted"
+          fi
+
+      - name: Mint the deploy App token
+        if: steps.plan.outputs.needed == 'true'
+        env:
+          APP_ID: ${{ vars.DEPLOY_APP_ID }}
+          APP_KEY: ${{ secrets.DEPLOY_APP_KEY }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+          [[ "$APP_ID" =~ ^[1-9][0-9]{0,9}$ ]] || fail "the deploy App id (repository variable DEPLOY_APP_ID) is not set or not a number"
+          [ -n "$APP_KEY" ] || fail "the deploy App key (DEPLOY_APP_KEY in the bump environment) is not set"
+          dir="$RUNNER_TEMP/deploy-token"
+          mkdir -m 700 "$dir"
+          # The key reaches only the builder image, which mints a token for this one repository and these two permissions.
+          env -i PATH="$PATH" HOME="$HOME" GOLDEN_ROAD_APP_KEY="$APP_KEY" GITHUB_API_URL="${GITHUB_API_URL:-https://api.github.com}" \
+            docker run --rm --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --read-only --tmpfs /tmp --user "$(id -u):$(id -g)" \
+              -e GOLDEN_ROAD_APP_KEY -e GITHUB_API_URL -v "$dir:/out" "$BUILDER_IMAGE" \
+              golden-road app-token --app-id "$APP_ID" --repo "$GITHUB_REPOSITORY" --permission contents=write --permission pull_requests=write --output /out/token.json
+          token=$(jq -r '.token // ""' "$dir/token.json")
+          [[ "$token" =~ ^ghs_[A-Za-z0-9_.-]+$ ]] && [ "${#token}" -ge 24 ] && [ "${#token}" -le 4100 ] || fail "the token has an unexpected form"
+          echo "::add-mask::$token"
+          ( umask 077; printf '%s' "$token" > "$dir/token" )
+          rm "$dir/token.json"
+
+      - name: Open or update the pin pull requests
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }  # something this script relies on broke: stop
+          failed=0
+          skip() { echo "::error::$1"; failed=1; }  # one app or environment could not be bumped: say so, go on with the next
+          [ -s out/plan-errors.txt ] && failed=1
+          if [ ! -s out/plan.tsv ]; then
+            [ "$failed" -eq 0 ] || fail "at least one app could not be read (each is named above)"
+            echo "nothing to pin"
+            exit 0
+          fi
+          token=$(cat "$RUNNER_TEMP/deploy-token/token")
+          dgh() { GH_TOKEN="$token" gh "$@"; }  # writes to this repo only; the releases are read with the workflow's own token
+          gr() { docker run --rm --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --network none --read-only --tmpfs /tmp --user "$(id -u):$(id -g)" \
+                   -v "$PWD/work:/deploy" -v "$PWD/in:/in:ro" "$BUILDER_IMAGE" "$@"; }
+          base=$(git -C deploy rev-parse HEAD)
+          base_tree=$(git -C deploy rev-parse "HEAD^{tree}")
+          [[ "$base" =~ ^[0-9a-f]{40}$ && "$base_tree" =~ ^[0-9a-f]{40}$ ]] || fail "no base commit"
+          layout='^(apps/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(test|prod)/(release\.yaml|composed\.yaml|kustomization\.yaml|base/manifests\.yaml)|clusters/(home/flux|office/argo)/[a-z0-9-]+\.yaml)$'
+          mapfile -t plan < out/plan.tsv
+          for line in "${plan[@]}"; do
+            IFS=$'\t' read -r repo env tag <<< "$line"
+            # the plan step wrote these; check again before they reach a command line
+            [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ && "$env" =~ ^(test|prod)$ && "$tag" =~ ^${env}-[0-9]{14}-[0-9a-f]{7}$ ]] || fail "unexpected plan line"
+            case "/$repo/" in */./*|*/../*) fail "unexpected repo name";; esac
+            env_path="apps/$repo/$env"
+            title="Pin $repo $env to $tag"
+            branch="bump/${repo%%/*}-${repo#*/}-$env"
+            if ! dgh api "repos/$GITHUB_REPOSITORY/pulls?state=open&head=${GITHUB_REPOSITORY%%/*}:$branch&per_page=100" > out/pulls.json; then
+              skip "$env_path: cannot list the open pull requests for $branch"
+              continue
+            fi
+            # An open pull request for this release is current only while its commit sits directly on main as it is now.
+            # Otherwise (main moved on) the branch is rebuilt on main and force-updated, so deploy-check runs on today's tree.
+            head=$(jq -r --arg t "$title" 'first(.[] | select(.title == $t) | .head.sha // "") // ""' out/pulls.json)
+            if [ -n "$head" ]; then
+              [[ "$head" =~ ^[0-9a-f]{40}$ ]] || fail "$env_path: unexpected pull request head"
+              if ! parents=$(dgh api "repos/$GITHUB_REPOSITORY/git/commits/$head" --jq '[.parents[].sha] | join(" ")'); then
+                skip "$env_path: cannot read the head commit of the open pull request"
+                continue
+              fi
+              if [ "$parents" = "$base" ]; then
+                echo "$env_path: $tag is already proposed on the current main"
+                continue
+              fi
+              echo "$env_path: the open pull request for $tag is not on the current main; rebuilding it"
+            fi
+            # Each environment starts from main, so each pull request holds only its own files.
+            rm -rf in work
+            mkdir in
+            cp -a deploy work
+            patterns=(--pattern manifests.yaml --pattern gate-record.json)
+            if [ "$env" = prod ]; then patterns+=(--pattern promotion-record.json); fi
+            if ! gh release download "$tag" --repo "$repo" --dir in "${patterns[@]}"; then
+              skip "$env_path: cannot download the assets of release $tag"
+              continue
+            fi
+            missing=""
+            for asset in manifests.yaml gate-record.json; do
+              { [ -f "in/$asset" ] && [ ! -L "in/$asset" ]; } || missing="$asset"
+            done
+            if [ -n "$missing" ]; then skip "$env_path: release $tag has no $missing"; continue; fi
+            rc=0
+            gr golden-road deploy-pin --root /deploy "$env_path" --release "$tag" --manifests /in/manifests.yaml --gate-record /in/gate-record.json > out/pin.json || rc=$?
+            if [ "$rc" -ne 0 ]; then
+              skip "$env_path: golden-road deploy-pin refused $tag (the error is above). A repo name that gives no namespace needs release.yaml's namespace set by hand."
+              continue
+            fi
+            if ! gr golden-road compose --root /deploy --expect-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "$env_path" > out/compose.json; then
+              skip "$env_path: golden-road compose refused $tag (the error is above)"
+              continue
+            fi
+            jq -r '.written[]' out/pin.json out/compose.json | sort -u > out/written.txt
+            mapfile -t written < out/written.txt
+            : > out/entries.jsonl
+            ok=1
+            for f in "${written[@]}"; do
+              [[ "$f" =~ $layout ]] || fail "$env_path: compose wrote $f, outside the deploy layout"
+              case "/$f/" in */./*|*/../*) fail "$env_path: compose wrote $f, outside the deploy layout";; esac
+              { [ -f "work/$f" ] && [ ! -L "work/$f" ]; } || fail "$env_path: $f is not a regular file"
+              if [ -f "deploy/$f" ] && cmp -s "deploy/$f" "work/$f"; then continue; fi
+              # base64, so every file (base/manifests.yaml above all) lands byte for byte
+              base64 -w0 "work/$f" > out/blob.b64
+              jq -n --rawfile content out/blob.b64 '{content: $content, encoding: "base64"}' > out/blob.json
+              if ! sha=$(dgh api --method POST "repos/$GITHUB_REPOSITORY/git/blobs" --input out/blob.json --jq .sha); then ok=0; break; fi
+              [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || fail "$env_path: no blob for $f"
+              jq -cn --arg path "$f" --arg sha "$sha" '{path: $path, mode: "100644", type: "blob", sha: $sha}' >> out/entries.jsonl
+            done
+            if [ "$ok" -ne 1 ]; then skip "$env_path: cannot upload the files"; continue; fi
+            [ -s out/entries.jsonl ] || { echo "$env_path: nothing to change"; continue; }
+            jq -s --arg base "$base_tree" '{base_tree: $base, tree: .}' out/entries.jsonl > out/tree.json
+            if ! tree=$(dgh api --method POST "repos/$GITHUB_REPOSITORY/git/trees" --input out/tree.json --jq .sha); then skip "$env_path: cannot make the tree"; continue; fi
+            [[ "$tree" =~ ^[0-9a-f]{40}$ ]] || fail "$env_path: no tree"
+            jq -n --arg m "$title" --arg tree "$tree" --arg parent "$base" '{message: $m, tree: $tree, parents: [$parent]}' > out/commit.json
+            if ! commit=$(dgh api --method POST "repos/$GITHUB_REPOSITORY/git/commits" --input out/commit.json --jq .sha); then skip "$env_path: cannot make the commit"; continue; fi
+            [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || fail "$env_path: no commit"
+            if ! dgh api "repos/$GITHUB_REPOSITORY/git/matching-refs/heads/$branch" > out/refs.json; then skip "$env_path: cannot read $branch"; continue; fi
+            if jq -e --arg r "refs/heads/$branch" 'any(.[]; .ref == $r)' out/refs.json > /dev/null; then
+              jq -n --arg sha "$commit" '{sha: $sha, force: true}' > out/ref.json
+              dgh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/heads/$branch" --input out/ref.json > /dev/null || { skip "$env_path: cannot update $branch"; continue; }
+            else
+              jq -n --arg ref "refs/heads/$branch" --arg sha "$commit" '{ref: $ref, sha: $sha}' > out/ref.json
+              dgh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" --input out/ref.json > /dev/null || { skip "$env_path: cannot create $branch"; continue; }
+            fi
+            # shellcheck disable=SC2016 # the backticks are Markdown in the pull request body, not a command
+            body=$(printf 'Pins `%s` %s to the published release `%s`: `release.yaml`, `base/manifests.yaml` and the files `golden-road compose` generates from them.\n\ndeploy-check verifies the signature, the gate record and, for prod, the promotion. Opened by the bump workflow, which never merges.' "$repo" "$env" "$tag")
+            # A hint only (the asset is unsigned; deploy-check reads the signed promotion): say when the promotion was self-approved.
+            if [ -f in/promotion-record.json ] && [ ! -L in/promotion-record.json ] \
+               && jq -e '.self_approved == true or .gate2_single_approver == true' in/promotion-record.json > /dev/null 2>&1; then
+              body+=$'\n\n''**Single-approver promotion:** this release was approved by the person who triggered it. PoC only, never valid for production.'
+            fi
+            number=$(jq -r 'first(.[] | .number) // ""' out/pulls.json)
+            if [ -n "$number" ]; then
+              [[ "$number" =~ ^[0-9]+$ ]] || fail "$env_path: unexpected pull request number"
+              jq -n --arg t "$title" --arg b "$body" '{title: $t, body: $b}' > out/pull.json
+              dgh api --method PATCH "repos/$GITHUB_REPOSITORY/pulls/$number" --input out/pull.json > /dev/null || { skip "$env_path: cannot update pull request #$number"; continue; }
+              echo "$env_path: updated pull request #$number to $tag"
+            else
+              jq -n --arg t "$title" --arg h "$branch" --arg b "$body" '{title: $t, head: $h, base: "main", body: $b}' > out/pull.json
+              dgh api --method POST "repos/$GITHUB_REPOSITORY/pulls" --input out/pull.json > /dev/null || { skip "$env_path: cannot open the pull request"; continue; }
+              echo "$env_path: opened a pull request for $tag"
+            fi
+          done
+          [ "$failed" -eq 0 ] || fail "at least one app or environment could not be bumped (each is named above); the others were opened"

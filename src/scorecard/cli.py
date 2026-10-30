@@ -20,7 +20,7 @@ from .agent.runner import assess
 from .blocking import override_by
 from .build import NotAssessed, agent_scope, build_scorecard, prepare
 from .asvs import check_ids, load_asvs
-from .config import engine, gate1_list, load_binding, load_config, load_confirmed_na, load_intake, load_registration_rules, runner_env
+from .config import engine, gate1_list, load_config, load_confirmed_na, load_intake, load_registration_rules, runner_env
 from .factory_digest import factory_digest
 from .observations import checks_from_doc, checks_sha
 from .precondition import RERUN_HINT, not_assessed
@@ -214,12 +214,34 @@ def _cmd_factory_digest(args, registry, model) -> int:
     return EXIT_OK
 
 
+def _frozen_bindings(factory: Path) -> list[str]:
+    """Every file under bindings/ except a README.md directly in it. Bindings live per environment in golden-road-deploy from
+    0.4.0, and the factory's bindings/ is frozen (check-factory has no diff, so it refuses every file)."""
+    top = factory / "bindings"
+    if top.is_file() and not top.is_symlink():  # a file named bindings is a binding record in the wrong place, not nothing
+        return ["bindings: bindings moved to golden-road-deploy (apps/<owner>/<repo>/<env>/bindings.yaml); delete this file from the factory"]
+    if top.is_symlink() or not top.is_dir():
+        return []
+    problems = []
+    for dirpath, dirnames, filenames in os.walk(top, followlinks=False):
+        dirnames.sort()
+        for name in sorted(filenames + [d for d in dirnames if (Path(dirpath) / d).is_symlink()]):
+            path = Path(dirpath) / name
+            if path.parent == top and name == "README.md" and not path.is_symlink():
+                continue
+            rel = path.relative_to(factory)
+            problems.append(f"{rel}: bindings moved to golden-road-deploy (apps/<owner>/<repo>/<env>/bindings.yaml); "
+                            "delete this file from the factory")
+    return problems
+
+
 def _cmd_check_factory(args, registry, model) -> int:
     """Every problem in the factory, found with the loaders the scorecard uses, so a bad record fails the factory's own pull
     request instead of sending an app (or every app) to "not assessed"."""
-    factory, problems, counts = args.factory, [], {"intake": 0, "na": 0, "suppressions": 0, "bindings": 0}
+    factory, problems, counts = args.factory, [], {"intake": 0, "na": 0, "suppressions": 0}
     config, warnings = None, []
     problems += _symlinks(factory)
+    problems += _frozen_bindings(factory)
     try:
         config = load_config(factory)
         gate1_list(factory, config)
@@ -249,8 +271,6 @@ def _cmd_check_factory(args, registry, model) -> int:
                     entries = load_confirmed_na(factory, repo)
                     if config and requirements:
                         check_ids(requirements, config, entries)
-                elif kind == "bindings":
-                    load_binding(factory, repo)
                 else:
                     load_suppressions(factory, repo)
                 counts[kind] += 1

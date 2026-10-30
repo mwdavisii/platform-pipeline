@@ -1,0 +1,228 @@
+# The deploy repo's required check: every file a pull request changes is inside the deploy layout, every environment's release
+# pin and bindings validate and its generated files are exactly what golden-road compose writes (golden-road deploy-verify, which
+# also refuses anything that would reconcile or deny on its own: golden_road.off_by_default), and every changed release.yaml
+# pins the platform's own signed release. A prod pin also needs the release's signed Gate 2 promotion. Nothing here reconciles
+# anything, and nothing here writes.
+#
+# It runs on pull_request (the target-branch variant is never used): the job holds only a read-only token. Like factory-check, a PR runs
+# its own copy of this file, so the author of a change to .github/ can weaken the check in the same change. What protects this
+# file is code-owner review of .github/ (CODEOWNERS and the ruleset), not the check.
+#
+# Every value a pull request controls (paths, release.yaml, bindings, release assets) reaches the scripts through files and
+# validated shell variables, never through an expression.
+name: deploy-check
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions: {}
+
+env:
+  BUILDER_IMAGE: ghcr.io/mwdavisii/golden-road-builder@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  GATE_PREDICATE: https://golden-road.internal/gate-record/v1
+  PROMOTION_PREDICATE: https://golden-road.internal/promotion/v1
+  # refuse: a prod pin needs a promotion approved by someone other than the person who triggered it (the deploy-owner contract in
+  # docs/enforcement.md). configure.py --single-approver sets accept, for the personal PoC only, where no second account exists.
+  SINGLE_APPROVER_PROMOTIONS: accept
+
+jobs:
+  check:
+    name: deploy-check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Refuse the placeholder builder image
+        run: |
+          set -euo pipefail
+          if [[ "$BUILDER_IMAGE" =~ @sha256:0{64}$ ]]; then
+            echo "::error::BUILDER_IMAGE in deploy-check.yml is still the placeholder digest. Pin the released builder image's digest first."
+            exit 1
+          fi
+
+      # The pull request's merge commit; its first parent is the base branch, so HEAD^1..HEAD is exactly what the PR changes.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+          path: deploy
+
+      - name: Changed paths
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          # Renames are listed as a removal and an addition, so both paths are checked. A path with unusual characters is quoted
+          # by git and so matches nothing below.
+          git -C deploy diff --name-only --no-renames HEAD^1 HEAD -- > out/changed.txt
+          layout='^(apps/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(test|prod)/(release\.yaml|bindings\.yaml|composed\.yaml|kustomization\.yaml|base/manifests\.yaml)|apps/\.gitkeep|clusters/(home/flux|office/argo)/[a-z0-9-]+\.yaml|clusters/(home/flux|office/argo)/README\.md|README\.md|\.github/.+|policy/.+|external-secrets/(README\.md|cluster-secret-store\.yaml|cilium-egress\.yaml))$'
+          grep -vE "$layout" out/changed.txt > out/outside.txt || [ $? -eq 1 ]
+          if [ -s out/outside.txt ]; then
+            echo "Paths outside the deploy layout:"
+            jq -R . out/outside.txt  # one JSON string per path: a path is the pull request's text
+            echo "::error::the pull request changes paths outside the deploy layout (apps/<owner>/<repo>/<test|prod>/..., clusters/, policy/, external-secrets/, .github/)"
+            exit 1
+          fi
+          echo "$(wc -l < out/changed.txt) changed paths, all inside the deploy layout"
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      # Pull the builder image, then drop the registry credential.
+      - name: Pull the builder image and log out
+        run: |
+          set -euo pipefail
+          docker pull -q "$BUILDER_IMAGE" > /dev/null
+          docker logout ghcr.io
+
+      - name: Compose and verify every environment
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          gr() { docker run --rm --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --network none --read-only --tmpfs /tmp --user "$(id -u):$(id -g)" -v "$PWD/deploy:/deploy:ro" -v "$PWD/out:/out" "$BUILDER_IMAGE" "$@"; }
+          rc=0
+          # The Flux source (and so every adapter) must name this repository: an adapter pointing at another repo would reconcile it.
+          gr golden-road deploy-verify --root /deploy --expect-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" > out/verify.json || rc=$?
+          if [ "$rc" -eq 1 ]; then
+            echo "deploy-verify problems:"
+            jq -c '.problems[]' out/verify.json  # one JSON string per line: a problem quotes the pull request's paths and values
+            echo "::error::deploy-verify found $(jq '.problems | length' out/verify.json) problems: a schema, the base's hash, a stale or hand-edited generated file or adapter, a shared namespace, or something that is not off by default"
+            exit 1
+          elif [ "$rc" -ne 0 ]; then
+            echo "::error::deploy-verify could not check the repo (exit $rc)"
+            exit 1
+          fi
+          echo "$(jq .environments out/verify.json) environments verified"
+          gr golden-road deploy-pins --root /deploy --output /out/pins.json
+
+      # The spec's intake check: an app is pinned only once the platform knows it (its intake record in the scorecard factory).
+      # The bindings' directory checks (tagged principal, granted warehouse) are the portal writer's: the directory is the portal's.
+      - name: Every changed environment's app has an intake record
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+          grep -oE '^apps/[^/]+/[^/]+/(test|prod)/' out/changed.txt | sort -u > out/changed-environments.txt || [ $? -eq 1 ]
+          mapfile -t environments < out/changed-environments.txt
+          factory="$GITHUB_REPOSITORY_OWNER/scorecard-factory"
+          n=0
+          for env_path in "${environments[@]}"; do
+            env_path="${env_path%/}"
+            jq -e --arg k "$env_path" 'has($k)' out/pins.json > /dev/null || continue  # a removed environment
+            repo=$(jq -r --arg k "$env_path" '.[$k].repo' out/pins.json)
+            [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || fail "$env_path: unexpected repo"
+            case "/$repo/" in */./*|*/../*) fail "$env_path: unexpected repo";; esac
+            owner="${repo%%/*}"
+            [ "${owner,,}" = "${GITHUB_REPOSITORY_OWNER,,}" ] || fail "$env_path: $repo is not in $GITHUB_REPOSITORY_OWNER"
+            rc=0
+            gh api "repos/$factory/contents/intake/$repo.yaml?ref=main" --silent 2> out/intake.err || rc=$?
+            if [ "$rc" -ne 0 ]; then
+              if grep -q 'HTTP 404' out/intake.err; then
+                fail "$env_path: $repo has no intake record (intake/$repo.yaml on main in $factory); register the app before pinning it"
+              fi
+              fail "$env_path: cannot read $repo's intake record in $factory (gh api exit $rc)"
+            fi
+            n=$((n + 1))
+          done
+          echo "$n changed environments have an intake record"
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
+
+      - name: Verify every changed release is the platform's signed release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+          case "$SINGLE_APPROVER_PROMOTIONS" in refuse) accept_single=false;; accept) accept_single=true;; *) fail "SINGLE_APPROVER_PROMOTIONS must be refuse or accept";; esac
+          grep -E '^apps/[^/]+/[^/]+/(test|prod)/release\.yaml$' out/changed.txt > out/changed-releases.txt || [ $? -eq 1 ]
+          mapfile -t releases < out/changed-releases.txt
+          cat > out/select-gate.jq <<'JQ'
+          [ .[]
+            | .payload | @base64d | fromjson | .predicate
+            | select(type == "object" and .release == $release) ] as $mine
+          | if ($mine | length) == 1 and $mine[0].status == "pass" then $mine[0]
+            else error("expected exactly one passing gate attestation for " + $release + ", found " + ($mine | length | tostring))
+            end
+          JQ
+          cat > out/select-promotion.jq <<'JQ'
+          [ .[]
+            | .payload | @base64d | fromjson | .predicate
+            | select(type == "object" and .release == $release and .image == $image and .manifests_sha256 == $manifests)
+            | select((.self_approved | type) == "boolean" and (.gate2_single_approver | type) == "boolean")
+            | select($accept_single or (.self_approved == false and .gate2_single_approver == false)) ]
+          | length >= 1
+          JQ
+          deploy_owner="${GITHUB_REPOSITORY_OWNER,,}"
+          n=0
+          for f in "${releases[@]}"; do
+            env_path="${f%/release.yaml}"
+            if ! jq -e --arg k "$env_path" 'has($k)' out/pins.json > /dev/null; then
+              [ ! -e "deploy/$f" ] || fail "$f has no pin"
+              echo "$env_path: removed"
+              continue
+            fi
+            jq -r --arg k "$env_path" '.[$k] | [.repo, .environment, .release, .image, .manifests_sha256, .gate_record_sha256] | @tsv' out/pins.json > out/pin.tsv
+            IFS=$'\t' read -r repo environment tag image want_manifests want_gate < out/pin.tsv
+            # deploy-pins validated these against deploy-release/v1; check again before they reach a command line.
+            [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ && "$environment" =~ ^(test|prod)$ && "$tag" =~ ^${environment}-[0-9]{14}-[0-9a-f]{7}$ \
+               && "$want_manifests" =~ ^[0-9a-f]{64}$ && "$want_gate" =~ ^[0-9a-f]{64}$ ]] || fail "$f: unexpected pin"
+            owner="${repo%%/*}"
+            [ "${owner,,}" = "$deploy_owner" ] || fail "$f: $repo is not in $GITHUB_REPOSITORY_OWNER"
+            [[ "$image" == "ghcr.io/${owner,,}/"* && "${image#"ghcr.io/${owner,,}/"}" =~ ^[a-z0-9-]+@sha256:[0-9a-f]{64}$ ]] || fail "$f: unexpected image $image"
+            n=$((n + 1))
+            d="out/release-$n"
+            mkdir "$d"
+            gh release download "$tag" --repo "$repo" --dir "$d" --pattern manifests.yaml --pattern gate-record.json
+            for asset in manifests.yaml gate-record.json; do
+              { [ -f "$d/$asset" ] && [ ! -L "$d/$asset" ]; } || fail "$f: release $tag has no $asset"
+            done
+            [ "$(sha256sum "$d/manifests.yaml" | cut -d' ' -f1)" = "$want_manifests" ] || fail "$f: the release's manifests.yaml does not match manifests_sha256"
+            [ "$(sha256sum "$d/gate-record.json" | cut -d' ' -f1)" = "$want_gate" ] || fail "$f: the release's gate-record.json does not match gate_record_sha256"
+            cmp -s "$d/manifests.yaml" "deploy/$env_path/base/manifests.yaml" || fail "$f: base/manifests.yaml is not the release's manifests.yaml"
+            # The test release the pin comes from: the tag itself, or for prod the one the promoted gate record names (same commit).
+            from=$(jq -r .release "$d/gate-record.json")
+            [[ "$from" =~ ^test-[0-9]{14}-[0-9a-f]{7}$ && "${from: -7}" = "${tag: -7}" ]] || fail "$f: the gate record does not name a test release of $tag's commit"
+            if [ "$environment" = test ] && [ "$from" != "$tag" ]; then fail "$f: the gate record is $from's, not $tag's"; fi
+            # The release workflow's identity, exactly as Gate 2 checks it: the platform workflow, run by this app's repo on main.
+            id=(--certificate-identity "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY_OWNER}/platform-pipeline/.github/workflows/golden-road.yml@refs/heads/main"
+                --certificate-oidc-issuer https://token.actions.githubusercontent.com
+                --certificate-github-workflow-repository "$repo"
+                --certificate-github-workflow-ref refs/heads/main
+                --certificate-github-workflow-trigger push)
+            cosign verify "${id[@]}" "$image" > /dev/null || fail "$f: $image has no signature from the platform's release workflow for $repo"
+            cosign verify-attestation "${id[@]}" --type "$GATE_PREDICATE" "$image" > "$d/gate.jsonl" || fail "$f: $image has no gate-record attestation from the platform's release workflow"
+            jq -s -e --arg release "$from" -f out/select-gate.jq "$d/gate.jsonl" > "$d/predicate.json" || fail "$f: no single passing gate attestation for $from"
+            jq -e --slurpfile asset "$d/gate-record.json" '. == $asset[0]' "$d/predicate.json" > /dev/null || fail "$f: the release's gate-record.json is not the attested gate record"
+            jq -e --arg repo "$repo" --arg image "$image" --arg m "$want_manifests" '.repo == $repo and .image == $image and .manifests_sha256 == $m' "$d/predicate.json" > /dev/null \
+              || fail "$f: the attested gate record is for another repo, image or manifests"
+            if [ "$environment" = prod ]; then
+              # Gate 2's signed promotion: the reusable promote workflow, dispatched in this app's repo on main.
+              pid=(--certificate-identity "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY_OWNER}/platform-pipeline/.github/workflows/golden-road-promote.yml@refs/heads/main"
+                   --certificate-oidc-issuer https://token.actions.githubusercontent.com
+                   --certificate-github-workflow-repository "$repo"
+                   --certificate-github-workflow-ref refs/heads/main
+                   --certificate-github-workflow-trigger workflow_dispatch)
+              cosign verify-attestation "${pid[@]}" --type "$PROMOTION_PREDICATE" "$image" > "$d/promotion.jsonl" || fail "$f: a prod pin needs a promoted release: $image has no promotion attestation"
+              jq -s -e --arg release "$from" --arg image "$image" --arg manifests "$want_manifests" --argjson accept_single "$accept_single" \
+                -f out/select-promotion.jq "$d/promotion.jsonl" > /dev/null \
+                || fail "$f: a prod pin needs a promoted release: no promotion of $from for this image and manifests$([ "$accept_single" = true ] || echo ' approved by someone other than the person who triggered it')"
+              # Accepted only because this tree is single-approver: say so where the reviewer looks.
+              if [ "$accept_single" = true ] && ! jq -s -e --arg release "$from" --arg image "$image" --arg manifests "$want_manifests" --argjson accept_single false \
+                   -f out/select-promotion.jq "$d/promotion.jsonl" > /dev/null; then
+                warning="$f: accepted a single-approver (self-approved) promotion; PoC only, never valid for production"
+                echo "::warning::$warning"
+                echo "- $warning" >> "$GITHUB_STEP_SUMMARY"
+              fi
+            fi
+            echo "$env_path: $tag is the platform's signed release of $repo"
+          done
+          echo "${n} changed release pins verified"

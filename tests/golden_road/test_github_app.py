@@ -153,3 +153,21 @@ def test_an_unreadable_or_odd_slug_is_refused_before_a_token_is_minted(slug):
         fake = odd
     with pytest.raises(InputError):
         mint(fake)
+
+
+def test_contents_write_is_only_the_deploy_apps_pin_set():
+    # golden-road-deploy's bump workflow: a pin branch and its PR, nothing else. contents=write alone, or with anything else, is refused.
+    assert github_app.parse_permissions(["contents=write", "pull_requests=write"], "acme/golden-road-deploy") == {"contents": "write", "pull_requests": "write"}
+    for repo in (None, "acme/hello-app", "acme/golden-road-deploy-x", "acme/not-golden-road-deploy/x"):
+        with pytest.raises(InputError, match="golden-road-deploy"):
+            github_app.parse_permissions(["contents=write", "pull_requests=write"], repo)
+    for pairs in (["contents=write"], ["contents=write", "pull_requests=read"], ["contents=write", "pull_requests=write", "checks=write"],
+                  ["contents=write", "issues=write"]):
+        with pytest.raises(InputError):
+            github_app.parse_permissions(pairs, "acme/golden-road-deploy")
+
+
+def test_the_token_call_refuses_contents_write_for_any_other_repo_before_any_call():
+    with pytest.raises(InputError, match="golden-road-deploy"):
+        github_app.installation_token("https://api.github.com", 1234, "unused", "o/app", {"contents": "write", "pull_requests": "write"},
+                                      opener=lambda *a, **k: pytest.fail("no call may be made"))

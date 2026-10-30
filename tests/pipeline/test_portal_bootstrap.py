@@ -37,8 +37,25 @@ def test_the_portal_s_bindings_module_is_the_release_s():
     assert (PORTAL / "portal/bindings.py").read_bytes() == (ROOT / "src/golden_road/bindings.py").read_bytes()
 
 
+def test_the_portal_s_compose_is_the_release_s():
+    """The writer writes composed.yaml with the same code deploy-check re-runs, so its PR is never stale (spec 2026-10-29 GitOps)."""
+    assert (PORTAL / "portal/compose.py").read_bytes() == (ROOT / "src/golden_road/compose.py").read_bytes()
+
+
+def _pin(path, package):
+    found = re.findall(rf"(?mi)^{re.escape(package)}==(\S+)", path.read_text())
+    assert len(found) == 1, (path, found)
+    return found[0]
+
+
+def test_the_builder_and_the_portal_pin_the_same_pyyaml():
+    """compose.py runs in both images and must dump composed.yaml byte for byte the same, so both pin one PyYAML."""
+    builder = _pin(ROOT / "images/builder/requirements.txt", "pyyaml")
+    assert _pin(PORTAL / "requirements.txt", "pyyaml") == builder
+    assert _pin(PORTAL / "requirements-test.txt", "pyyaml") == builder
+
 def test_the_portal_s_vendored_schemas_are_the_contracts():
-    names = ("binding.v1.json", "builder-spec.v1.json", "identity-link.v1.json", "intake.v2.json", "registration-draft.v1.json", "registration-evidence.v1.json", "registration-rules.v1.json")
+    names = ("binding.v1.json", "binding.v2.json", "builder-spec.v1.json", "deploy-release.v1.json", "identity-link.v1.json", "intake.v2.json", "registration-draft.v1.json", "registration-evidence.v1.json", "registration-rules.v1.json")
     for name in names:
         assert (PORTAL / "portal/schemas" / name).read_bytes() == (ROOT / "src/contracts/schemas" / name).read_bytes(), name
     assert sorted(p.name for p in (PORTAL / "portal/schemas").glob("*.json")) == sorted(names)
@@ -144,3 +161,13 @@ def test_the_portal_declares_its_directory_settings():
     assert env["PORTAL_DIRECTORY"] is False and env["PORTAL_IDENTITY_PROCESS_URL"] is False and env["PORTAL_DATA_PROCESS_URL"] is False
     deployment = (PORTAL / "deploy/base/deployment.yaml").read_text()
     assert all(f"key: {name}" in deployment for name in ("PORTAL_DIRECTORY", "PORTAL_IDENTITY_PROCESS_URL", "PORTAL_DATA_PROCESS_URL"))
+
+
+def test_the_portal_declares_its_secret_server_settings():
+    env = {e["name"]: e["secret"] for e in json.loads((PORTAL / "builder-spec.json").read_text())["env"]}
+    assert env["PORTAL_SECRET_SERVER"] is False and env["PORTAL_SECRET_PROCESS_URL"] is False
+    assert "PORTAL_SECRET_SERVER_URL" not in env  # only the mock exists; the settings refuse it
+    deployment = (PORTAL / "deploy/base/deployment.yaml").read_text()
+    assert all(f"key: {name}" in deployment for name in ("PORTAL_SECRET_SERVER", "PORTAL_SECRET_PROCESS_URL"))
+    readme = (PORTAL / "README.md").read_text()
+    assert all(f"`{name}`" in readme for name in ("PORTAL_SECRET_SERVER", "PORTAL_SECRET_PROCESS_URL", "PORTAL_SECRET_SERVER_URL"))

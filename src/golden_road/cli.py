@@ -12,12 +12,11 @@ from pathlib import Path
 from builder.config import gate2_single_approver, load_platform
 from contracts.schema import validate
 
-from . import authz_probe, checks, doctor, preview, record, register, remediate
+from . import authz_probe, checks, deploy, doctor, preview, record, register, remediate
 from .gate import evaluate, load_overrides
 from .io import InputError, load_findings, load_json, write_json, write_text_atomic
 from .normalize import from_builder_result, normalize_sarif
 from .preflight import case_collisions, forged_guard_markers
-from .render import load_binding
 from .render import render as render_manifests
 from .summary import annotations
 from .summary import render as render_summary
@@ -92,9 +91,43 @@ def _parser() -> argparse.ArgumentParser:
     rn.set_defaults(handler=_cmd_render)
     rn.add_argument("--repo-root", required=True, type=Path)
     rn.add_argument("--image", required=True)
-    rn.add_argument("--binding", type=Path, default=None, help="the app's binding (binding/v1) the release fetched from the factory")
-    rn.add_argument("--repo", default=None, help="OWNER/REPO being released; the binding must name exactly this repo")
     rn.add_argument("--output", required=True, type=Path)
+    cp = sub.add_parser("compose", help="Write composed.yaml, kustomization.yaml and the adapters for golden-road-deploy environments.",
+                        description="For each apps/<owner>/<repo>/<env> path (relative to --root), check release.yaml, bindings.yaml and "
+                                    "base/manifests.yaml, then write composed.yaml and kustomization.yaml, and the environment's suspended "
+                                    "Flux Kustomization and manual-sync Argo CD Application under clusters/ (the repo URL from "
+                                    "clusters/home/flux/gitrepository.yaml). Offline. Exit 0: written, the paths "
+                                    "as JSON on stdout. Exit 2: a refused input (a JSON error on stderr); nothing is written for that path.")
+    cp.set_defaults(handler=_cmd_compose)
+    cp.add_argument("--root", type=Path, default=Path("."), help="the golden-road-deploy checkout (default: .)")
+    cp.add_argument("--expect-url", help="refuse unless clusters/home/flux/gitrepository.yaml's url is this one (https://<host>/<org>/golden-road-deploy)")
+    cp.add_argument("environments", nargs="+", help="apps/<owner>/<repo>/<test|prod>")
+    dv = sub.add_parser("deploy-verify", help="Check every golden-road-deploy environment offline. Reads only; changes nothing.",
+                        description="Verify every apps/<owner>/<repo>/<env>: schemas, the base's hash, generated files and adapters not stale, "
+                                    "no extra files or symlinks, no adapter for a missing environment, and no two environments sharing a namespace. Exit 0: no problems; exit 1: problems; stdout is "
+                                    '{"environments": n, "problems": [...]}. Exit 2: bad arguments or no apps/ (a JSON error on stderr).')
+    dv.set_defaults(handler=_cmd_deploy_verify)
+    dv.add_argument("--root", type=Path, default=Path("."), help="the golden-road-deploy checkout (default: .)")
+    dv.add_argument("--expect-url", help="also report a problem unless clusters/home/flux/gitrepository.yaml's url (and so every adapter's) is this one")
+    pn = sub.add_parser("deploy-pin", help="Write one golden-road-deploy environment's release.yaml and base/manifests.yaml from a published release.",
+                        description="From a release tag and its two assets (manifests.yaml, gate-record.json), write <env>/release.yaml and "
+                                    "<env>/base/manifests.yaml. The gate record must pass, be this repo's, and hash the manifests; for prod it is "
+                                    "the promoted test release of the same commit. The namespace is kept, or <repo>-<env> for a new environment. "
+                                    "Offline. Exit 0: written, the paths as JSON on stdout. Exit 2: refused (a JSON error on stderr), nothing written. "
+                                    "Run golden-road compose after it.")
+    pn.set_defaults(handler=_cmd_deploy_pin)
+    pn.add_argument("--root", type=Path, default=Path("."), help="the golden-road-deploy checkout (default: .)")
+    pn.add_argument("environment", help="apps/<owner>/<repo>/<test|prod>")
+    pn.add_argument("--release", required=True, help="the published release's tag")
+    pn.add_argument("--manifests", required=True, type=Path, help="the release's manifests.yaml asset")
+    pn.add_argument("--gate-record", required=True, type=Path, help="the release's gate-record.json asset")
+    dp = sub.add_parser("deploy-pins", help="Write every golden-road-deploy environment's release.yaml as one JSON object. Reads only.",
+                        description='Write {"apps/<owner>/<repo>/<env>": <release.yaml>} for every environment to --output, each release '
+                                    "validated as deploy-verify does. The deploy repo's workflows read it with jq. Exit 2 (a JSON error on "
+                                    "stderr, nothing written): a path under apps/ that is not an environment, or a release.yaml that does not load.")
+    dp.set_defaults(handler=_cmd_deploy_pins)
+    dp.add_argument("--root", type=Path, default=Path("."), help="the golden-road-deploy checkout (default: .)")
+    dp.add_argument("--output", required=True, type=Path)
     rc = sub.add_parser("record")
     rc.set_defaults(handler=_cmd_record)
     for flag in ("--repo", "--commit", "--image", "--builder-image", "--release"):
@@ -102,7 +135,6 @@ def _parser() -> argparse.ArgumentParser:
     rc.add_argument("--manifests", required=True, type=Path)
     for flag in ("--drift", "--checks", "--authz"):
         rc.add_argument(flag, required=True, type=Path)
-    rc.add_argument("--binding", type=Path, default=None, help="the binding render used; the record names its path and sha256")
     rc.add_argument("--output", required=True, type=Path)
     pr = sub.add_parser("promotion-record")
     pr.set_defaults(handler=_cmd_promotion_record)
@@ -145,7 +177,8 @@ def _parser() -> argparse.ArgumentParser:
     rm.add_argument("--root", type=Path, default=Path("."), help="the app checkout (default: .), used only to tell whether a cited file exists")
     rm.add_argument("--host", default=None, help="the platform's GitHub host (default: the platform config's, else $GH_HOST, else github.com)")
     at = sub.add_parser("app-token", help="Mint a GitHub App installation token for one repository and the named permissions.",
-                        description="Mint an installation token of the scorecard App (central review). The App private key is read from "
+                        description="Mint an installation token of the scorecard App (central review) or of the deploy App (golden-road-deploy's "
+                                    "bump workflow: exactly contents=write and pull_requests=write, for <org>/golden-road-deploy only). The App private key is read from "
                                     "GOLDEN_ROAD_APP_KEY only. The token is written to --output (mode 0600); stdout names only its scope.")
     at.set_defaults(handler=_cmd_app_token)
     at.add_argument("--app-id", required=True, type=int)
@@ -246,27 +279,48 @@ def _cmd_render(args) -> int:
     app_name = spec.get("app_name") if isinstance(spec, dict) else None
     if not isinstance(app_name, str):
         raise InputError("builder-spec.json has no app_name")
-    if args.binding is not None and not args.repo:
-        raise InputError("--binding needs --repo, the repository the binding must name")
-    binding = load_binding(args.binding, args.repo) if args.binding is not None else None
-    write_text_atomic(args.output, render_manifests(args.repo_root, args.image, app_name, binding=binding))
+    write_text_atomic(args.output, render_manifests(args.repo_root, args.image, app_name))
     return EXIT_PASS
 
 
-def _binding_ref(args):
-    """The gate record's {path, sha256} for the binding, checked as render checks it so the record never names one render refused."""
-    if args.binding is None:
-        return None
-    load_binding(args.binding, args.repo)
-    owner, name = args.repo.split("/")
-    return {"path": f"bindings/{owner}/{name}.yaml", "sha256": _sha256_file(args.binding)}
+def _cmd_compose(args) -> int:
+    # Every environment's files are computed before any is written: one refused environment leaves every directory as it was.
+    planned = {}
+    dirs = [deploy.environment_dir(args.root, rel) for rel in args.environments]
+    url = deploy.deploy_repo_url(args.root)
+    if args.expect_url is not None:
+        deploy.check_repo_url(url, args.expect_url)
+    for d in dirs:
+        planned.update(deploy.plan_environment(d))
+        planned.update(deploy.plan_adapters(args.root, d, url))
+    written = [p.relative_to(args.root).as_posix() for p in deploy.write_planned(planned)]
+    print(json.dumps({"written": written}))
+    return EXIT_PASS
+
+
+def _cmd_deploy_verify(args) -> int:
+    report = deploy.verify_tree(args.root, expect_url=args.expect_url)
+    print(json.dumps(report, indent=2))
+    return EXIT_FAIL if report["problems"] else EXIT_PASS
+
+
+def _cmd_deploy_pin(args) -> int:
+    planned = deploy.plan_pin(args.root, args.environment, release=args.release, manifests=args.manifests, gate_record=args.gate_record)
+    written = [p.relative_to(args.root).as_posix() for p in deploy.write_bytes_planned(planned)]
+    print(json.dumps({"written": written}))
+    return EXIT_PASS
+
+
+def _cmd_deploy_pins(args) -> int:
+    write_json(args.output, deploy.pins(args.root))
+    return EXIT_PASS
 
 
 def _cmd_record(args) -> int:
     result = record.build_gate_record(
         repo=args.repo, commit=args.commit, image=args.image, builder_image=args.builder_image,
         drift=load_json(args.drift), checks=load_json(args.checks), authz=load_json(args.authz),
-        created=_now(), release=args.release, manifests_sha256=_sha256_file(args.manifests), binding=_binding_ref(args))
+        created=_now(), release=args.release, manifests_sha256=_sha256_file(args.manifests))
     write_json(args.output, result)
     return EXIT_PASS if result["status"] == "pass" else EXIT_FAIL
 
@@ -350,7 +404,7 @@ def _cmd_remediate(args) -> int:
 def _cmd_app_token(args) -> int:
     """The token goes only to the 0600 output file; stdout names its scope. The key is read from the environment only."""
     from . import github_app
-    perms = github_app.parse_permissions(args.permission)
+    perms = github_app.parse_permissions(args.permission, args.repo)
     doc = github_app.installation_token(os.environ.get("GITHUB_API_URL", "https://api.github.com"), args.app_id,
                                         os.environ.get(github_app.KEY_ENV, ""), args.repo, perms)
     github_app.write_token(args.output, doc)

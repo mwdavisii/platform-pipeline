@@ -1,6 +1,9 @@
-# Bindings
+# Bindings (moved)
 
-`bindings/<owner>/<repo>.yaml` (`binding/v1`) links an app to the Azure identity security's process created for it and to the
-Databricks connection analytics' process granted to that identity. The portal's writer writes these files when an app's admin
-picks them on the app's page; nothing else should. The release renders them into the app's signed manifests as an Azure workload
-identity and plain environment variables (no secrets). `factory-check` refuses a binding without the app's intake record.
+Bindings no longer live in the factory. Each environment's binding (`binding/v2`) is
+`apps/<owner>/<repo>/<env>/bindings.yaml` in `golden-road-deploy`, where the portal's writer records it together with the composed
+Kustomize it produces.
+
+This directory is frozen: `factory-check` refuses every file under `bindings/` except this README, with "bindings moved to
+golden-road-deploy". Migrating copies any old `bindings/<owner>/<repo>.yaml` to the deploy repo first, then one factory pull request
+deletes it here.

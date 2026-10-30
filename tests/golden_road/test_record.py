@@ -269,10 +269,17 @@ def test_schema_requires_gate2_single_approver_boolean():
     assert validate("promotion-record.v1", {**record, "gate2_single_approver": 0})
 
 
-def test_the_gate_record_names_the_binding_or_none():
-    with_binding = gate(binding={"path": "bindings/acme/notes.yaml", "sha256": "c" * 64})
-    assert with_binding["binding"] == {"path": "bindings/acme/notes.yaml", "sha256": "c" * 64}
-    assert validate("gate-record.v1", with_binding) == []
-    assert gate()["binding"] is None
-    with pytest.raises(InputError):
-        gate(binding={"path": "../evil.yaml", "sha256": "c" * 64})
+def test_the_gate_record_s_binding_is_always_null():
+    """From builder 0.4.0 the signed release is the app and nothing else; bindings are composed per environment in golden-road-deploy."""
+    record = gate()
+    assert "binding" in record and record["binding"] is None
+    assert validate("gate-record.v1", record) == []
+    with pytest.raises(TypeError):
+        gate(binding={"path": "bindings/acme/notes.yaml", "sha256": "c" * 64})
+
+
+def test_a_0_3_16_record_that_names_a_binding_still_validates():
+    record = {**gate(), "binding": {"path": "bindings/acme/notes.yaml", "sha256": "c" * 64}}
+    assert validate("gate-record.v1", record) == []
+    assert validate("gate-record.v1", {k: v for k, v in gate().items() if k != "binding"}) == []  # and one from before 0.3.16
+    assert validate("gate-record.v1", {**record, "binding": {"path": "../evil.yaml", "sha256": "c" * 64}})

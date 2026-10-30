@@ -86,3 +86,10 @@ def test_the_draft_leaves_out_names_the_platform_sets(make_app):
     assert out["needs"]["env"] == ["APP_MODE", "AZURE_CLIENT_ID", "DATABRICKS_HOST", "HOME"]
     assert out["needs"]["set_by_platform"] == ["AZURE_CLIENT_ID", "DATABRICKS_HOST", "HOME"]
     assert any("AZURE_CLIENT_ID" in q and "DATABRICKS_HOST" in q and "binding" in q for q in out["questions"])
+
+
+def test_the_draft_leaves_out_secretserver_names(make_app):
+    out = detect(make_app({"main.py": 'import os\nT = os.environ["SECRETSERVER_TOKEN"]\nM = os.environ["APP_MODE"]\n'}))
+    assert out["draft_spec"]["env"] == [{"name": "APP_MODE", "secret": False}]
+    assert out["needs"]["set_by_platform"] == ["SECRETSERVER_TOKEN"]
+    assert any("SECRETSERVER_TOKEN" in q and "binding" in q and "Secret Server" in q for q in out["questions"])

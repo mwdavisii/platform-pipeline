@@ -1,0 +1,20 @@
+# Sigstore policy-controller: admit only images the platform's release workflow signed and attested with a gate record.
+# mode: warn logs a warning and admits; nothing is denied until the platform switches it to enforce.
+# Before enforce, pin more than this subject does: like deploy-check's cosign verify, also the workflow repository (the app
+# repo), its ref (refs/heads/main) and trigger (push), through the certificate's GitHub extensions. The subject alone admits an
+# image signed by the platform workflow for anyone's repo that calls it.
+apiVersion: policy.sigstore.dev/v1beta1
+kind: ClusterImagePolicy
+metadata: {name: golden-road-release-signed}
+spec:
+  mode: warn
+  images: [{glob: "ghcr.io/mwdavisii/**"}]
+  authorities:
+    - keyless:
+        url: https://fulcio.sigstore.dev
+        identities:
+          - issuer: https://token.actions.githubusercontent.com
+            subject: https://github.com/mwdavisii/platform-pipeline/.github/workflows/golden-road.yml@refs/heads/main
+      attestations:
+        - name: gate-record
+          predicateType: https://golden-road.internal/gate-record/v1

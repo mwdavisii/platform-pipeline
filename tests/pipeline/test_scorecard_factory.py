@@ -112,10 +112,10 @@ def test_no_sample_is_a_live_record():
 def assert_codeowners_protect_the_records(factory):
     lines = [l.split() for l in (Path(factory) / ".github/CODEOWNERS").read_text().splitlines() if l.strip() and not l.startswith("#")]
     owners = {line[0]: line[1:] for line in lines}
-    assert set(owners) == {"*", "/intake/", "/bindings/", "/suppressions/", "/na/", "/config/registration.yaml"}
+    assert set(owners) == {"*", "/intake/", "/suppressions/", "/na/", "/config/registration.yaml"}
     assert all(o for o in owners.values())
     if all(o.count("/") == 1 for os_ in owners.values() for o in os_):  # every owner is an @org/team: security must be a different team
-        for path in ("/intake/", "/bindings/", "/suppressions/", "/na/", "/config/registration.yaml"):
+        for path in ("/intake/", "/suppressions/", "/na/", "/config/registration.yaml"):
             assert owners[path] != owners["*"], f"{path} needs the security team, not only platform review"
     else:  # owners are users (a personal account, or single-approver mode): one set of people may own everything, but every path must be listed
         assert not any("/" in o[1:] for os_ in owners.values() for o in os_)
@@ -135,6 +135,11 @@ OLD_RULES = [
 
 def factory_rulesets():
     return {name: json.loads((RULESETS / f"{name}.json").read_text()) for name in ("main", "main-review")}
+
+
+def deploy_rulesets():
+    rulesets = ROOT / "bootstrap/golden-road-deploy/.github/rulesets"
+    return {name: json.loads((rulesets / f"{name}.json").read_text()) for name in ("main", "main-review")}
 
 
 def test_codeowners_and_the_rulesets_protect_main():
@@ -178,15 +183,16 @@ def writer_bypass_problems(monkeypatch, add_app_to):
     from portal.github.client import GitHub
     from portal.writer.bypass import check_bypass
     gh = FakeGitHub()
-    docs = factory_rulesets()
     ids = {"main": 101, "main-review": 102}
-    r = "/repos/acme/scorecard-factory"
     gh.on("GET", "/app/installations/777", (200, gh.fixture("installation")))
     gh.on("GET", "/installation/repositories", (200, gh.fixture("installation_repositories")))
-    gh.on("GET", r + "/rulesets", (200, [{"id": i, "name": n} for n, i in ids.items()]))
-    for name, doc in docs.items():
-        doc = {**doc, "id": ids[name], "bypass_actors": [WRITE_APP] if name in add_app_to else []}
-        gh.on("GET", f"{r}/rulesets/{ids[name]}", (200, doc))
+    # the writer's second target, golden-road-deploy, with its own committed pair (the write App bypasses only its main-review)
+    for r, docs, app_on in (("/repos/acme/scorecard-factory", factory_rulesets(), add_app_to),
+                            ("/repos/acme/golden-road-deploy", deploy_rulesets(), {"main-review"})):
+        gh.on("GET", r + "/rulesets", (200, [{"id": i, "name": n} for n, i in ids.items()]))
+        for name, doc in docs.items():
+            doc = {**doc, "id": ids[name], "bypass_actors": [WRITE_APP] if name in app_on else []}
+            gh.on("GET", f"{r}/rulesets/{ids[name]}", (200, doc))
     client = GitHub("https://api.github.com", httpx.Client(transport=transport(gh)), lambda: "token")
     return check_bypass(client, client, 777, writer_config())
 
@@ -714,11 +720,8 @@ def test_the_readme_names_the_registration_rules_and_the_0_3_11_pin_rule():
     assert "Builder 0.3.11 requires `config/registration.yaml`" in text and "same pull request" in text
 
 
-def test_bindings_are_owned_by_security():
+def test_the_factory_bindings_directory_is_frozen():
     owners = (FACTORY / ".github/CODEOWNERS").read_text().splitlines()
-    rule = next(l.split() for l in owners if l.startswith("/bindings/ "))
-    if "ORG_PLACEHOLDER" in "\n".join(owners) or "/" in rule[1][1:]:  # team owners: the security team, as for /intake/
-        assert rule[1:] == next(l.split() for l in owners if l.startswith("/intake/ "))[1:]
-    assert (FACTORY / "bindings/README.md").is_file()
-    from scorecard.cli import _records
-    assert list(_records(FACTORY, "bindings")) == []  # the README is allowed directly under bindings/, and there are no live records
+    assert not any(l.startswith("/bindings/") for l in owners)
+    assert (FACTORY / "bindings/README.md").is_file() and "golden-road-deploy" in (FACTORY / "bindings/README.md").read_text()
+    assert [p.name for p in (FACTORY / "bindings").rglob("*") if p.is_file()] == ["README.md"]

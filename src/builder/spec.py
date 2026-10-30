@@ -129,8 +129,9 @@ RESERVED_ENV_PREFIXES = {
     "NPM_": "NPM_* variables change how npm runs and can't be set from config",
     "AZURE_": "AZURE_* variables are set by the platform from the app's binding (its Azure identity, linked in the portal), never from builder-spec.json",
     "DATABRICKS_": "DATABRICKS_* variables are set by the platform from the app's binding (its Databricks connection, linked in the portal), never from builder-spec.json",
+    "SECRETSERVER_": "SECRETSERVER_* variables belong to the platform's Secret Server integration (secrets reach the app as the env names its binding chose), never builder-spec.json",
 }
-BINDING_ENV_PREFIXES = ("AZURE_", "DATABRICKS_")
+BINDING_ENV_PREFIXES = ("AZURE_", "DATABRICKS_", "SECRETSERVER_")
 
 
 def reserved_reason(name: str) -> str | None:

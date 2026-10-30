@@ -358,10 +358,37 @@ def test_personal_poc_doc_covers_the_scans_codeql_dependabot_and_the_known_gap()
                    "sp-finance-reports", "AZURE_CLIENT_ID", "bindings/<you>/hello-app.yaml"):
         assert needle in text, needle
     steps = [int(m) for m in re.findall(r"^## (\d+)\.", text, re.M)]
-    assert steps == list(range(0, 20))
+    assert steps == list(range(0, 22))
     # the scans repo is published before hello-app is pushed, and the builder is released again only after both exist
     assert text.index("## 4. Publish `security-scans`") < text.index("## 5. Create `hello-app`") < text.index("## 11.") < text.index("## 12.")
-    assert text.index("## 13. Risk scorecard") < text.index("## 14. ") < text.index("## 16. Central AI review") < text.index("## 17. Switch the review to risk routing") < text.index("## 18. High findings hold the merge") < text.index("## 19. App connections (mock)") < text.index("## PoC gaps to record")
+    assert text.index("## 13. Risk scorecard") < text.index("## 14. ") < text.index("## 16. Central AI review") < text.index("## 17. Switch the review to risk routing") < text.index("## 18. High findings hold the merge") < text.index("## 19. App connections (mock)") < text.index("## 20. The deploy repo (mock)") < text.index("## 21. Delinea Secret Server secrets (mock)") < text.index("## PoC gaps to record")
+    twenty = text[text.index("## 20. The deploy repo (mock)"):text.index("## 21. Delinea Secret Server secrets (mock)")]
+    for needle in ("golden-road-deploy", "deploy-check", "suspend: true", "composed.yaml", "Mock only", "DEPLOY_APP_ID", "DEPLOY_APP_KEY",
+                   "environments/bump", "namespace: hello-app-test", "SINGLE_APPROVER_PROMOTIONS", "mode: warn", "### 20.8 Proof items",
+                   "packages/container/hello-app --jq .visibility", "Change visibility -> Public", "which only the platform's binding may set"):
+        assert needle in twenty, needle
+    assert twenty.index("regenerate it and merge its PR") < twenty.index("gh workflow run bump.yml"), "a clean release exists before the first bump"
+    gaps = text[text.index("## PoC gaps to record"):]
+    for needle in ("bypass `main-review`", "no bypass for `prod/`", "disabled_inactivity", "two packages"):
+        assert needle in gaps, needle
+    twenty_one = text[text.index("## 21. Delinea Secret Server secrets (mock)"):text.index("## PoC gaps to record")]
+    for needle in ("PORTAL_SECRET_SERVER=mock", "PORTAL_SECRET_PROCESS_URL", "PORTAL_SECRET_SERVER_URL", "PORTAL_DIRECTORY", "notes-api-key",
+                   "golden-road-eso", "notes-db", "NOTES_DB_PASSWORD", "bindings.yaml", "composed.yaml", "hello-app-delinea",
+                   "ClusterSecretStore", "delinea-secret-server", "key: '1042'", "property: password", "secretKeyRef", "finance-db",
+                   "You can't see this secret in Secret Server.", "SECRETSERVER_X is set by the platform and can't hold a secret.",
+                   "An environment has at most 20 secrets.", "never a file", "the ExternalSecret's data is not the binding's secrets",
+                   "a SecretStore is refused anywhere", "secret_not_shared", "secret_field_gone", "secret_env_reserved",
+                   "no_secret_server", "secret_server_unavailable", "compose_refused", "external-secrets/", "cluster-secret-store.yaml",
+                   "cilium-egress.yaml", "Mock only", "### 21.5 Proof items", "Remove", "first 20"):
+        assert needle in twenty_one, needle
+    for needle in ("One reader account", "checked once, at submit", "RestApiDocs", "fieldSlugName", "/summary", "skip", "take",
+                   "secret_name", "OAuth", "Secrets carry over", "renamed or moved", "no running Secret Server", "`SecretStore` per app"):
+        assert needle in gaps, needle
+    nineteen = text[text.index("## 19. App connections (mock)"):text.index("## 20. The deploy repo (mock)")]
+    for gone in ("binding.yaml", "Binding:", "/bindings/ @<you>"):
+        assert gone not in nineteen, gone
+    for needle in ("apps/<you>/hello-app/test/bindings.yaml", "not_registered", "not_deployed", "compose_refused", "base_moved", "0007"):
+        assert needle in nineteen, needle
 
 
 def test_enforcement_doc_has_neutral_rows_for_the_scans_and_the_forgery_gap():

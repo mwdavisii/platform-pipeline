@@ -24,7 +24,7 @@ the README of golden-road-agents; the approved-models link has no default. A lat
 later run may change it. There is no default: without it `register` says to ask the platform team.
 
 --single-approver is for the personal PoC only, for an owner with no second GitHub account. It records
-gate2_single_approver in platform/platform.json and relaxes the approval settings of hello-app, the scorecard factory and golden-road-agents (no PR approvals
+gate2_single_approver in platform/platform.json and relaxes the approval settings of hello-app, the portal, the scorecard factory, golden-road-agents and golden-road-deploy (no PR approvals
 required; the person who triggers a promotion may approve it). Never use it for a real organization.
 
 --scorecard-mode central (central AI review) needs --scorecard-app-id, the scorecard GitHub App's App ID. It records scorecard_mode and
@@ -115,11 +115,27 @@ PLACEHOLDER_STATE = {
     "bootstrap/golden-road-agents/skill/templates/workflows/promote.yml": "ORG_PLACEHOLDER",
     "bootstrap/golden-road-agents/skill/templates/workflows/scorecard.yml": "ORG_PLACEHOLDER",
     "bootstrap/golden-road-agents/skill/templates/workflows/security-scans.yml": "ORG_PLACEHOLDER",
+    "bootstrap/golden-road-deploy/.github/CODEOWNERS": "ORG_PLACEHOLDER",
+    "bootstrap/golden-road-deploy/.github/workflows/deploy-check.yml": "ORG_PLACEHOLDER",
+    "bootstrap/golden-road-deploy/.github/workflows/bump.yml": "ORG_PLACEHOLDER",
+    "bootstrap/golden-road-deploy/clusters/home/flux/gitrepository.yaml": "ORG_PLACEHOLDER",
+    "bootstrap/golden-road-deploy/policy/cluster-image-policy.yaml": "ORG_PLACEHOLDER",
 }
 
 RULESET_REL = Path(".github/rulesets/main.json")
-FACTORY_REVIEW_RULESET_REL = Path(".github/rulesets/main-review.json")  # the factory's pull_request rule lives in its own ruleset
+FACTORY_REVIEW_RULESET_REL = Path(".github/rulesets/main-review.json")  # the factory's (and the deploy repo's) pull_request rule lives in its own ruleset
 PROD_ENV_REL = Path(".github/environment-prod.json")
+# golden-road-deploy's deploy-check refuses a prod pin whose promotion was approved only by the person who triggered it, unless the
+# tree is configured single-approver (the personal PoC has no second account), where every promotion is one.
+DEPLOY_CHECK_REL = Path(".github/workflows/deploy-check.yml")
+DEPLOY_CHECK_REFUSE = "\n  SINGLE_APPROVER_PROMOTIONS: refuse\n"
+DEPLOY_CHECK_ACCEPT = "\n  SINGLE_APPROVER_PROMOTIONS: accept\n"
+ANY_ACCEPT = re.compile(r"SINGLE_APPROVER_PROMOTIONS:\s*accept")  # at any indentation, quoted or not
+
+
+def deploy_check_accepts(text: str) -> int:
+    """How many times the text sets SINGLE_APPROVER_PROMOTIONS to accept, in any form."""
+    return len(ANY_ACCEPT.findall(text))
 
 
 def _relaxed_ruleset(path: Path) -> bytes:
@@ -132,10 +148,12 @@ def _relaxed_ruleset(path: Path) -> bytes:
     return (json.dumps(ruleset, indent=2) + "\n").encode("utf-8")
 
 
-def single_approver_files(app: Path, factory: Path | None = None, agents: Path | None = None, portal: Path | None = None) -> dict[Path, bytes]:
+def single_approver_files(app: Path, factory: Path | None = None, agents: Path | None = None, portal: Path | None = None,
+                          deploy: Path | None = None, pending: dict[Path, bytes] | None = None) -> dict[Path, bytes]:
     """New content for the files that --single-approver relaxes: hello-app's ruleset and prod environment (and the portal's, when the
-    tree has it), and the review ruleset of the scorecard factory (main-review) and the main ruleset of golden-road-agents when the tree has them. Raises ValueError
-    if a file is not as expected."""
+    tree has it), the review rulesets (main-review) of the scorecard factory and golden-road-deploy, the main ruleset of
+    golden-road-agents, and deploy-check's SINGLE_APPROVER_PROMOTIONS (refuse becomes accept), when the tree has them. Raises
+    ValueError if a file is not as expected. `pending` holds content already computed for a file (deploy-check's org) to build on."""
     files = {}
     for target in (app, portal):
         if target is None or (target is not app and not is_real_dir(target)):
@@ -147,9 +165,17 @@ def single_approver_files(app: Path, factory: Path | None = None, agents: Path |
             raise ValueError(f"{env_path} has no prevent_self_review")
         env["prevent_self_review"] = False
         files[env_path] = (json.dumps(env, indent=2) + "\n").encode("utf-8")
-    for repo, rel in ((factory, FACTORY_REVIEW_RULESET_REL), (agents, RULESET_REL)):
+    for repo, rel in ((factory, FACTORY_REVIEW_RULESET_REL), (agents, RULESET_REL), (deploy, FACTORY_REVIEW_RULESET_REL)):
         if repo is not None and is_real_dir(repo):
             files[repo / rel] = _relaxed_ruleset(repo / rel)
+    if deploy is not None and is_real_dir(deploy) and os.path.lexists(deploy / DEPLOY_CHECK_REL):
+        path = deploy / DEPLOY_CHECK_REL
+        text = ((pending or {}).get(path) or read_regular(path)).decode("utf-8")
+        refuse, accept, any_accept = text.count(DEPLOY_CHECK_REFUSE), text.count(DEPLOY_CHECK_ACCEPT), deploy_check_accepts(text)
+        if (refuse, any_accept) == (1, 0):
+            files[path] = text.replace(DEPLOY_CHECK_REFUSE, DEPLOY_CHECK_ACCEPT).encode("utf-8")
+        elif (refuse, accept, any_accept) != (0, 1, 1):  # (0, 1, 1): already single-approver, a re-run changes nothing
+            raise ValueError(f"{path} must set SINGLE_APPROVER_PROMOTIONS: refuse (or, configured, accept) exactly once")
     return files
 
 
@@ -588,9 +614,20 @@ def main() -> int:
 
     if args.single_approver:
         try:
-            changes.update(single_approver_files(app, bootstrap / "scorecard-factory", bootstrap / "golden-road-agents", portal_app))
+            changes.update(single_approver_files(app, bootstrap / "scorecard-factory", bootstrap / "golden-road-agents", portal_app,
+                                                 bootstrap / "golden-road-deploy", changes))
         except (ValueError, OSError) as exc:
             sys.exit(f"cannot apply --single-approver: {exc}")
+
+    deploy_check = bootstrap / "golden-road-deploy" / DEPLOY_CHECK_REL
+    if not args.single_approver and os.path.lexists(deploy_check):
+        try:
+            text = (changes.get(deploy_check) or read_regular(deploy_check)).decode("utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            sys.exit(f"cannot read {deploy_check}: {exc}")
+        if deploy_check_accepts(text) or text.count(DEPLOY_CHECK_REFUSE) != 1:
+            sys.exit(f"{deploy_check} must set SINGLE_APPROVER_PROMOTIONS: refuse exactly once and never accept without --single-approver; "
+                     "restore with git checkout -- bootstrap platform")
 
     if team is not None:
         for target in (app, portal_app):

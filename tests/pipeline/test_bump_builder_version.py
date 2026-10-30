@@ -11,7 +11,7 @@ import json
 import pytest
 import yaml
 
-from helpers import unconfigure_agents, unconfigure_factory, unconfigure_hello_app, unconfigure_platform, unconfigure_portal
+from helpers import unconfigure_deploy, unconfigure_agents, unconfigure_factory, unconfigure_hello_app, unconfigure_platform, unconfigure_portal
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = "scripts/bump-builder-version.py"
@@ -42,6 +42,7 @@ def make_scratch(root, source=ROOT):
     unconfigure_hello_app(root / "bootstrap/hello-app")
     unconfigure_portal(root / "bootstrap/golden-road-portal")
     unconfigure_factory(root / "bootstrap/scorecard-factory", live.get("org"))
+    unconfigure_deploy(root / "bootstrap/golden-road-deploy", live.get("org"))
     unconfigure_agents(root / "bootstrap/golden-road-agents", live.get("org"), live.get("github_host"), live.get("actions_oidc_issuer"))
     return root
 

@@ -195,7 +195,7 @@
       ]
     },
     "binding": {
-      "description": "The app's binding the release rendered (bindings/<owner>/<repo>.yaml from the factory's main) and its sha256, or null for none.",
+      "description": "Always null from builder 0.4.0: bindings are applied per environment in golden-road-deploy, not in the signed release. Older (0.3.16) records may name the binding the release rendered (bindings/<owner>/<repo>.yaml from the factory's main) and its sha256.",
       "oneOf": [
         {
           "type": "null"

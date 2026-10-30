@@ -30,8 +30,19 @@ fails on any difference, on a file outside this layout, and on two environments 
 
 Like the scorecard factory, the protection is split in two. `main` holds no deletion, no force push and the strict
 `deploy-check` requirement (from the GitHub Actions app, 15368). `main-review` holds only the pull request rule: one approval,
-code-owner review, approval after the last push. The portal's writer, which opens and merges binding PRs, may be added as a
-`pull_request`-mode bypass actor on `main-review` alone; the committed files list no bypass actor.
+code-owner review, approval after the last push. The portal's writer, which opens binding PRs and merges the `test` ones, may be
+added as a `pull_request`-mode bypass actor on `main-review` alone; the committed files list no bypass actor. The writer never
+merges a `prod` binding: a person merges it after the review rule, and the writer records the merge.
+
+## How `bump` opens its PRs
+
+A PR opened with a workflow's own token starts no workflow, so `bump.yml`'s `BUMP_TOKEN` picks how `deploy-check` runs on its PRs.
+`app`, the default, opens them with the deploy App's token (`DEPLOY_APP_ID`, `DEPLOY_APP_KEY` in the `bump` environment), and the
+job's own token stays read-only. For the personal PoC, `configure.py --bump-workflow-token` switches it to `workflow`: `bump`
+writes with its own token, with write permissions, and starts `deploy-check` on each branch it creates or moves (and again while
+an open PR's head has no completed run). A dispatched
+`deploy-check` checks only a `bump/<owner>-<repo>-<env>` branch whose head is one commit on the current `main`. The repo then
+needs "Allow GitHub Actions to create and approve pull requests". The public export refuses a tree in `workflow` mode.
 
 ## Teams
 

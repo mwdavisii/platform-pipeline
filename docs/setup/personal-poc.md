@@ -1222,6 +1222,7 @@ Requirements: the deploy repo exists and `hello-app`'s `test` environment pins a
 1. The builder release of 20.1 reserves the env names that start with `AZURE_` or `DATABRICKS_`: an app whose `builder-spec.json` declares one fails drift on that release, so rename it in the app before you move the app to it (`hello-app` moves in 20.2).
 2. Bump the portal to that builder (regenerate and merge its PR, as in 14.6).
 3. Give the portal's write App the deploy repo: install it on `golden-road-deploy` too (it keeps the factory install and its permissions), and add it as the `pull_request`-mode bypass actor on the deploy repo's `main-review` only, as 13.8 does for the factory (the same commands with `golden-road-deploy` for `scorecard-factory`). Never add it to the deploy repo's `main`. `PORTAL_WRITER_DEPLOY_REQUIRED_CHECKS` (optional) adds checks to `deploy-check`, which is always required there.
+   The writer merges a `test` binding PR itself once the checks pass. It never merges a `prod` one: it opens it and checks it the same way, then waits for a person. A code owner of `bindings.yaml` reviews it (in single-approver mode no review is required) and merges it, and the writer's next pass records the merge. It never times out on a prod PR, for its checks or for the review, and its log says `<request id>: waiting for review` on each pass once the checks pass. Don't update the PR's branch. Everything that fails a PR still fails it while it waits: a push to its branch (`pr_head_changed`), a closed PR (`pr_closed`), or `main` moving on (`base_moved`). `base_moved` is the common case: once a `bump` PR merges, every prod binding PR still waiting fails. When a request fails, the writer comments the reason on its PR and closes it; link it again on the app's page.
 4. Turn the connections on in the portal. In the kit's `kustomization.yaml` set `PORTAL_DIRECTORY=mock` (empty means off). The web and the writer read the same key, so they can't differ; the same goes for `PORTAL_REPO_ADMINS_STALE_AFTER`. Optionally set `PORTAL_IDENTITY_PROCESS_URL` and `PORTAL_DATA_PROCESS_URL` to pages that say how to ask for a principal or a grant. Release the portal and roll it out as in the kit README's "Upgrade": the release brings migrations 0006 and 0007.
    Both migrations are forward-only (there is no down migration). 0007 makes the one-open-request rule per environment and takes only `binding/v2`, so an older portal image can't record a binding on a database at 0007. Don't roll the image back once bindings exist; if you must, expect open binding requests to fail, and link them again after rolling forward.
    **Check:** the portal starts (a bad `PORTAL_DIRECTORY` stops it at startup), `/admin/directory` lists the mock directory, and the writer starts: its log (`kubectl -n golden-road-portal logs deploy/golden-road-portal-writer`) has no "refusing to start". It checks both repos' rulesets, so it won't start until step 3 is done.
@@ -1231,6 +1232,7 @@ Requirements: the deploy repo exists and `hello-app`'s `test` environment pins a
 2. On `test`, under "Associate Azure Identity" pick `sp-hello-app` and submit. **Check:** the page says a change is pending; the writer opens a PR to `golden-road-deploy` that adds `apps/<you>/hello-app/test/bindings.yaml` and modifies `apps/<you>/hello-app/test/composed.yaml` (two files, nothing else), and merges it once `deploy-check` passes; the page then shows `sp-hello-app` as linked.
 3. Under "Enable Databricks Connection" pick `wh-notes-readonly` and submit. **Check:** the same flow, and the writer's PR modifies the same two files.
 4. Open the `prod` tab. **Check:** nothing is linked there, and `prod/composed.yaml` (if prod is pinned) has no `AZURE_` line. If prod has no pin yet, a link on that tab fails, and the page says "The last change could not be recorded: not_deployed."
+   Once prod is pinned (20.4), link `sp-hello-app` there too. **Check:** the writer opens the PR and `deploy-check` passes, but the PR stays open and the page shows the change as pending, with the PR link. The PR body says the writer never merges a prod binding. Merge it yourself; on its next pass the writer records the merge and the page shows `sp-hello-app` as linked on `prod`.
 5. Read what the binding did: 20.3.
 
 The writer fails a binding with `not_registered` (no intake record for the repo in the factory), `not_deployed` (the environment has no `release.yaml` or `base/manifests.yaml`), `compose_refused` (the pin isn't valid for that repo and environment, or compose refuses the manifests) or `base_moved` (the deploy repo's `main` moved while the change waited; make it again).
@@ -1256,7 +1258,7 @@ On the `test` tab remove the Azure identity: that removes the Databricks connect
 **Mock only.** Nothing in this section is applied to a cluster. The proof is what you can read in git and in release assets: the generated files, the `deploy-check` runs and the PRs. The Flux and Argo CD adapters and the image policy are files, and every one is off (20.6).
 
 ### 20.1 Create the repo from the bootstrap
-Requirements: a builder release that carries the deploy repo (the lead's version bump; this section names no number). Bring the tree in and release it as in 13.2: a fresh export, `configure.py` with your usual flags (with `--single-approver` if you use it), the copy over the published tree, the release, and the pin in every workflow (the pin's check prints `8   BUILDER_IMAGE: $ref`: `deploy-check.yml` and `bump.yml` are two of them). Releases from now on carry no binding: the gate record's `binding` is `null`, and there is no `binding.yaml` asset.
+Requirements: a builder release that carries the deploy repo (the lead's version bump; this section names no number). Bring the tree in and release it as in 13.2: a fresh export, `configure.py` with your usual flags (with `--single-approver` if you use it, and `--bump-workflow-token` if you won't make the deploy App, below), the copy over the published tree, the release, and the pin in every workflow (the pin's check prints `8   BUILDER_IMAGE: $ref`: `deploy-check.yml` and `bump.yml` are two of them). Releases from now on carry no binding: the gate record's `binding` is `null`, and there is no `binding.yaml` asset.
 
 The committed CODEOWNERS names three teams (`platform-reviewers`, `security` and `analytics`), which a personal account doesn't have, so name people instead (you are in `~/poc/platform-pipeline`; carry the file over on later exports, as 13.2 does for `hello-app`'s):
 ```bash
@@ -1272,9 +1274,19 @@ gh api -X PUT repos/<you>/golden-road-deploy/actions/permissions/fork-pr-contrib
 gh api -X POST repos/<you>/golden-road-deploy/rulesets --input bootstrap/golden-road-deploy/.github/rulesets/main.json
 gh api -X POST repos/<you>/golden-road-deploy/rulesets --input bootstrap/golden-road-deploy/.github/rulesets/main-review.json
 ```
+**Check:** the second command prints `PUBLIC`, and `gh api repos/<you>/golden-road-deploy/rulesets --jq '.[] | {name, enforcement}'` prints `main` and `main-review`, both `active`, and neither lists a bypass actor.
+
 `main` holds no deletion, no force push and the strict `deploy-check` requirement; `main-review` holds only the pull request rule (in single-approver mode `configure.py` already relaxed it to no approval). In single-approver mode `configure.py` also set `deploy-check.yml`'s `SINGLE_APPROVER_PROMOTIONS` to `accept` (20.4); otherwise it is `refuse`.
 
-The `bump` workflow opens the pin PRs with a token of its own GitHub App, the deploy App: a PR opened with the workflow's own token wouldn't start `deploy-check`. Make it in the browser, like 16.1:
+The `bump` workflow's pin PRs must start `deploy-check`, and a PR opened with the workflow's own token starts no workflow. Pick one of two ways. Keep the choice on later exports: `configure.py` refuses a re-run that drops `--bump-workflow-token`.
+
+**Without an App: `--bump-workflow-token`.** `configure.py` set `bump.yml`'s `BUMP_TOKEN` to `workflow` and gave its job contents, pull-requests and actions write, and checks read. `bump` then writes the PRs with its own token, and each time it creates or moves a `bump/` branch it starts `deploy-check` on it (`gh workflow run deploy-check.yml --ref bump/...`). It starts it again on a later run while an open PR's head has no completed `deploy-check` run. A dispatched `deploy-check` checks only a `bump/<owner>-<repo>-<env>` branch whose head is one commit on the current `main`. The repo must let Actions open PRs:
+```bash
+gh api -X PUT repos/<you>/golden-road-deploy/actions/permissions/workflow -f default_workflow_permissions=read -F can_approve_pull_request_reviews=true
+```
+**Check:** `gh api repos/<you>/golden-road-deploy/actions/permissions/workflow` prints `"can_approve_pull_request_reviews":true` and `"default_workflow_permissions":"read"`, and `grep -n 'BUMP_TOKEN:' bootstrap/golden-road-deploy/.github/workflows/bump.yml` prints `BUMP_TOKEN: workflow`. Skip the App below (and its checks), and go on to 20.2. This path makes no `bump` environment: the job names one, so GitHub may create it on the first run, with no secret and no branch policy. That is harmless here, since nothing is stored in it.
+
+**With the deploy App** (`BUMP_TOKEN: app`, the default, and what GHE uses). `bump` opens the pin PRs with a token of its own GitHub App, the deploy App. Make it in the browser, like 16.1:
 1. Settings -> Developer settings -> GitHub Apps -> **New GitHub App**. Name: `<deploy app name>` (it is public). Homepage URL: `https://github.com/<you>/golden-road-deploy`. Webhook: clear **Active**. Repository permissions, exactly these: **Contents: Read and write** and **Pull requests: Read and write** (Metadata: Read-only is added by itself). Where can this GitHub App be installed: **Only on this account**. Create it.
 2. Note the **App ID** (a number, not the Client ID). Under Private keys, **Generate a private key**: the browser downloads a `.pem` file.
 3. **Install App** -> your account -> **Only select repositories** -> `golden-road-deploy` alone -> Install.
@@ -1289,7 +1301,7 @@ gh variable set DEPLOY_APP_ID --repo <you>/golden-road-deploy --body '<deploy ap
 ```
 Never add the deploy App to either ruleset's bypass list. The portal's write App gets its install and its `main-review` bypass in 19.1, step 3.
 
-**Check:** the second command prints `PUBLIC`; `gh api repos/<you>/golden-road-deploy/rulesets --jq '.[] | {name, enforcement}'` prints `main` and `main-review`, both `active`, and neither lists a bypass actor; `gh secret list --env bump --repo <you>/golden-road-deploy` lists `DEPLOY_APP_KEY`; `gh variable list --repo <you>/golden-road-deploy` lists `DEPLOY_APP_ID`; the App's Configure page shows `golden-road-deploy` alone, with read and write access to code and pull requests. From now on, change the repo by PR.
+**Check:** `gh secret list --env bump --repo <you>/golden-road-deploy` lists `DEPLOY_APP_KEY`; `gh variable list --repo <you>/golden-road-deploy` lists `DEPLOY_APP_ID`; the App's Configure page shows `golden-road-deploy` alone, with read and write access to code and pull requests. From now on, change the repo by PR.
 
 ### 20.2 Bootstrap `hello-app`
 First move `hello-app` to the new builder: regenerate it and merge its PR (as in 14.6), so its newest test release is one that builder made. A release from an older builder may have a binding baked into its signed manifests, and compose refuses it ("... which only the platform's binding may set").
@@ -1304,12 +1316,14 @@ gh workflow run bump.yml --repo <you>/golden-road-deploy -f repo=<you>/hello-app
 gh run watch --repo <you>/golden-road-deploy
 gh pr list --repo <you>/golden-road-deploy
 ```
-It opens one PR per environment that has a published release, `Pin <you>/hello-app test to <test tag>` on branch `bump/<you>-hello-app-test` (if `hello-app` has an older prod release, `bump` tries `prod` too: it either opens a prod PR or reports that compose refused the release; leave either until 20.4, which promotes a release the new builder made). Read the test one:
+It opens one PR per environment that has a published release, `Pin <you>/hello-app test to <test tag>` on branch `bump/<you>-hello-app-test` (with `--bump-workflow-token` its log also says `started deploy-check on bump/<you>-hello-app-test`) (if `hello-app` has an older prod release, `bump` tries `prod` too: it either opens a prod PR or reports that compose refused the release; leave either until 20.4, which promotes a release the new builder made). Read the test one:
 ```bash
 gh pr diff <number> --repo <you>/golden-road-deploy --name-only
 gh pr diff <number> --repo <you>/golden-road-deploy | grep -n 'namespace:\|suspend:\|kind: Namespace'
 ```
 **Check:** the PR changes exactly `apps/<you>/hello-app/test/release.yaml`, `base/manifests.yaml`, `composed.yaml` and `kustomization.yaml`, and the two adapters `clusters/home/flux/<you>-hello-app-test.yaml` and `clusters/office/argo/<you>-hello-app-test.yaml`. `release.yaml` has `namespace: hello-app-test`: each environment has its own namespace, `<repo>-<env>`, and `composed.yaml` starts with the `Namespace` object that creates it. The Flux adapter has `suspend: true`. `deploy-check` passes: it verified the signature and the gate-record attestation of the release, the hashes of its `manifests.yaml` and `gate-record.json`, the app's intake record in the factory, the generated files and that nothing is switched on. Merge it (review it first if you have a deputy).
+
+With `--bump-workflow-token`, also confirm on this PR that the dispatched `deploy-check` run counts as the required check (the tests can't: they stop at the workflow text). If the PR still waits for `deploy-check`, re-run the dispatched run, or push to the branch yourself, and record what happened (20.8, item 1).
 
 From now on every new test release of `hello-app` gets its pin PR from the next scheduled `bump` run: merge a small change to `hello-app` (as in 12, item 3) and watch a new PR pin the new tag.
 
@@ -1345,14 +1359,14 @@ Only if section 19 ran on an older builder, so the factory holds `bindings/<you>
 With no factory bindings, move the factory's pins in one PR now (as in 16.3).
 
 ### 20.8 Proof items (record the results), and roll back
-1. The `bump` run and its test PR: the file list, `namespace: hello-app-test`, and the `deploy-check` run.
+1. The `bump` run and its test PR: the file list, `namespace: hello-app-test`, and the `deploy-check` run. With `--bump-workflow-token`: the dispatched run, and whether it satisfied the required check (20.2).
 2. The diff of 20.3.
 3. The prod pin PR and its `deploy-check` run (in single-approver mode, its warning).
 4. Each refusal of 20.5.
 5. A new test release of `hello-app`: `gh release download <test tag> --repo <you>/hello-app -p gate-record.json && jq .binding gate-record.json` prints `null`, and the release has no `binding.yaml`.
 6. Nothing is on: `grep -h 'suspend:' clusters/home/flux/*.yaml` prints only `suspend: true`, `grep -l 'automated:' clusters/office/argo/*.yaml` prints nothing, and `grep -n 'mode:' policy/cluster-image-policy.yaml` prints `mode: warn`.
 
-**Roll back.** Nothing on a cluster changed, so there is nothing to undo there. To stop the pin PRs, `gh workflow disable bump.yml --repo <you>/golden-road-deploy`, and remove the deploy App's install. Unlink bindings on the portal's tabs (19.5). Going back to bindings in the release is a restore of the platform tree and the builder pins from git; keep the portal image (19.1, step 4).
+**Roll back.** Nothing on a cluster changed, so there is nothing to undo there. To stop the pin PRs, `gh workflow disable bump.yml --repo <you>/golden-road-deploy`, and remove the deploy App's install (or, with `--bump-workflow-token`, set `can_approve_pull_request_reviews` back to `false`). Unlink bindings on the portal's tabs (19.5). Going back to bindings in the release is a restore of the platform tree and the builder pins from git; keep the portal image (19.1, step 4).
 
 ## 21. Delinea Secret Server secrets (mock)
 Beside the Azure identity and the Databricks connection, each environment's tab on an app's page has a Secrets section. An admin of the repo picks a Delinea Secret Server secret they can see, one of its fields, and the env var it arrives in. The writer records only a reference in that environment's `bindings.yaml` (the secret's id, name, folder and field), and `golden-road compose` turns it into one External Secrets Operator `ExternalSecret`, `<app>-delinea`, plus a `secretKeyRef` env entry, both in `composed.yaml`.
@@ -1442,8 +1456,9 @@ In the deploy repo (a PR from a branch of your clone, as in 20.5; record `deploy
 - **The app page shows the portal's record, not the deploy repo's file.** The writer builds each change from the binding the portal last merged for that environment, so a hand edit of `apps/<owner>/<repo>/<env>/bindings.yaml` is not shown on the page and is overwritten by the next change made there.
 - **Bindings are owned per file, not per block.** CODEOWNERS can't own part of a file, so either security or analytics may approve a whole `bindings.yaml`, the Databricks part included (on a personal account both are you, or you and the deputy).
 - **Nothing reconciles in the PoC** (20.6). The composed files are checked in CI and never applied, so nothing proves they deploy, and the image policy is a file, not a running admission check.
-- **The deploy repo is a new place a platform App can write.** The deploy App can write any branch of `golden-road-deploy` (what holds `main` is the ruleset, which lists no bypass actor), and the portal's write App can merge there past `main-review`.
-- **The portal's writer can change prod's identity, env and egress with only `deploy-check`.** Its PRs bypass `main-review` (13.8, 19.1), so a repo admin of the app who links a principal on the `prod` tab changes what prod would run as, with no security or platform review. The recommended fix (to decide; not built in the mock): no bypass for `prod/`, so the writer leaves a prod binding PR open for review.
+- **The deploy repo is a new place a platform App can write.** The deploy App (or, with `--bump-workflow-token`, `bump`'s own token) can write any branch of `golden-road-deploy` (what holds `main` is the ruleset, which lists no bypass actor), and the portal's write App can merge there past `main-review`.
+- **The write App still holds the `main-review` bypass.** The writer never merges a prod binding (19.1, step 3), but GitHub can't limit a bypass to a path, so a compromised writer could still merge a prod PR without review.
+- **`--bump-workflow-token` lets the deploy repo's workflows approve PRs.** The setting `bump` needs to open PRs ("Allow GitHub Actions to create and approve pull requests") also lets any workflow there approve one. In single-approver mode no approval is required anyway, and GHE keeps the deploy App (`app` mode).
 - **`bump` stops after 60 days without activity,** like the factory's poller (16.8): GitHub disables a public repo's scheduled workflows then, and pin PRs just stop coming. `gh api repos/<you>/golden-road-deploy/actions/workflows/bump.yml --jq .state` prints `disabled_inactivity` then; `gh workflow enable bump.yml --repo <you>/golden-road-deploy` turns it back on.
 - **Single-approver mode accepts a self-approved promotion as a prod pin** (20.4). The warning on the `deploy-check` run and the PR body record it; nothing here is a second person.
 - **One reader account.** `golden-road-eso` can read every secret shared with it (21). What keeps one app from naming another app's secret is that bindings are generated and checked, not the account. A `SecretStore` per app, each with its own account, is the stronger option if security wants it.

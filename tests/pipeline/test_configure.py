@@ -431,6 +431,79 @@ def test_an_accept_at_any_indentation_stops_configure_before_anything_changes(wo
     assert {p: p.read_bytes() for d in ("platform", "bootstrap") for p in (workspace / d).rglob("*") if p.is_file()} == before
 
 
+BUMP = "bootstrap/golden-road-deploy/.github/workflows/bump.yml"
+BUMP_APP, BUMP_WORKFLOW = "\n  BUMP_TOKEN: app\n", "\n  BUMP_TOKEN: workflow\n"
+BUMP_READ = "\n    permissions:\n      contents: read\n      packages: read\n"
+BUMP_WRITE = "\n    permissions:\n      contents: write\n      pull-requests: write\n      actions: write\n      checks: read\n      packages: read\n"
+
+
+def tree(workspace):
+    return {p: p.read_bytes() for d in ("platform", "bootstrap") for p in (workspace / d).rglob("*") if p.is_file()}
+
+
+def test_bump_workflow_token_switches_bump_to_its_own_token_with_exactly_the_write_permissions(workspace):
+    """Spec 2026-10-30, B1: the mode line and the job's permissions, and nothing else."""
+    import yaml
+    before = (workspace / BUMP).read_text()
+    assert before.count(BUMP_APP) == 1 and before.count(BUMP_READ) == 1
+    assert configure(workspace, *GOOD, "--bump-workflow-token").returncode == 0
+    after = (workspace / BUMP).read_text()
+    assert after == before.replace("ORG_PLACEHOLDER", "example-org").replace(BUMP_APP, BUMP_WORKFLOW).replace(BUMP_READ, BUMP_WRITE)
+    doc = yaml.safe_load(after)
+    assert doc["env"]["BUMP_TOKEN"] == "workflow" and doc["permissions"] == {}
+    assert doc["jobs"]["bump"]["permissions"] == {"contents": "write", "pull-requests": "write", "actions": "write", "checks": "read",
+                                                  "packages": "read"}
+    assert "\n  SINGLE_APPROVER_PROMOTIONS: refuse\n" in (workspace / DEPLOY_CHECK).read_text(), "the two settings are separate"
+
+
+def test_the_default_keeps_bump_on_the_deploy_app_token(workspace):
+    assert configure(workspace, *GOOD).returncode == 0
+    text = (workspace / BUMP).read_text()
+    assert BUMP_APP in text and BUMP_READ in text and "workflow\n" not in text.split("jobs:")[0]
+
+
+def test_bump_workflow_token_goes_with_single_approver_and_a_rerun_changes_nothing(workspace):
+    assert configure(workspace, *GOOD, "--single-approver", "--bump-workflow-token").returncode == 0
+    once = tree(workspace)
+    out = configure(workspace, *GOOD, "--single-approver", "--bump-workflow-token")
+    assert out.returncode == 0, out.stderr
+    assert tree(workspace) == once
+
+
+def test_a_rerun_without_bump_workflow_token_on_a_workflow_tree_is_refused(workspace):
+    assert configure(workspace, *GOOD, "--bump-workflow-token").returncode == 0
+    before = tree(workspace)
+    out = configure(workspace, *GOOD)
+    assert out.returncode != 0 and "BUMP_TOKEN" in out.stderr and RESTORE in out.stderr
+    assert tree(workspace) == before
+
+
+@pytest.mark.parametrize("edit", [
+    lambda t: t.replace(BUMP_APP, "\n  BUMP_TOKEN: maybe\n"),
+    lambda t: t.replace(BUMP_READ, "\n    permissions:\n      contents: read\n"),
+    lambda t: t.replace(BUMP_READ, BUMP_READ + BUMP_READ.lstrip("\n")),
+    lambda t: t.replace(BUMP_APP, BUMP_APP + BUMP_APP.lstrip("\n")),
+    lambda t: t.replace("jobs:\n", "jobs:\n    BUMP_TOKEN: workflow\n", 1),
+    lambda t: t.replace("jobs:\n", "jobs:\n\tBUMP_TOKEN:'workflow'\n", 1),
+], ids=["no-app-line", "other-permissions", "permissions-twice", "app-twice", "workflow-indented", "workflow-quoted"])
+@pytest.mark.parametrize("flags", [[], ["--bump-workflow-token"]], ids=["default", "bump-workflow-token"])
+def test_a_bump_yml_whose_lines_are_not_found_exactly_once_stops_configure_before_anything_changes(workspace, edit, flags):
+    path = workspace / BUMP
+    path.write_text(edit(path.read_text()))
+    before = tree(workspace)
+    out = configure(workspace, *GOOD, *flags)
+    assert out.returncode != 0 and "BUMP_TOKEN" in out.stderr
+    assert tree(workspace) == before
+
+
+def test_the_export_s_app_mode_check_takes_the_committed_bump_yml_and_refuses_a_configured_one(workspace):
+    check = [sys.executable, str(ROOT / "scripts/configure.py"), "--check-bump-app-mode", str(workspace / BUMP)]
+    assert subprocess.run(check, capture_output=True).returncode == 0
+    assert configure(workspace, *GOOD, "--bump-workflow-token").returncode == 0
+    assert subprocess.run(check, capture_output=True).returncode == 1
+    assert subprocess.run([*check[:3], str(workspace / "missing.yml")], capture_output=True).returncode == 1
+
+
 def test_the_default_mode_leaves_the_deploy_rulesets_alone(workspace):
     before = {rel: (workspace / rel).read_bytes() for rel in (DEPLOY_REVIEW_RULESET, DEPLOY_MAIN_RULESET)}
     assert configure(workspace, *GOOD).returncode == 0

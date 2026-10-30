@@ -3,8 +3,10 @@
 - `docker`: `pull` and `logout` do nothing; `run ... <image> golden-road <args>` runs this checkout's golden_road.cli with every
   container path in the arguments mapped back to its host mount (so deploy-verify, deploy-pins, deploy-pin and compose are the
   real code), except `golden-road app-token`, which records its arguments and writes a fake token;
-- `gh`: `release list` and `release download` answer from a directory of fake releases, and `gh api` answers the git data and
-  pulls API from a small in-memory model kept in a JSON file; every call is recorded;
+- `gh`: `release list` and `release download` answer from a directory of fake releases, `workflow run` succeeds (or fails for the
+  refs FAKE_DISPATCH_FAIL names), and `gh api` answers the git data and pulls API from a small in-memory model kept in a JSON file,
+  the tip of main from FAKE_MAIN_SHA, and a head's deploy-check run (completed with FAKE_DEPLOY_CHECK_DONE=1, else in
+  progress); every call is recorded;
 - `cosign`: `verify` and `verify-attestation` answer from files and exit codes the test sets; every call is recorded.
 
 Each workflow step's `run:` is extracted from the YAML and run with bash, as tests/pipeline/test_workflows.py does."""
@@ -148,6 +150,12 @@ if args[:2] == ["release", "list"]:
             out.append({"tagName": tag, **meta})
     print(json.dumps(out))
     sys.exit(0)
+if args[:2] == ["workflow", "run"]:  # bump in workflow mode starts deploy-check on a branch
+    record(["gh", *args, {"GH_TOKEN": os.environ.get("GH_TOKEN", "")}])
+    if opt("--ref") in os.environ.get("FAKE_DISPATCH_FAIL", "").split():
+        sys.stderr.write("gh: Resource not accessible by integration (HTTP 403)\n")
+        sys.exit(1)
+    sys.exit(0)
 if args[:1] == ["api"]:
     state_path = os.environ["FAKE_GH_STATE"]
     state = json.load(open(state_path)) if os.path.exists(state_path) else {"refs": {}, "pulls": [], "n": 0}
@@ -187,6 +195,15 @@ if args[:1] == ["api"]:
         head = path.split("head=")[1].split("&")[0] if "head=" in path else None
         result = [{**p, "head": {"ref": p["head"], "sha": state["refs"].get("refs/heads/" + p["head"])}} for p in state["pulls"]
                   if p["state"] == "open" and (head is None or f"{repo.split('/')[0]}:{p['head']}" == head)]
+    elif method == "POST" and tail == "pulls" and os.environ.get("FAKE_PULL_CREATE_FAIL"):
+        sys.stderr.write("gh: Validation Failed (HTTP 422)\n")
+        sys.exit(1)
+    elif method == "GET" and tail.startswith("commits/") and tail.endswith("/check-runs"):  # bump's re-dispatch check
+        if os.environ.get("FAKE_CHECK_RUNS_FAIL"):
+            sys.stderr.write("gh: Server Error (HTTP 500)\n")
+            sys.exit(1)
+        done = os.environ.get("FAKE_DEPLOY_CHECK_DONE") == "1"
+        result = {"total_count": 1, "check_runs": [{"name": "deploy-check", "status": "completed" if done else "in_progress"}]}
     elif method == "POST" and tail == "pulls":
         state["pulls"].append({"number": len(state["pulls"]) + 1, "state": "open", **body})
         result = {"number": len(state["pulls"])}
@@ -200,6 +217,11 @@ if args[:1] == ["api"]:
             sys.stderr.write("gh: Not Found (HTTP 404)\n")
             sys.exit(1)
         result = {"sha": tail.split("/")[2], "parents": [{"sha": p} for p in commit["parents"]], "tree": {"sha": commit["tree"]}}
+    elif method == "GET" and tail == "git/ref/heads/main":  # deploy-check's dispatch guard: the tip of main, as the test sets it
+        if not os.environ.get("FAKE_MAIN_SHA"):
+            sys.stderr.write("gh: Server Error (HTTP 500)\n")
+            sys.exit(1)
+        result = {"ref": "refs/heads/main", "object": {"sha": os.environ["FAKE_MAIN_SHA"]}}
     elif method == "GET" and tail.startswith("contents/"):
         if os.environ.get("FAKE_INTAKE_ERROR"):
             sys.stderr.write("gh: Server Error (HTTP 500)\n")

@@ -9,10 +9,11 @@ import pytest
 import yaml
 
 from deploy_fakes import (DEPLOY_BOOTSTRAP, IMAGE, PROD_TAG, REPO, ROOT, TEST_TAG, attest, base_env, calls, commit_all, deploy_repo,
-                          gate_record, load, manifests, promotion_record, publish, run_step, step, unregister, write_pin)
+                          gate_record, git, load, manifests, promotion_record, publish, run_step, step, unregister, write_pin)
 
 WORKFLOW = DEPLOY_BOOTSTRAP / ".github/workflows/deploy-check.yml"
 pytestmark = pytest.mark.skipif(shutil.which("jq") is None or shutil.which("git") is None, reason="jq and git are needed")
+GUARD = "A dispatched run checks only a bump branch, one commit on main"
 STEPS = ("Changed paths", "Compose and verify every environment", "Every changed environment's app has an intake record",
          "Verify every changed release is the platform's signed release")
 
@@ -60,7 +61,7 @@ def prod(tmp_path, pinned, **promotion):
 
 def test_the_shape():
     d = doc()
-    assert d["on"] == {"pull_request": {"branches": ["main"]}} and d["permissions"] == {}
+    assert d["on"] == {"pull_request": {"branches": ["main"]}, "workflow_dispatch": None} and d["permissions"] == {}
     [(name, job)] = d["jobs"].items()
     assert job["name"] == "deploy-check" and job["permissions"] == {"contents": "read", "packages": "read"}
     assert "pull_request_target" not in WORKFLOW.read_text()
@@ -70,7 +71,7 @@ def test_the_shape():
             assert re.fullmatch(r"[\w.-]+/[\w.-]+@[0-9a-f]{40}", s["uses"]), s["uses"]
     envs = {k: v for s in job["steps"] for k, v in (s.get("env") or {}).items()}
     assert envs == {"GH_TOKEN": "${{ github.token }}"}  # the only expression a script sees, through env
-    assert [s["name"] for s in job["steps"] if "GH_TOKEN" in (s.get("env") or {})] == [STEPS[2], STEPS[3]]
+    assert [s["name"] for s in job["steps"] if "GH_TOKEN" in (s.get("env") or {})] == [GUARD, STEPS[2], STEPS[3]]
     checkout = next(s for s in job["steps"] if s.get("uses", "").startswith("actions/checkout"))
     assert checkout["with"]["persist-credentials"] is False
 
@@ -418,3 +419,114 @@ def test_a_flux_source_that_is_not_this_repository_fails_in_deploy_verify(tmp_pa
 def test_the_flux_source_url_compares_without_case(tmp_path, release):
     name, result = run(tmp_path, GITHUB_REPOSITORY="ACME/golden-road-deploy")
     assert result.returncode == 0, result.stdout
+
+
+# ---- workflow_dispatch (spec 2026-10-30, B3): bump in workflow mode starts deploy-check on its branch, and a dispatched run checks
+# only a bump branch whose head is exactly one commit on the current tip of main ----
+
+BRANCH = "refs/heads/bump/acme-notes-test"
+
+
+def guard(tmp_path, **env):
+    return run_step(tmp_path, step(doc(), GUARD)["run"], base_env(tmp_path, doc(), **env))
+
+
+def dispatched(deploy, extra_commits=0):
+    """The deploy repo checked out at a bump branch: main's tip, then one commit (or more) on it. Returns (main's tip, the head)."""
+    main = git(deploy, "rev-parse", "HEAD").strip()
+    git(deploy, "checkout", "-q", "-b", "bump/acme-notes-test")
+    for n in range(1 + extra_commits):
+        (deploy / "README.md").write_text(f"bump {n}\n")
+        commit_all(deploy, f"bump {n}")
+    return main, git(deploy, "rev-parse", "HEAD").strip()
+
+
+def test_the_dispatch_guard_runs_right_after_the_checkout_before_any_step_reads_the_tree():
+    names = [s.get("name") or s.get("uses") for s in next(iter(doc()["jobs"].values()))["steps"]]
+    checkout = next(i for i, n in enumerate(names) if n.startswith("actions/checkout"))
+    assert names.index(GUARD) == checkout + 1 and names.index(GUARD) < names.index(STEPS[0])
+    assert "if" not in step(doc(), GUARD), "the script itself decides, so a pull request run passes through it too"
+
+
+def test_a_pull_request_run_passes_the_guard_without_a_call(tmp_path):
+    result = guard(tmp_path, GITHUB_EVENT_NAME="pull_request")
+    assert result.returncode == 0 and calls(tmp_path) == []
+
+
+def test_a_one_commit_bump_branch_on_main_s_tip_passes(tmp_path):
+    deploy = deploy_repo(tmp_path)
+    main, head = dispatched(deploy)
+    result = guard(tmp_path, GITHUB_EVENT_NAME="workflow_dispatch", GITHUB_REF=BRANCH, GITHUB_SHA=head, FAKE_MAIN_SHA=main)
+    assert result.returncode == 0, result.stdout + result.stderr
+    [call] = calls(tmp_path, "gh")
+    assert call[1:4] == ["api", "GET", "repos/acme/golden-road-deploy/git/ref/heads/main"] and call[-1]["GH_TOKEN"] == "github-token"
+
+
+@pytest.mark.parametrize("ref", ["refs/heads/main", "refs/heads/feature", "refs/heads/bump/acme-notes", "refs/heads/bump/acme-notes-staging",
+                                 "refs/tags/bump/acme-notes-test", "refs/heads/bump/acme-notes-test/x", "refs/heads/bump/acme notes-test",
+                                 "refs/heads/xbump/acme-notes-test", "refs/heads/bump/acme-notes-test\n::warning::x"])
+def test_a_dispatch_on_anything_but_a_bump_branch_fails_before_any_call(tmp_path, ref):
+    deploy = deploy_repo(tmp_path)
+    main, head = dispatched(deploy)
+    result = guard(tmp_path, GITHUB_EVENT_NAME="workflow_dispatch", GITHUB_REF=ref, GITHUB_SHA=head, FAKE_MAIN_SHA=main)
+    assert result.returncode == 1 and errors(result) == ["::error::a dispatched deploy-check checks only a bump branch (bump/<owner>-<repo>-<env>)"]
+    assert calls(tmp_path) == []
+
+
+def test_two_commits_on_main_fail(tmp_path):
+    deploy = deploy_repo(tmp_path)
+    main, head = dispatched(deploy, extra_commits=1)  # the first commit could hold the real change, outside HEAD^1..HEAD
+    result = guard(tmp_path, GITHUB_EVENT_NAME="workflow_dispatch", GITHUB_REF=BRANCH, GITHUB_SHA=head, FAKE_MAIN_SHA=main)
+    assert result.returncode == 1 and "is not one commit on the current main" in result.stdout
+
+
+def test_a_branch_on_a_stale_main_fails(tmp_path):
+    deploy = deploy_repo(tmp_path)
+    main, head = dispatched(deploy)
+    result = guard(tmp_path, GITHUB_EVENT_NAME="workflow_dispatch", GITHUB_REF=BRANCH, GITHUB_SHA=head, FAKE_MAIN_SHA="8" * 40)
+    assert result.returncode == 1 and "is not one commit on the current main" in result.stdout
+
+
+def test_a_merge_commit_head_fails(tmp_path):
+    deploy = deploy_repo(tmp_path)
+    main = git(deploy, "rev-parse", "HEAD").strip()
+    git(deploy, "checkout", "-q", "-b", "side")
+    (deploy / "README.md").write_text("side\n")
+    commit_all(deploy, "side")
+    git(deploy, "checkout", "-q", "main")
+    git(deploy, "checkout", "-q", "-b", "bump/acme-notes-test")
+    git(deploy, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "merge", "-q", "--no-ff", "-m", "merge", "side")
+    head = git(deploy, "rev-parse", "HEAD").strip()
+    result = guard(tmp_path, GITHUB_EVENT_NAME="workflow_dispatch", GITHUB_REF=BRANCH, GITHUB_SHA=head, FAKE_MAIN_SHA=main)
+    assert result.returncode == 1 and "exactly one commit with one parent" in result.stdout and calls(tmp_path) == []
+
+
+def test_a_checkout_that_is_not_the_dispatched_commit_fails(tmp_path):
+    deploy = deploy_repo(tmp_path)
+    main, head = dispatched(deploy)
+    result = guard(tmp_path, GITHUB_EVENT_NAME="workflow_dispatch", GITHUB_REF=BRANCH, GITHUB_SHA="7" * 40, FAKE_MAIN_SHA=main)
+    assert result.returncode == 1 and "the checkout is not the branch head" in result.stdout and calls(tmp_path) == []
+
+
+def test_main_s_tip_that_cannot_be_read_fails_closed(tmp_path):
+    deploy = deploy_repo(tmp_path)
+    main, head = dispatched(deploy)
+    result = guard(tmp_path, GITHUB_EVENT_NAME="workflow_dispatch", GITHUB_REF=BRANCH, GITHUB_SHA=head)  # no FAKE_MAIN_SHA: a 500
+    assert result.returncode == 1 and errors(result) == ["::error::cannot read the tip of main"]
+
+
+@pytest.mark.parametrize("event", ["push", "schedule", "pull_request_target", ""])
+def test_any_other_event_fails(tmp_path, event):
+    result = guard(tmp_path, GITHUB_EVENT_NAME=event)
+    assert result.returncode == 1 and calls(tmp_path) == []
+
+
+def test_a_dispatched_run_checks_the_bump_commit_as_a_pull_request_run_would(tmp_path, release):
+    """The fixture's pin is one commit on main's previous tip: as a bump branch, the guard passes and the whole job checks HEAD^1..HEAD."""
+    head = git(release["deploy"], "rev-parse", "HEAD").strip()
+    main = git(release["deploy"], "rev-parse", "HEAD^1").strip()
+    env = dict(GITHUB_EVENT_NAME="workflow_dispatch", GITHUB_REF=BRANCH, GITHUB_SHA=head, FAKE_MAIN_SHA=main)
+    assert guard(tmp_path, **env).returncode == 0
+    name, result = run(tmp_path, **env)
+    assert result.returncode == 0, (name, result.stdout, result.stderr)
+    assert f"apps/acme/notes/test: {TEST_TAG} is the platform's signed release of acme/notes" in result.stdout

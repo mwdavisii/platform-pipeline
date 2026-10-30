@@ -365,11 +365,12 @@ def test_personal_poc_doc_covers_the_scans_codeql_dependabot_and_the_known_gap()
     twenty = text[text.index("## 20. The deploy repo (mock)"):text.index("## 21. Delinea Secret Server secrets (mock)")]
     for needle in ("golden-road-deploy", "deploy-check", "suspend: true", "composed.yaml", "Mock only", "DEPLOY_APP_ID", "DEPLOY_APP_KEY",
                    "environments/bump", "namespace: hello-app-test", "SINGLE_APPROVER_PROMOTIONS", "mode: warn", "### 20.8 Proof items",
-                   "packages/container/hello-app --jq .visibility", "Change visibility -> Public", "which only the platform's binding may set"):
+                   "packages/container/hello-app --jq .visibility", "Change visibility -> Public", "which only the platform's binding may set",
+                   "--bump-workflow-token", "can_approve_pull_request_reviews=true", "default_workflow_permissions=read", "BUMP_TOKEN: app"):
         assert needle in twenty, needle
     assert twenty.index("regenerate it and merge its PR") < twenty.index("gh workflow run bump.yml"), "a clean release exists before the first bump"
     gaps = text[text.index("## PoC gaps to record"):]
-    for needle in ("bypass `main-review`", "no bypass for `prod/`", "disabled_inactivity", "two packages"):
+    for needle in ("`main-review` bypass", "never merges a prod binding", "create and approve pull requests", "disabled_inactivity", "two packages"):
         assert needle in gaps, needle
     twenty_one = text[text.index("## 21. Delinea Secret Server secrets (mock)"):text.index("## PoC gaps to record")]
     for needle in ("PORTAL_SECRET_SERVER=mock", "PORTAL_SECRET_PROCESS_URL", "PORTAL_SECRET_SERVER_URL", "PORTAL_DIRECTORY", "notes-api-key",

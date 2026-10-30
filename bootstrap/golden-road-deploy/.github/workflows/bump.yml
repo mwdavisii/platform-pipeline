@@ -8,10 +8,17 @@
 # the newest: to stop that, pin the environment by hand or remove the app. An app that can't be bumped (no releases, a missing
 # asset, a refused pin, an API error) is reported and skipped; the run goes on with the others and fails at the end.
 #
-# The pull requests are opened with the deploy App's token, not this workflow's: a pull request opened with GITHUB_TOKEN does not
-# trigger workflows, so deploy-check would never run on it. The App key lives in the `bump` environment (main only), and the token
-# is minted for this one repository with exactly contents=write and pull_requests=write, and only when some environment has a
-# newer release than it pins. The releases are read with this workflow's own read-only token.
+# A pull request opened or pushed with GITHUB_TOKEN does not trigger workflows, so deploy-check would never run on it. BUMP_TOKEN
+# says how bump gets around that:
+# - app (the default, and the one for GHE): the pull requests are opened with the deploy App's token. The App key lives in the
+#   `bump` environment (main only), and the token is minted for this one repository with exactly contents=write and
+#   pull_requests=write, and only when some environment has a newer release than it pins. The job's own token is read-only.
+# - workflow (configure.py --bump-workflow-token, for the personal PoC only, with no deploy App): the pull requests are written
+#   with this workflow's own token, so the job gets contents, pull-requests and actions write (and checks read), and each time it
+#   creates or moves a bump branch, bump dispatches deploy-check on it (a workflow_dispatch does start a workflow). A pull
+#   request already on the current main whose head has no completed deploy-check run is dispatched again. The App id and key
+#   are never read. The repo must allow GitHub Actions to create pull requests.
+# Either way, the releases are read with this workflow's own token.
 name: bump
 
 on:
@@ -29,6 +36,9 @@ permissions: {}
 
 env:
   BUILDER_IMAGE: ghcr.io/mwdavisii/golden-road-builder@sha256:6868cb21427d90b721715f78d4a395982baa3d141fc192f4ada8a2f60e46d31d
+  # app: the deploy App's token opens the pull requests. configure.py --bump-workflow-token sets workflow, for the personal PoC only:
+  # this workflow's own token, with the job's permissions rewritten to write, and a dispatch of deploy-check after each pull request.
+  BUMP_TOKEN: workflow
 
 concurrency:
   group: bump
@@ -40,7 +50,10 @@ jobs:
     environment: bump
     timeout-minutes: 30
     permissions:
-      contents: read
+      contents: write
+      pull-requests: write
+      actions: write
+      checks: read
       packages: read
     steps:
       - name: Refuse the placeholder builder image
@@ -56,6 +69,7 @@ jobs:
           REPO_INPUT: ${{ inputs.repo }}
         run: |
           set -euo pipefail
+          case "$BUMP_TOKEN" in app|workflow) ;; *) echo "::error::BUMP_TOKEN must be app or workflow"; exit 1;; esac
           [ "$GITHUB_REF" = refs/heads/main ] || { echo "::error::bump runs on main only"; exit 1; }
           if [ -n "$REPO_INPUT" ]; then
             [[ "$REPO_INPUT" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "::error::the repo input must be owner/name"; exit 1; }
@@ -88,7 +102,7 @@ jobs:
             -v "$PWD/deploy:/deploy:ro" -v "$PWD/out:/out" "$BUILDER_IMAGE" golden-road deploy-pins --root /deploy --output /out/pins.json
 
       # Which environments have a newer published release than they pin, read with this workflow's own token. When none has,
-      # the deploy App's token is never minted.
+      # nothing is written (and in app mode the deploy App's token is never minted).
       - name: Find the releases to pin
         id: plan
         env:
@@ -133,11 +147,12 @@ jobs:
             echo "$(wc -l < out/plan.tsv) environments to pin"
           else
             echo "needed=false" >> "$GITHUB_OUTPUT"
-            echo "nothing to pin: the deploy App token is not minted"
+            echo "nothing to pin: nothing is written, and no deploy App token is minted"
           fi
 
+      # app mode only: in workflow mode this step is skipped, so the App id and key are never read.
       - name: Mint the deploy App token
-        if: steps.plan.outputs.needed == 'true'
+        if: steps.plan.outputs.needed == 'true' && env.BUMP_TOKEN == 'app'
         env:
           APP_ID: ${{ vars.DEPLOY_APP_ID }}
           APP_KEY: ${{ secrets.DEPLOY_APP_KEY }}
@@ -173,8 +188,23 @@ jobs:
             echo "nothing to pin"
             exit 0
           fi
-          token=$(cat "$RUNNER_TEMP/deploy-token/token")
+          case "$BUMP_TOKEN" in
+            app) token=$(cat "$RUNNER_TEMP/deploy-token/token");;
+            workflow) token="$GH_TOKEN";;  # this workflow's own token, with the job's write permissions
+            *) fail "BUMP_TOKEN must be app or workflow";;
+          esac
           dgh() { GH_TOKEN="$token" gh "$@"; }  # writes to this repo only; the releases are read with the workflow's own token
+          # In workflow mode a branch bump creates or force-updates starts no workflow, so bump starts deploy-check on it, right after
+          # the branch moves (a later pull request call that fails can't leave a moved head unchecked). The dispatched run checks
+          # only a bump branch that is one commit on the current main.
+          start_check() {
+            [ "$BUMP_TOKEN" = workflow ] || return 0
+            if ! dgh workflow run deploy-check.yml --repo "$GITHUB_REPOSITORY" --ref "$branch"; then
+              skip "$env_path: cannot start deploy-check on $branch; start it by hand (gh workflow run deploy-check.yml --ref $branch)"
+              return 0
+            fi
+            echo "$env_path: started deploy-check on $branch"
+          }
           gr() { docker run --rm --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --network none --read-only --tmpfs /tmp --user "$(id -u):$(id -g)" \
                    -v "$PWD/work:/deploy" -v "$PWD/in:/in:ro" "$BUILDER_IMAGE" "$@"; }
           base=$(git -C deploy rev-parse HEAD)
@@ -205,6 +235,20 @@ jobs:
               fi
               if [ "$parents" = "$base" ]; then
                 echo "$env_path: $tag is already proposed on the current main"
+                # In workflow mode a dispatch that failed or never ran leaves the head unchecked: start deploy-check again while the
+                # head has no completed run (read with the workflow's own token).
+                if [ "$BUMP_TOKEN" = workflow ]; then
+                  if ! completed=$(gh api "repos/$GITHUB_REPOSITORY/commits/$head/check-runs?check_name=deploy-check&filter=all" \
+                                     --jq '[.check_runs[] | select(.name == "deploy-check" and .status == "completed")] | length'); then
+                    skip "$env_path: cannot read deploy-check's runs on $branch"
+                    continue
+                  fi
+                  [[ "$completed" =~ ^[0-9]+$ ]] || fail "$env_path: unexpected check runs"
+                  if [ "$completed" -eq 0 ]; then
+                    echo "$env_path: $branch has no completed deploy-check run"
+                    start_check
+                  fi
+                fi
                 continue
               fi
               echo "$env_path: the open pull request for $tag is not on the current main; rebuilding it"
@@ -266,6 +310,7 @@ jobs:
               jq -n --arg ref "refs/heads/$branch" --arg sha "$commit" '{ref: $ref, sha: $sha}' > out/ref.json
               dgh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" --input out/ref.json > /dev/null || { skip "$env_path: cannot create $branch"; continue; }
             fi
+            start_check
             # shellcheck disable=SC2016 # the backticks are Markdown in the pull request body, not a command
             body=$(printf 'Pins `%s` %s to the published release `%s`: `release.yaml`, `base/manifests.yaml` and the files `golden-road compose` generates from them.\n\ndeploy-check verifies the signature, the gate record and, for prod, the promotion. Opened by the bump workflow, which never merges.' "$repo" "$env" "$tag")
             # A hint only (the asset is unsigned; deploy-check reads the signed promotion): say when the promotion was self-approved.

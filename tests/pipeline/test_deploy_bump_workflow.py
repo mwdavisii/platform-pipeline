@@ -3,6 +3,7 @@ stand-in runs the real golden-road deploy-pins, deploy-pin and compose; gh answe
 and pulls API from a small model, and records every call."""
 
 import base64
+import importlib.util
 import json
 import re
 import shutil
@@ -10,29 +11,47 @@ import shutil
 import pytest
 import yaml
 
-from deploy_fakes import (DEPLOY_BOOTSTRAP, IMAGE, PROD_TAG, REPO, TEST_TAG, base_env, calls, commit_all, deploy_repo, gate_record, git,
-                          load, manifests, promotion_record, publish, run_step, step, write_pin)
+from deploy_fakes import (DEPLOY_BOOTSTRAP, IMAGE, PROD_TAG, REPO, ROOT, TEST_TAG, base_env, calls, commit_all, deploy_repo, gate_record, git,
+                          manifests, promotion_record, publish, run_step, step, write_pin)
+from helpers import unconfigured_bump_text
 
 WORKFLOW = DEPLOY_BOOTSTRAP / ".github/workflows/bump.yml"
 pytestmark = pytest.mark.skipif(shutil.which("jq") is None or shutil.which("git") is None, reason="jq and git are needed")
 STEPS = ("Check the repo input", "Read the pins", "Find the releases to pin", "Mint the deploy App token", "Open or update the pin pull requests")
 TOKEN = "ghs_" + "T" * 40
 NEWER_TAG = "test-20261029160000-42fa829"
+MINT_IF = "steps.plan.outputs.needed == 'true' && env.BUMP_TOKEN == 'app'"
 
 
-def doc():
-    return load(WORKFLOW)
+def configure_module():
+    spec = importlib.util.spec_from_file_location("configure_for_bump", ROOT / "scripts/configure.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
-def run(tmp_path, **env):
-    environ = base_env(tmp_path, doc(), **{"GITHUB_REF": "refs/heads/main", "APP_ID": "1234", "APP_KEY": "-----BEGIN KEY-----", "REPO_INPUT": "", **env})
+def text(mode="app"):
+    """bump.yml as committed (app mode, whatever the live tree was configured to), or as configure.py --bump-workflow-token writes it."""
+    default = unconfigured_bump_text(WORKFLOW.read_text())
+    return default if mode == "app" else configure_module().bump_workflow_token_text(default)
+
+
+def doc(mode="app"):
+    d = yaml.safe_load(text(mode))
+    d["on"] = d.pop(True, d.get("on"))
+    return d
+
+
+def run(tmp_path, mode="app", **env):
+    d = doc(mode)
+    environ = base_env(tmp_path, d, **{"GITHUB_REF": "refs/heads/main", "APP_ID": "1234", "APP_KEY": "-----BEGIN KEY-----", "REPO_INPUT": "", **env})
     shutil.rmtree(tmp_path / "runner-temp/deploy-token", ignore_errors=True)  # each job has its own runner temp
     (tmp_path / "github-output").unlink(missing_ok=True)
     seen = []
     for name in STEPS:
-        if name == "Mint the deploy App token" and "needed=true" not in (tmp_path / "github-output").read_text():
-            continue  # its `if:`, steps.plan.outputs.needed == 'true'
-        result = run_step(tmp_path, step(doc(), name)["run"], environ)
+        if name == "Mint the deploy App token" and ("needed=true" not in (tmp_path / "github-output").read_text() or environ["BUMP_TOKEN"] != "app"):
+            continue  # its `if:` (MINT_IF): steps.plan.outputs.needed == 'true' && env.BUMP_TOKEN == 'app'
+        result = run_step(tmp_path, step(d, name)["run"], environ)
         seen.append(result.stdout)
         if result.returncode != 0:
             break
@@ -73,25 +92,55 @@ def released(tmp_path):
 
 # ---- the shape ----
 
-def test_the_shape():
-    d = doc()
+@pytest.mark.parametrize("mode", ["app", "workflow"])
+def test_the_shape(mode):
+    d = doc(mode)
     assert d["on"]["schedule"] == [{"cron": "*/15 * * * *"}]
     assert d["on"]["workflow_dispatch"]["inputs"]["repo"]["required"] is False
     assert d["permissions"] == {} and d["concurrency"] == {"group": "bump", "cancel-in-progress": False}
     [job] = d["jobs"].values()
-    assert job["environment"] == "bump" and job["permissions"] == {"contents": "read", "packages": "read"}
+    assert job["environment"] == "bump" and d["env"]["BUMP_TOKEN"] == mode
     for s in job["steps"]:
         assert "${{" not in s.get("run", ""), s.get("name")
         if "uses" in s:
             assert re.fullmatch(r"[\w.-]+/[\w.-]+@[0-9a-f]{40}", s["uses"]), s["uses"]
     mint = step(d, "Mint the deploy App token")
     assert mint["env"] == {"APP_ID": "${{ vars.DEPLOY_APP_ID }}", "APP_KEY": "${{ secrets.DEPLOY_APP_KEY }}"}
+    assert mint["if"] == MINT_IF, "in workflow mode the step is skipped, so the App id and key are never read"
     others = [s for s in job["steps"] if s is not mint]
-    assert not any("DEPLOY_APP_KEY" in json.dumps(s) for s in others), "the key reaches only the step that mints the token"
-    text = WORKFLOW.read_text()
-    assert "pull_request_target" not in text and "yq" not in text
-    assert "/merge" not in text and "gh pr merge" not in text, "bump never merges"
-    assert "closed without merging is opened again on the next run" in " ".join(text.split())
+    assert not any("DEPLOY_APP" in json.dumps(s) for s in others), "the App id and key reach only the step that mints the token"
+    body = text(mode)
+    assert "pull_request_target" not in body and "yq" not in body
+    assert "/merge" not in body and "gh pr merge" not in body, "bump never merges"
+    assert "closed without merging is opened again on the next run" in " ".join(body.split())
+
+
+def test_the_default_is_the_app_token_with_a_read_only_job():
+    """Spec 2026-10-30, B1: the committed text is app mode; configure.py --bump-workflow-token gives exactly the write permissions."""
+    assert next(iter(doc()["jobs"].values()))["permissions"] == {"contents": "read", "packages": "read"}
+    assert next(iter(doc("workflow")["jobs"].values()))["permissions"] == {"contents": "write", "pull-requests": "write", "actions": "write",
+                                                                            "checks": "read", "packages": "read"}
+    assert re.findall(r"(?m)^\s*BUMP_TOKEN:.*$", text()) == ["  BUMP_TOKEN: app"] and re.search(r"BUMP_TOKEN:\s*[\"']?workflow", text()) is None
+    live = WORKFLOW.read_text()
+    assert live in (text(), text("workflow")), "the live file is one of the two modes, nothing in between"
+
+
+def test_configure_s_rewrite_refuses_a_text_whose_lines_are_not_there_exactly_once():
+    rewrite = configure_module().bump_workflow_token_text
+    assert rewrite(text("workflow")) == text("workflow"), "already workflow mode: nothing changes"
+    for broken in (text().replace("BUMP_TOKEN: app", "BUMP_TOKEN: maybe"), text().replace("      contents: read\n", "", 1),
+                   text() + "\n  BUMP_TOKEN: app\n", text().replace("jobs:\n", "jobs:\n    BUMP_TOKEN: workflow\n", 1)):
+        with pytest.raises(ValueError, match="BUMP_TOKEN"):
+            rewrite(broken)
+
+
+@pytest.mark.parametrize("mode", ["app", "workflow", "other"])
+def test_an_unknown_token_mode_fails_before_any_call(tmp_path, mode):
+    result = run_step(tmp_path, step(doc(), "Check the repo input")["run"], base_env(tmp_path, doc(), GITHUB_REF="refs/heads/main", REPO_INPUT="",
+                                                                                     BUMP_TOKEN=mode))
+    assert result.returncode == (1 if mode == "other" else 0) and calls(tmp_path) == []
+    if mode == "other":
+        assert "::error::BUMP_TOKEN must be app or workflow" in result.stdout
 
 
 def test_the_placeholder_builder_image_is_refused_first(tmp_path):
@@ -356,3 +405,96 @@ def test_the_flux_source_must_be_this_repository(tmp_path, released):
     name, result = run(tmp_path, REPO_INPUT=REPO)
     assert result.returncode == 1 and "compose refused" in result.stdout and "is not this repository" in result.stderr
     assert writes(tmp_path) == []
+
+
+# ---- workflow mode (configure.py --bump-workflow-token, the personal PoC): this workflow's own token writes, and deploy-check is
+# dispatched on each branch it opens or updates (spec 2026-10-30, B1-B3) ----
+
+def dispatches(tmp_path):
+    return [c for c in calls(tmp_path, "gh") if c[1:3] == ["workflow", "run"]]
+
+
+def writes_and_dispatches(tmp_path):
+    """The ref and pull request writes and the dispatches, in order, as (verb, path or ref)."""
+    seq = []
+    for c in calls(tmp_path, "gh"):
+        if c[1:3] == ["workflow", "run"]:
+            seq.append(("dispatch", c[-2]))
+        elif c[1] == "api" and c[2] in ("POST", "PATCH") and re.search(r"/(git/refs.*|pulls(/[0-9]+)?)$", c[3]):
+            seq.append((c[2], c[3].removeprefix("repos/acme/golden-road-deploy/")))
+    return seq
+
+
+def test_workflow_mode_writes_with_the_workflow_token_and_never_mints_or_reads_the_app(tmp_path, released):
+    name, result = run(tmp_path, "workflow", REPO_INPUT=REPO, APP_ID="", APP_KEY="")
+    assert result.returncode == 0, (name, result.stdout, result.stderr)
+    assert not (tmp_path / "calls.jsonl.token").exists() and not [c for c in calls(tmp_path, "docker") if "app-token" in c]
+    assert not (tmp_path / "runner-temp/deploy-token").exists()
+    assert writes(tmp_path) and all(c[-1]["GH_TOKEN"] == "github-token" for c in calls(tmp_path, "gh"))
+
+
+def test_workflow_mode_dispatches_deploy_check_right_after_the_branch_moves_before_the_pr_call(tmp_path, released):
+    publish(tmp_path, PROD_TAG, released["text"], released["record"], prerelease=False, published="2026-10-29T15:05:00Z")
+    name, result = run(tmp_path, "workflow", REPO_INPUT=REPO)
+    assert result.returncode == 0, result.stdout
+    assert writes_and_dispatches(tmp_path) == [("POST", "git/refs"), ("dispatch", "bump/acme-notes-test"), ("POST", "pulls"),
+                                               ("POST", "git/refs"), ("dispatch", "bump/acme-notes-prod"), ("POST", "pulls")]
+    [d] = [c for c in dispatches(tmp_path) if c[-2] == "bump/acme-notes-test"]
+    assert d[1:-1] == ["workflow", "run", "deploy-check.yml", "--repo", "acme/golden-road-deploy", "--ref", "bump/acme-notes-test"]
+    assert "apps/acme/notes/test: started deploy-check on bump/acme-notes-test" in result.stdout
+
+
+def test_a_pr_call_that_fails_after_the_branch_moved_still_leaves_a_check_started(tmp_path, released):
+    name, result = run(tmp_path, "workflow", REPO_INPUT=REPO, FAKE_PULL_CREATE_FAIL="1")
+    assert result.returncode == 1 and "cannot open the pull request" in result.stdout
+    assert writes_and_dispatches(tmp_path) == [("POST", "git/refs"), ("dispatch", "bump/acme-notes-test"), ("POST", "pulls")]  # refused
+
+
+def test_a_force_update_dispatches_again(tmp_path, released):
+    assert run(tmp_path, "workflow", REPO_INPUT=REPO)[1].returncode == 0
+    (released["deploy"] / "README.md").write_text("main moved on\n")
+    commit_all(released["deploy"], "main moved on")
+    name, result = run(tmp_path, "workflow", REPO_INPUT=REPO)
+    assert result.returncode == 0, result.stdout
+    assert writes_and_dispatches(tmp_path)[-3:] == [("PATCH", "git/refs/heads/bump/acme-notes-test"), ("dispatch", "bump/acme-notes-test"),
+                                                    ("PATCH", "pulls/1")]
+
+
+def test_a_pr_already_current_is_dispatched_again_only_while_its_head_has_no_completed_deploy_check(tmp_path, released):
+    assert run(tmp_path, "workflow", REPO_INPUT=REPO)[1].returncode == 0
+    assert len(dispatches(tmp_path)) == 1
+    name, result = run(tmp_path, "workflow", REPO_INPUT=REPO, FAKE_DEPLOY_CHECK_DONE="1")
+    assert result.returncode == 0 and "already proposed on the current main" in result.stdout and len(dispatches(tmp_path)) == 1
+    [read] = [c for c in calls(tmp_path, "gh") if c[1] == "api" and c[3].endswith("check-runs?check_name=deploy-check&filter=all")]
+    assert read[3].startswith("repos/acme/golden-road-deploy/commits/c") and read[-1]["GH_TOKEN"] == "github-token"
+    name, result = run(tmp_path, "workflow", REPO_INPUT=REPO)  # the run is still in progress, or the first dispatch never ran
+    assert result.returncode == 0 and len(dispatches(tmp_path)) == 2 and dispatches(tmp_path)[-1][-2] == "bump/acme-notes-test"
+    assert "no completed deploy-check" in result.stdout
+
+
+def test_a_check_run_read_that_fails_fails_the_run_and_dispatches_nothing(tmp_path, released):
+    assert run(tmp_path, "workflow", REPO_INPUT=REPO)[1].returncode == 0
+    name, result = run(tmp_path, "workflow", REPO_INPUT=REPO, FAKE_CHECK_RUNS_FAIL="1")
+    assert result.returncode == 1 and "::error::apps/acme/notes/test: cannot read deploy-check's runs on bump/acme-notes-test" in result.stdout
+    assert len(dispatches(tmp_path)) == 1
+
+
+def test_app_mode_never_reads_check_runs_for_a_current_pr(tmp_path, released):
+    assert run(tmp_path, REPO_INPUT=REPO)[1].returncode == 0
+    assert run(tmp_path, REPO_INPUT=REPO)[1].returncode == 0
+    assert not [c for c in calls(tmp_path, "gh") if c[1] == "api" and "check-runs" in c[3]]
+
+
+def test_a_dispatch_that_fails_fails_the_run_and_says_how_to_start_it_but_the_others_still_open(tmp_path, released):
+    publish(tmp_path, PROD_TAG, released["text"], released["record"], prerelease=False, published="2026-10-29T15:05:00Z")
+    name, result = run(tmp_path, "workflow", REPO_INPUT=REPO, FAKE_DISPATCH_FAIL="bump/acme-notes-test")
+    assert result.returncode == 1 and "at least one app or environment could not be bumped" in result.stdout
+    assert ("::error::apps/acme/notes/test: cannot start deploy-check on bump/acme-notes-test; start it by hand "
+            "(gh workflow run deploy-check.yml --ref bump/acme-notes-test)") in result.stdout
+    assert [c[4]["head"] for c in api(tmp_path, "POST") if c[3].endswith("/pulls")] == ["bump/acme-notes-test", "bump/acme-notes-prod"]
+    assert [c[-2] for c in dispatches(tmp_path)] == ["bump/acme-notes-test", "bump/acme-notes-prod"]
+
+
+def test_app_mode_never_dispatches(tmp_path, released):
+    assert run(tmp_path, REPO_INPUT=REPO)[1].returncode == 0
+    assert dispatches(tmp_path) == [] and [c for c in api(tmp_path, "POST") if c[3].endswith("/pulls")]

@@ -250,10 +250,23 @@ COMMITTED_DEPLOY_CODEOWNERS = """\
 """
 
 
+# bump.yml's token mode: configure.py --bump-workflow-token rewrites these two (spec 2026-10-30, B1); the helpers put the app ones back.
+BUMP_APP, BUMP_WORKFLOW = "\n  BUMP_TOKEN: app\n", "\n  BUMP_TOKEN: workflow\n"
+BUMP_READ = "\n    permissions:\n      contents: read\n      packages: read\n"
+BUMP_WRITE = "\n    permissions:\n      contents: write\n      pull-requests: write\n      actions: write\n      checks: read\n      packages: read\n"
+
+
+def unconfigured_bump_text(text):
+    """bump.yml's text in app mode: what configure.py --bump-workflow-token rewrote (the mode line, the job's permissions) put back.
+    Text already in app mode is returned unchanged."""
+    return text.replace(BUMP_WORKFLOW, BUMP_APP).replace(BUMP_WRITE, BUMP_READ)
+
+
 def unconfigure_deploy(deploy_dir, org):
     """Reset bootstrap/golden-road-deploy to the committed placeholder state. configure.py replaced ORG_PLACEHOLDER with `org` (None
-    when the live tree is pristine) and, in single-approver mode, relaxed the review ruleset (main-review) and set deploy-check's
-    SINGLE_APPROVER_PROMOTIONS to accept. The setup doc may have the owner replace CODEOWNERS with personal logins, so the committed
+    when the live tree is pristine), in single-approver mode relaxed the review ruleset (main-review) and set deploy-check's
+    SINGLE_APPROVER_PROMOTIONS to accept, and with --bump-workflow-token set bump.yml's BUMP_TOKEN to workflow and its job's
+    permissions to write. The setup doc may have the owner replace CODEOWNERS with personal logins, so the committed
     text is restored, and has the owner pin the workflows' BUILDER_IMAGE digest, so the placeholder digest is restored."""
     deploy = Path(deploy_dir)
     if not deploy.is_dir():
@@ -267,10 +280,11 @@ def unconfigure_deploy(deploy_dir, org):
                     path.write_text(segment.sub("ORG_PLACEHOLDER", text))
     (deploy / ".github/CODEOWNERS").write_text(COMMITTED_DEPLOY_CODEOWNERS)
     _restore_default_approval(deploy, with_env=False, ruleset_name="main-review.json")
-    # The workflows: the builder digest the setup doc has the owner pin, and deploy-check's single-approver setting.
+    # The workflows: the builder digest the setup doc has the owner pin, deploy-check's single-approver setting and bump's token mode.
     for workflow in sorted((deploy / ".github/workflows").glob("*.yml")):
         text = re.sub(r"(?m)^(  BUILDER_IMAGE: ).*$", rf"\g<1>{ZERO_IMAGE}", workflow.read_text())
-        workflow.write_text(re.sub(r"(?m)^(  SINGLE_APPROVER_PROMOTIONS: )accept$", r"\g<1>refuse", text))
+        text = re.sub(r"(?m)^(  SINGLE_APPROVER_PROMOTIONS: )accept$", r"\g<1>refuse", text)
+        workflow.write_text(unconfigured_bump_text(text) if workflow.name == "bump.yml" else text)
 
 
 def unconfigure_portal(app_dir):

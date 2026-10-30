@@ -8,6 +8,12 @@
 # its own copy of this file, so the author of a change to .github/ can weaken the check in the same change. What protects this
 # file is code-owner review of .github/ (CODEOWNERS and the ruleset), not the check.
 #
+# It also runs on workflow_dispatch, for bump in workflow mode (configure.py --bump-workflow-token, the personal PoC): a pull request
+# opened with GITHUB_TOKEN starts no workflow, so bump dispatches this one on its branch. A dispatched run checks only a bump branch
+# (bump/<owner>-<repo>-<env>) whose head is exactly one commit, on the current tip of main, so HEAD^1..HEAD is the whole change.
+# Without that rule a branch's earlier commits could hold the real change and still get a green check. The check run lands on the
+# branch head, which is the pull request's head.
+#
 # Every value a pull request controls (paths, release.yaml, bindings, release assets) reaches the scripts through files and
 # validated shell variables, never through an expression.
 name: deploy-check
@@ -15,6 +21,7 @@ name: deploy-check
 on:
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 permissions: {}
 
@@ -43,12 +50,35 @@ jobs:
             exit 1
           fi
 
-      # The pull request's merge commit; its first parent is the base branch, so HEAD^1..HEAD is exactly what the PR changes.
+      # The pull request's merge commit; its first parent is the base branch, so HEAD^1..HEAD is exactly what the PR changes. A
+      # dispatched run checks out the branch head instead, and the next step makes sure its one parent is main's tip.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 2
           path: deploy
+
+      # Before anything reads the tree. A pull request run goes straight on. A dispatched run needs a bump branch whose head has
+      # exactly one parent, the tip of main as it is now (read with the API: the checkout keeps no credential).
+      - name: A dispatched run checks only a bump branch, one commit on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+          case "$GITHUB_EVENT_NAME" in
+            pull_request) echo "a pull request: its merge commit is checked"; exit 0;;
+            workflow_dispatch) ;;
+            *) fail "deploy-check runs on pull_request and workflow_dispatch only";;
+          esac
+          [[ "$GITHUB_REF" =~ ^refs/heads/bump/[A-Za-z0-9_.-]+-(test|prod)$ ]] || fail "a dispatched deploy-check checks only a bump branch (bump/<owner>-<repo>-<env>)"
+          [ "$(git -C deploy rev-parse HEAD)" = "$GITHUB_SHA" ] || fail "the checkout is not the branch head"
+          read -r -a commit <<< "$(git -C deploy rev-list --parents -n 1 HEAD)"  # the head, then its parents
+          [ "${#commit[@]}" -eq 2 ] || fail "${GITHUB_REF#refs/heads/}'s head must be exactly one commit with one parent (bump's own commit on main)"
+          main=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha) || fail "cannot read the tip of main"
+          [[ "$main" =~ ^[0-9a-f]{40}$ ]] || fail "cannot read the tip of main"
+          [ "${commit[1]}" = "$main" ] || fail "${GITHUB_REF#refs/heads/}'s head is not one commit on the current main; bump rebuilds it on its next run"
+          echo "${GITHUB_REF#refs/heads/}: one commit on main ($main)"
 
       - name: Changed paths
         run: |

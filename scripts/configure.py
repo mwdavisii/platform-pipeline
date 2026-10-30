@@ -6,6 +6,7 @@ Usage: scripts/configure.py --org <org> --gateway-host <host> --edge-namespace N
                             [--github-host HOST] [--cert-oidc-issuer URL]
                             [--landing-page-url URL] [--approved-models-url URL] [--portal-url URL]
                             [--scorecard-mode {per-app,central} [--scorecard-app-id ID]] [--findings-bypass-team SLUG]
+                            [--bump-workflow-token]
 
 --scorecard-gateway-url is the chat-completions URL the scorecard's review agent calls from the CI runners. It
 defaults to https://<gateway host>/v1/chat/completions; pass it when the runners reach the gateway at another
@@ -26,6 +27,11 @@ later run may change it. There is no default: without it `register` says to ask 
 --single-approver is for the personal PoC only, for an owner with no second GitHub account. It records
 gate2_single_approver in platform/platform.json and relaxes the approval settings of hello-app, the portal, the scorecard factory, golden-road-agents and golden-road-deploy (no PR approvals
 required; the person who triggers a promotion may approve it). Never use it for a real organization.
+
+--bump-workflow-token is for the personal PoC only, with no deploy App. It sets golden-road-deploy's bump.yml to BUMP_TOKEN workflow
+(bump writes with its own token and dispatches deploy-check on each branch it creates or moves) and the bump job's permissions to
+contents, pull-requests and actions write (and checks read). The default, app, mints the deploy App's token and keeps the job read-only. Never use it
+for a real organization; going back needs a restore of bootstrap and platform.
 
 --scorecard-mode central (central AI review) needs --scorecard-app-id, the scorecard GitHub App's App ID. It records scorecard_mode and
 scorecard_app_id in platform/platform.json, re-pins `scorecard / assessed` and `scorecard / findings` in the rulesets of hello-app and the portal to the App, and
@@ -136,6 +142,59 @@ ANY_ACCEPT = re.compile(r"SINGLE_APPROVER_PROMOTIONS:\s*accept")  # at any inden
 def deploy_check_accepts(text: str) -> int:
     """How many times the text sets SINGLE_APPROVER_PROMOTIONS to accept, in any form."""
     return len(ANY_ACCEPT.findall(text))
+
+
+# golden-road-deploy's bump opens its pull requests with the deploy App's token (app). --bump-workflow-token sets workflow, for the
+# personal PoC only: bump writes with its own token, which needs write permissions. A job's permissions can't be conditional, so
+# configure rewrites both texts (spec 2026-10-30, B1).
+BUMP_REL = Path(".github/workflows/bump.yml")
+BUMP_APP, BUMP_WORKFLOW = "\n  BUMP_TOKEN: app\n", "\n  BUMP_TOKEN: workflow\n"
+BUMP_READ = "\n    permissions:\n      contents: read\n      packages: read\n"
+BUMP_WRITE = "\n    permissions:\n      contents: write\n      pull-requests: write\n      actions: write\n      checks: read\n      packages: read\n"
+ANY_WORKFLOW_TOKEN = re.compile(r"BUMP_TOKEN:\s*[\"']?workflow")  # at any indentation, quoted or not
+
+
+def _occurrences(text: str, needle: str) -> int:
+    """How many times needle appears, overlaps included: two of these blocks back to back share a newline."""
+    return len(re.findall(f"(?={re.escape(needle)})", text))
+
+
+def _bump_counts(text: str) -> tuple:
+    return (_occurrences(text, BUMP_APP), _occurrences(text, BUMP_READ), len(ANY_WORKFLOW_TOKEN.findall(text)),
+            _occurrences(text, BUMP_WORKFLOW), _occurrences(text, BUMP_WRITE))
+
+
+BUMP_KEY = re.compile(r"""(?m)^[^#\n]*?["']?\bBUMP_TOKEN["']?\s*:""")  # BUMP_TOKEN as a key, in any form, outside a comment
+BUMP_READ_ONLY = {"contents": "read", "packages": "read"}
+
+
+def bump_app_mode(text: str) -> bool:
+    """bump.yml in app mode, and nothing else: the text sets BUMP_TOKEN: app and the bump job's read-only permissions exactly once,
+    and never workflow or the write permissions; BUMP_TOKEN is a key only on that line; and read as YAML, the workflow's env says
+    app, its permissions are {}, and its one job's permissions are exactly contents and packages read (a quoted key, a block scalar
+    or an expression elsewhere is refused)."""
+    if _bump_counts(text) != (1, 1, 0, 0, 0) or len(BUMP_KEY.findall(text)) != 1:
+        return False
+    import yaml  # here only: the export runs this check with PyYAML, and the rest of configure.py never needs it
+    try:
+        doc = yaml.safe_load(text)
+    except yaml.YAMLError:
+        return False
+    jobs = doc.get("jobs") if isinstance(doc, dict) else None
+    return (isinstance(jobs, dict) and len(jobs) == 1 and doc.get("permissions") == {} and isinstance(doc.get("env"), dict)
+            and doc["env"].get("BUMP_TOKEN") == "app"
+            and all(isinstance(job, dict) and job.get("permissions") == BUMP_READ_ONLY for job in jobs.values()))
+
+
+def bump_workflow_token_text(text: str) -> str:
+    """bump.yml in workflow mode: BUMP_TOKEN app becomes workflow and the bump job's read-only permissions become write ones. Text
+    already in workflow mode is returned unchanged (a re-run). Raises ValueError unless each line is found exactly once."""
+    if bump_app_mode(text):
+        return text.replace(BUMP_APP, BUMP_WORKFLOW).replace(BUMP_READ, BUMP_WRITE)
+    if _bump_counts(text) == (0, 0, 1, 1, 1):
+        return text
+    raise ValueError("bump.yml must set BUMP_TOKEN: app and the bump job's read-only permissions exactly once "
+                     "(or, configured, BUMP_TOKEN workflow and the write permissions)")
 
 
 def _relaxed_ruleset(path: Path) -> bytes:
@@ -413,6 +472,11 @@ def main() -> int:
         for rel, marker in PLACEHOLDER_STATE.items():
             print(f"{rel}\t{marker}")
         return 0
+    if sys.argv[1:2] == ["--check-bump-app-mode"] and len(sys.argv) == 3:  # the export's check of bump.yml (spec 2026-10-30, B6)
+        try:
+            return 0 if bump_app_mode(Path(sys.argv[2]).read_text(encoding="utf-8")) else 1
+        except (OSError, UnicodeDecodeError):
+            return 1
     if sys.argv[1:] == ["--print-host-sites"]:
         for rel, (hosts, issuers) in HOST_SITES.items():
             print(f"{rel}\t{hosts}\t{issuers}")
@@ -440,6 +504,8 @@ def main() -> int:
                    help="per-app (default): each app calls the factory's scorecard workflow. central: the factory's poller assesses every ready PR; "
                         "the rulesets require `scorecard / assessed` and `scorecard / findings` from the scorecard App and the apps' scorecard callers are removed")
     p.add_argument("--scorecard-app-id", default=None, help="the scorecard GitHub App's id (the App ID, not the client ID); required with --scorecard-mode central")
+    p.add_argument("--bump-workflow-token", action="store_true",
+                   help="PoC only: no deploy App; golden-road-deploy's bump writes with its own token and dispatches deploy-check")
     p.add_argument("--findings-bypass-team", default=None,
                    help="the slug of the org team that may merge past a high scorecard finding (default: the repo admin role, as in the PoC)")
     args = p.parse_args()
@@ -627,6 +693,25 @@ def main() -> int:
             sys.exit(f"cannot read {deploy_check}: {exc}")
         if deploy_check_accepts(text) or text.count(DEPLOY_CHECK_REFUSE) != 1:
             sys.exit(f"{deploy_check} must set SINGLE_APPROVER_PROMOTIONS: refuse exactly once and never accept without --single-approver; "
+                     "restore with git checkout -- bootstrap platform")
+
+    bump = bootstrap / "golden-road-deploy" / BUMP_REL
+    if args.bump_workflow_token and not os.path.lexists(bump):
+        sys.exit(f"--bump-workflow-token needs {bump}")
+    if os.path.lexists(bump):
+        try:
+            text = (changes.get(bump) or read_regular(bump)).decode("utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            sys.exit(f"cannot read {bump}: {exc}")
+        if args.bump_workflow_token:
+            try:
+                after = bump_workflow_token_text(text)
+            except ValueError as exc:
+                sys.exit(f"cannot apply --bump-workflow-token: {exc}")
+            if after != text:
+                changes[bump] = after.encode("utf-8")
+        elif not bump_app_mode(text):
+            sys.exit(f"{bump} must set BUMP_TOKEN: app and the bump job's read-only permissions exactly once without --bump-workflow-token; "
                      "restore with git checkout -- bootstrap platform")
 
     if team is not None:

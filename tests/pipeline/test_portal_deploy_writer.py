@@ -138,3 +138,16 @@ def test_the_writer_s_caps_are_golden_road_s():
     from golden_road.render import MAX_FILE_BYTES
     from portal.writer import run
     assert (run.MAX_FILE_BYTES, run.MAX_BINDING_BYTES) == (MAX_FILE_BYTES, deploy.MAX_BINDING_BYTES)
+
+
+def test_a_prod_binding_waits_for_the_review_the_deploy_repo_requires():
+    """Spec 2026-10-30, P1: the writer never merges a prod binding, so its PR meets main-review like anyone's: CODEOWNERS gives every
+    bindings.yaml to security and analytics, and main-review asks for a code owner's review (none in a single-approver tree)."""
+    from portal.writer.allowlist import ENVIRONMENTS, REVIEWED
+    assert REVIEWED == ("prod",) and set(REVIEWED) <= set(ENVIRONMENTS)
+    deploy_repo = ROOT / "bootstrap/golden-road-deploy"
+    assert any(line.startswith("/apps/**/bindings.yaml ") for line in (deploy_repo / ".github/CODEOWNERS").read_text().splitlines())
+    review = json.loads((deploy_repo / ".github/rulesets/main-review.json").read_text())
+    [rule] = [r for r in review["rules"] if r["type"] == "pull_request"]
+    single = json.loads((ROOT / "platform/platform.json").read_text()).get("gate2_single_approver") is True
+    assert rule["parameters"]["require_code_owner_review"] is not single

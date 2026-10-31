@@ -1,7 +1,7 @@
 name: ac12-authz-loosened
 description: "AC-12: builder-spec.json lets readers delete. Drift and preview are green, and T-2 fires."
 app: notes
-intake: {tier: moderate, data_classification: internal, purpose: "Stores short team notes. It does not send email, call external APIs, or store files."}
+intake: {tier: moderate, data_classification: public, purpose: "Stores short team notes. It does not send email, call external APIs, or store files."}
 change:
   replace:
     builder-spec.json:

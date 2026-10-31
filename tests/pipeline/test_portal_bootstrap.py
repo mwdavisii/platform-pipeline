@@ -55,7 +55,9 @@ def test_the_builder_and_the_portal_pin_the_same_pyyaml():
     assert _pin(PORTAL / "requirements-test.txt", "pyyaml") == builder
 
 def test_the_portal_s_vendored_schemas_are_the_contracts():
-    names = ("binding.v1.json", "binding.v2.json", "builder-spec.v1.json", "deploy-release.v1.json", "identity-link.v1.json", "intake.v2.json", "registration-draft.v1.json", "registration-evidence.v1.json", "registration-rules.v1.json")
+    names = ("binding.v1.json", "binding.v2.json", "builder-spec.v1.json", "deploy-release.v1.json", "finding.v2.json", "identity-link.v1.json",
+             "intake.v1.json", "intake.v2.json", "re-review-event.v1.json", "registration-draft.v1.json", "registration-evidence.v1.json",
+             "registration-rules.v1.json", "scorecard.v1.json", "scorecard.v2.json")
     for name in names:
         assert (PORTAL / "portal/schemas" / name).read_bytes() == (ROOT / "src/contracts/schemas" / name).read_bytes(), name
     assert sorted(p.name for p in (PORTAL / "portal/schemas").glob("*.json")) == sorted(names)
@@ -76,7 +78,9 @@ def test_ci_runs_the_portal_s_docker_tests():
     steps = yaml.safe_load((ROOT / ".github/workflows/test.yml").read_text())["jobs"]["test"]["steps"]
     run = next(s["run"] for s in steps if s.get("name") == "Run tests")
     for path in ("bootstrap/golden-road-portal/tests/test_portal_store_contract.py", "bootstrap/golden-road-portal/tests/test_portal_postgres_docker.py",
-                 "tests/pipeline/test_portal_semgrep_docker.py", "bootstrap/golden-road-portal/tests/test_portal_postgres_flow_docker.py"):
+                 "tests/pipeline/test_portal_semgrep_docker.py", "bootstrap/golden-road-portal/tests/test_portal_postgres_flow_docker.py",
+                 "bootstrap/golden-road-portal/tests/test_portal_postgres_rereview_docker.py",
+                 "bootstrap/golden-road-portal/tests/test_portal_postgres_evidence_docker.py", "tests/pipeline/test_portal_deploy_kit_docker.py"):
         assert path in run.split("-m docker", 1)[1], path
 
 
@@ -171,3 +175,51 @@ def test_the_portal_declares_its_secret_server_settings():
     assert all(f"key: {name}" in deployment for name in ("PORTAL_SECRET_SERVER", "PORTAL_SECRET_PROCESS_URL"))
     readme = (PORTAL / "README.md").read_text()
     assert all(f"`{name}`" in readme for name in ("PORTAL_SECRET_SERVER", "PORTAL_SECRET_PROCESS_URL", "PORTAL_SECRET_SERVER_URL"))
+
+
+def test_the_portal_s_classification_module_is_the_contracts():
+    """The levels, the retired names and the one-liners are one file in two places (spec 2026-10-30 C1)."""
+    assert (PORTAL / "portal/classification.py").read_bytes() == (ROOT / "src/contracts/classification.py").read_bytes()
+
+
+def test_the_portal_declares_its_classification_policy_setting():
+    env = {e["name"]: e["secret"] for e in json.loads((PORTAL / "builder-spec.json").read_text())["env"]}
+    assert env["PORTAL_CLASSIFICATION_POLICY_URL"] is False
+    assert "key: PORTAL_CLASSIFICATION_POLICY_URL" in (PORTAL / "deploy/base/deployment.yaml").read_text()
+    assert "`PORTAL_CLASSIFICATION_POLICY_URL`" in (PORTAL / "README.md").read_text()
+
+
+def test_the_portal_validates_the_event_the_scorecard_writes():
+    """The scorecard's own builder makes an event; the portal's validator (its vendored schemas and registry) accepts it, and refuses
+    one the scorecard's schema refuses (spec 2026-10-31 R4)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("portal_contracts_under_test", PORTAL / "portal/contracts.py")
+    portal_contracts = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(portal_contracts)
+    from contracts.schema import validate as contract_validate
+    event = {"schema": "re-review-event/v1", "repo": "acme/notes", "pr": 7, "head_sha": "a" * 40, "tree_sha": "b" * 40,
+             "scorecard_version": "0.5.1", "created": "2026-10-31T12:00:00Z", "level": "security_review", "floor": "standard",
+             "complete": True, "signals": [{"id": "T-17", "kind": "trigger", "level": "elevated", "summary": "resources_tier raised", "count": 1},
+                                           {"id": "egress-removed", "kind": "recorded", "summary": "egress removed: api.example.test:443"}]}
+    assert contract_validate("re-review-event.v1", event) == [] and portal_contracts.validate("re-review-event.v1", event) == []
+    for bad in ({**event, "head_sha": "x"}, {**event, "level": "high"}, {**event, "created": "yesterday"},
+                {**event, "signals": [{"id": "T-1x", "kind": "trigger", "level": "elevated", "summary": "s", "count": 1}]}):
+        assert contract_validate("re-review-event.v1", bad) and portal_contracts.validate("re-review-event.v1", bad)
+
+
+def test_the_portal_declares_its_rereview_stale_setting():
+    env = {e["name"]: e["secret"] for e in json.loads((PORTAL / "builder-spec.json").read_text())["env"]}
+    assert env["PORTAL_REREVIEW_STALE_DAYS"] is False
+    assert "key: PORTAL_REREVIEW_STALE_DAYS" in (PORTAL / "deploy/base/deployment.yaml").read_text()
+
+
+def test_the_portal_readme_describes_changes_and_the_re_review_list():
+    text = " ".join((PORTAL / "README.md").read_text().split())
+    for needle in ("## Changing a registration", "record_changed", "record_conflict", "record_case_mismatch", "already_registered",
+                   "`scorecard: central`", "## The re-review list", "`PORTAL_REVIEW_DUE_SOON_DAYS`", "`PORTAL_REREVIEW_SIGNALS`",
+                   "`PORTAL_REREVIEW_STALE_DAYS`", "`PORTAL_ARTIFACT_HOSTS`", "`actions: read`", "untrusted_run",
+                   "`GET /repos/{r}/actions/workflows/{workflow}/runs`", "`GET /repos/{r}/actions/runs/{id}`", "`GET /repos/{r}/actions/artifacts/{id}/zip`",
+                   "without the token", "re-review-event.json", "16 MiB", "1 MiB", "0010", "anchors or aliases", "artifact_host_refused",
+                   "not_a_file", "`git/ref/heads/main`"):
+        assert needle in text, needle
+

@@ -4,7 +4,7 @@ from contracts.findings import make_finding_v2
 from golden_road.io import InputError
 from scorecard.level import SUMMARIES, decide, triggers_of
 
-NOTES = {"tier": "moderate", "data_classification": "internal"}
+NOTES = {"tier": "moderate", "data_classification": "public"}
 FLAGS = {"incomplete": False, "unverified": [], "ignored": []}
 
 
@@ -89,7 +89,7 @@ def test_findings_fire_their_triggers(config, standards, trigger, level):
 def test_vc6_is_security_review_for_sensitive_data(config):
     finding = _finding([{"framework": "golden-road-vc", "id": "VC-6"}], layer="agentic")
     assert _decide(config, findings=[finding])[0] == "elevated"
-    assert _decide(config, findings=[finding], intake={"tier": "moderate", "data_classification": "phi"})[0] == "security_review"
+    assert _decide(config, findings=[finding], intake={"tier": "moderate", "data_classification": "protected"})[0] == "security_review"
 
 
 def test_unverified_agent_finding_does_not_fire_its_own_trigger(config):
@@ -190,12 +190,12 @@ def test_agent_finding_that_maps_to_no_trigger_fires_t12(config):
 
 def test_classification_is_the_more_sensitive_of_intake_and_spec(config):
     finding = _finding([{"framework": "golden-road-vc", "id": "VC-6"}], layer="agentic")
-    phi = {"tier": "moderate", "data_classification": "phi"}
-    assert _decide(config, findings=[finding], intake=phi, spec_classification="internal")[0] == "security_review"
-    internal = {"tier": "moderate", "data_classification": "internal"}
-    assert _decide(config, findings=[finding], intake=internal, spec_classification="restricted")[0] == "security_review"
-    assert _decide(config, findings=[finding], intake=internal, spec_classification="internal")[0] == "elevated"
-    assert _decide(config, findings=[finding], intake=None, spec_classification="phi")[0] == "security_review"
+    protected = {"tier": "moderate", "data_classification": "protected"}
+    assert _decide(config, findings=[finding], intake=protected, spec_classification="public")[0] == "security_review"
+    public = {"tier": "moderate", "data_classification": "public"}
+    assert _decide(config, findings=[finding], intake=public, spec_classification="confidential")[0] == "security_review"
+    assert _decide(config, findings=[finding], intake=public, spec_classification="public")[0] == "elevated"
+    assert _decide(config, findings=[finding], intake=None, spec_classification="protected")[0] == "security_review"
 
 
 def test_t12_refs_are_deduped_ordered_and_capped(config):
@@ -224,7 +224,7 @@ def test_answers_outside_the_agents_set_are_suspicious(config):
 
 def test_unknown_tier_is_an_input_error(config):
     with pytest.raises(InputError):
-        _decide(config, intake={"tier": "critical", "data_classification": "internal"})
+        _decide(config, intake={"tier": "critical", "data_classification": "public"})
 
 
 @pytest.mark.parametrize("size, fires", [
@@ -269,14 +269,14 @@ def test_t19_summary_pluralizes(config, size, text):
     assert reasons[0]["summary"] == text
 
 
-REGISTRATION = {"tier": "moderate", "data_classification": "internal", "rules": ["write_roles", "other_egress"]}
+REGISTRATION = {"tier": "moderate", "data_classification": "confidential", "rules": ["write_roles", "other_egress"]}
 
 
 @pytest.mark.parametrize("intake, fires", [
-    ({"tier": "low", "data_classification": "internal"}, True),
+    ({"tier": "low", "data_classification": "confidential"}, True),
     ({"tier": "moderate", "data_classification": "public"}, True),
-    ({"tier": "moderate", "data_classification": "internal"}, False),
-    ({"tier": "high", "data_classification": "phi"}, False),
+    ({"tier": "moderate", "data_classification": "confidential"}, False),
+    ({"tier": "high", "data_classification": "protected"}, False),
 ])
 def test_t21_fires_when_the_registration_is_below_the_floor(config, intake, fires):
     _, _, reasons = _decide(config, intake=intake, registration=REGISTRATION)
@@ -284,23 +284,23 @@ def test_t21_fires_when_the_registration_is_below_the_floor(config, intake, fire
 
 
 def test_t21_names_the_registered_and_needed_values_and_the_rules_that_fired(config):
-    level, _, reasons = _decide(config, intake={"tier": "low", "data_classification": "internal"}, registration=REGISTRATION)
+    level, _, reasons = _decide(config, intake={"tier": "low", "data_classification": "confidential"}, registration=REGISTRATION)
     [reason] = [r for r in reasons if r["trigger"] == "T-21"]
-    assert reason["summary"] == "Registered as low/internal; this change needs at least moderate/internal (signals: write_roles, other_egress)"
+    assert reason["summary"] == "Registered as low/confidential; this change needs at least moderate/confidential (signals: write_roles, other_egress)"
     assert reason["refs"] == [{"source": "write_roles"}, {"source": "other_egress"}] and reason["total"] == 2
     assert reason["level"] == "security_review" and level == "security_review"
 
 
 def test_t21_without_rules_names_only_the_values(config):
     _, _, reasons = _decide(config, intake={"tier": "low", "data_classification": "public"},
-                            registration={"tier": "low", "data_classification": "internal", "rules": []})
+                            registration={"tier": "low", "data_classification": "confidential", "rules": []})
     [reason] = reasons
-    assert reason["summary"] == "Registered as low/public; this change needs at least low/internal" and reason["refs"]
+    assert reason["summary"] == "Registered as low/public; this change needs at least low/confidential" and reason["refs"]
 
 
 def test_t21_takes_its_level_from_the_config(config):
     config["triggers"]["T-21"] = "elevated"
-    level, _, reasons = _decide(config, intake={"tier": "low", "data_classification": "internal"}, registration=REGISTRATION)
+    level, _, reasons = _decide(config, intake={"tier": "low", "data_classification": "confidential"}, registration=REGISTRATION)
     assert [(r["trigger"], r["level"]) for r in reasons] == [("T-21", "elevated")] and level == "elevated"
 
 

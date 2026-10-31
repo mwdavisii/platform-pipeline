@@ -20,7 +20,7 @@
     "signals": {"type": "array", "maxItems": 40, "items": {"oneOf": [{"$ref": "#/$defs/trigger_signal"}, {"$ref": "#/$defs/recorded_signal"}]}}
   },
   "$defs": {
-    "summary": {"type": "string", "minLength": 1, "maxLength": 4000},
+    "summary": {"type": "string", "minLength": 1, "maxLength": 4000, "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$", "description": "one line: no control character (the portal stores and shows it)"},
     "trigger_signal": {
       "type": "object", "additionalProperties": false, "required": ["id", "kind", "level", "summary", "count"],
       "properties": {

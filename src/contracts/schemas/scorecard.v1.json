@@ -24,7 +24,7 @@
         "intake_found": {"type": "boolean"},
         "tier": {"enum": ["low", "moderate", "high", null]},
         "purpose": {"type": ["string", "null"]},
-        "data_classification": {"enum": ["public", "internal", "restricted", "phi", null]},
+        "data_classification": {"enum": ["public", "confidential", "protected", null]},
         "asvs_level": {"enum": [1, 2, 3]}
       },
       "allOf": [

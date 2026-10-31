@@ -18,7 +18,7 @@ In this file, `<bundle>` is the folder holding this file (the stub printed it as
 1. **Builder.** Run `<py> <bundle>/install_builder.py`. Exit 0: its JSON gives `builder` and `golden_road`, the full paths of the two commands (use them wherever this file says `builder` or `golden-road`), and `org` and `host`. Tell the user about any `warnings` (an `offline` run uses a cached builder). Exit 1: stop (see Rules). Exit 3: tell the user the `message` and the `fix`, and stop.
 2. **Read the guide.** Run `builder guide`. It lists every spec field with its type, allowed values and who decides it, the rules (the never-edit files, the gateway host, links refused, regenerate after an upgrade), and what each exit code of `detect`, `generate` and `verify` means. It is the authority for the installed builder; where this file and the guide differ, the guide wins.
 3. **Detect.** Run `builder detect .`. It writes nothing. Read `draft_spec`, `needs`, `warnings` and `questions`; it exits 0 even with questions, so always read `questions`.
-4. **Interview.** Ask the user every question, and confirm every `decided_by: user` field. Don't ask for a tier: the portal computes a minimum tier and classification from the repo, and an admin decides. If the app has write endpoints, ask which roles exist and which routes each may call: writes go only to `write` roles. Ask about the health check too: add a `/healthz` route if there isn't one, or the probe is TCP only.
+4. **Interview.** Ask the user every question, and confirm every `decided_by: user` field. For the data classification, show the user the levels and the policy link from `builder guide` (`data_classification.levels`, least to most sensitive: public, confidential or protected, each with its one line, and `data_classification.policy_url`). Ask them to read the policy and pick; never choose it yourself. Don't ask for a tier: the portal computes a minimum tier and classification from the repo, and an admin decides. If the app has write endpoints, ask which roles exist and which routes each may call: writes go only to `write` roles. Ask about the health check too: add a `/healthz` route if there isn't one, or the probe is TCP only.
 5. **Spec and generate.** Write the confirmed spec to `builder-spec.json`, then run `builder generate .`:
    - `0`: done. `generate` rewrites the spec canonically (sorted keys) and writes the golden-road blocks in `AGENTS.md` and `CLAUDE.md`. Run `builder generate .` again after the builder is upgraded and commit the result, or `verify` reports drift.
    - `2` (invalid): read `errors`, explain them to the user in plain words, fix the spec with them, and run it again.
@@ -89,7 +89,7 @@ An illustration only: `builder guide` is the authority for the installed builder
   "server": "uvicorn",
   "port": 8080,
   "health_path": "/healthz",
-  "data_classification": "internal",
+  "data_classification": "confidential",
   "egress": [{"host": "litellm.internal", "port": 443, "reason": "model calls through the platform gateway"}],
   "env": [{"name": "NOTES_DB_URL", "secret": true}],
   "resources_tier": "default",
@@ -109,6 +109,6 @@ An illustration only: `builder guide` is the authority for the installed builder
 User: "My notes API works, can you ship it?"
 
 1. `builder detect .` reports a FastAPI app with `POST /api/notes` and asks about roles and data classification.
-2. You ask: "Who can read notes and who can add them? What kind of data is in the notes? What does the app not do?" The user says everyone on the team reads, only editors write, the data is internal, and it stores nothing but notes.
-3. You write `builder-spec.json` with roles `reader` (read) and `editor` (write), a GET rule for both and a POST rule for `editor`, and `data_classification: internal`. `builder generate .` exits 0.
+2. You ask: "Who can read notes and who can add them? What kind of data is in the notes? What does the app not do?" The user says everyone on the team reads, only editors write, the notes are for staff only, and it stores nothing but notes.
+3. You write `builder-spec.json` with roles `reader` (read) and `editor` (write), a GET rule for both and a POST rule for `editor`, and `data_classification: confidential`. `builder generate .` exits 0.
 4. You write the callers, commit on `golden-road`, show `gh repo create <owner>/notes-api --private`, and run it after the user's yes; then the visibility check, the push and the PR, each after a yes.

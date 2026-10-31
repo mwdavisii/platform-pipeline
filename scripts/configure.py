@@ -4,7 +4,7 @@
 Usage: scripts/configure.py --org <org> --gateway-host <host> --edge-namespace NS --edge-label KEY=VALUE [...]
                             --identity-header NAME [--scorecard-gateway-url URL] [--single-approver]
                             [--github-host HOST] [--cert-oidc-issuer URL]
-                            [--landing-page-url URL] [--approved-models-url URL] [--portal-url URL]
+                            [--landing-page-url URL] [--approved-models-url URL] [--portal-url URL] [--classification-policy-url URL]
                             [--scorecard-mode {per-app,central} [--scorecard-app-id ID]] [--findings-bypass-team SLUG]
                             [--bump-workflow-token]
 
@@ -23,6 +23,10 @@ the README of golden-road-agents; the approved-models link has no default. A lat
 --portal-url is the golden road portal's address (https, no path). It is recorded in platform/platform.json, and `golden-road register` and
 `golden-road doctor` read it from the installed builder's platform config: an agent can't be steered to another portal. Like the links, a
 later run may change it. There is no default: without it `register` says to ask the platform team.
+
+--classification-policy-url is the data classification policy (https). It is recorded in platform/platform.json; builder guide and builder
+detect give it to the agent, which shows it to the user. Until it is given, the committed placeholder https://policies.example.com/data-classification
+stays. Like the links, a later run may change it.
 
 --single-approver is for the personal PoC only, for an owner with no second GitHub account. It records
 gate2_single_approver in platform/platform.json and relaxes the approval settings of hello-app, the portal, the scorecard factory, golden-road-agents and golden-road-deploy (no PR approvals
@@ -500,6 +504,7 @@ def main() -> int:
                    help="the golden-road landing page the AGENTS.md block links to (default https://<github host>/<org>/golden-road-agents)")
     p.add_argument("--approved-models-url", default=None, help="the approved-models policy the AGENTS.md block links to (default: not published yet)")
     p.add_argument("--portal-url", default=None, help="the golden road portal's address (https, no path); golden-road register links to it")
+    p.add_argument("--classification-policy-url", default=None, help="the data classification policy (https) builder guide links to")
     p.add_argument("--scorecard-mode", choices=("per-app", "central"), default=None,
                    help="per-app (default): each app calls the factory's scorecard workflow. central: the factory's poller assesses every ready PR; "
                         "the rulesets require `scorecard / assessed` and `scorecard / findings` from the scorecard App and the apps' scorecard callers are removed")
@@ -556,7 +561,7 @@ def main() -> int:
         sys.exit("invalid --scorecard-gateway-url (an https URL with a host name and a path, no user info or fragment)")
     for value in (args.org, args.gateway_host, args.edge_namespace, args.identity_header, url, args.github_host or "",
                   args.cert_oidc_issuer or "", args.landing_page_url or "", args.approved_models_url or "", args.portal_url or "",
-                  args.findings_bypass_team or "", *args.edge_label):
+                  args.classification_policy_url or "", args.findings_bypass_team or "", *args.edge_label):
         if "replace-me" in value.lower():
             sys.exit(f"{value!r} is still a placeholder")
 
@@ -578,6 +583,7 @@ def main() -> int:
     from builder.config import is_denied_egress, is_model_provider
     from builder.errors import BuilderError
     from builder.spec import check_spec
+    from contracts.classification import POLICY_PLACEHOLDER, policy_link_ok
 
     platform = json.loads(read_regular(platform_path).decode("utf-8"))
     if is_model_provider(args.gateway_host, {**platform, "model_gateway_hosts": []}):
@@ -614,6 +620,12 @@ def main() -> int:
         platform["approved_models_url"] = args.approved_models_url
     if args.portal_url:
         platform["portal_url"] = args.portal_url.rstrip("/")
+    given = args.classification_policy_url  # an empty flag is refused, not read as "keep the recorded one"
+    policy_url = given if given is not None else platform.get("classification_policy_url") or POLICY_PLACEHOLDER
+    if not policy_link_ok(policy_url):  # the flag's value, or the one recorded by an earlier run (a hand edit is refused too)
+        sys.exit("invalid --classification-policy-url (an https URL with a host name, at most 2048 characters; no user info, spaces, "
+                 "quotes or brackets)")
+    platform["classification_policy_url"] = policy_url
     recorded = platform.get("gate2_single_approver", False)
     if type(recorded) is not bool:
         sys.exit("gate2_single_approver in platform/platform.json must be true or false")

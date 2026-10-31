@@ -13,7 +13,7 @@ SCORECARD = {
     "checkpoint": "pr",
     "tool": {"name": "scorecard", "version": "0.1.0"},
     "app": {"repo": "acme/notes", "commit": SHA, "base": "b" * 40, "tree_sha": "c" * 40, "intake_found": True, "tier": "moderate",
-            "purpose": "Stores team notes.", "data_classification": "internal", "asvs_level": 2},
+            "purpose": "Stores team notes.", "data_classification": "public", "asvs_level": 2},
     "level": "security_review",
     "floor": "standard",
     "reasons": [{"trigger": "T-2", "level": "security_review", "summary": "authz loosened in builder-spec.json",
@@ -80,7 +80,7 @@ def test_no_intake_means_null_tier_purpose_and_classification():
 
 def test_no_intake_may_still_carry_the_classification_from_the_builder_spec():
     doc = copy.deepcopy(SCORECARD)
-    doc["app"].update(intake_found=False, tier=None, purpose=None, data_classification="phi")
+    doc["app"].update(intake_found=False, tier=None, purpose=None, data_classification="protected")
     assert validate("scorecard.v1", doc) == []
     doc["app"]["tier"] = "high"
     assert validate("scorecard.v1", doc)

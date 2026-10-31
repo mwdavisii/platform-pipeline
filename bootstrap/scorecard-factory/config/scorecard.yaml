@@ -4,7 +4,7 @@ schema: scorecard-config/v1
 
 # Intake tier and data classification -> ASVS level. The level used is the highest that applies.
 tier_asvs_level: {low: 1, moderate: 2, high: 3}
-classification_asvs_level: {public: 1, internal: 1, restricted: 2, phi: 2}
+classification_asvs_level: {public: 1, confidential: 2, protected: 2}
 missing_intake_asvs_level: 3
 
 # Intake tier -> the lowest scrutiny level a change can get.
@@ -40,7 +40,7 @@ triggers:
 large_change: {lines: 1000, files: 40}
 
 # T-10 rises to security_review for these classifications.
-sensitive_classifications: [restricted, phi]
+sensitive_classifications: [confidential, protected]
 
 # Gate 1 must be green on the PR head before anything is assessed. App 15368 is GitHub Actions. Keep this list to
 # drift and preview plus every entry of the platform's required-checks.json (the scans), pinned to the same sources.

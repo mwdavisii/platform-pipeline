@@ -9,7 +9,7 @@ def test_fastapi_app(python_app):
     assert draft["server"] == "uvicorn"
     assert draft["health_path"] == "/healthz"
     assert any("write endpoints" in q and "POST /api/notes" in q for q in out["questions"])
-    assert any("public, internal, restricted, or phi" in q for q in out["questions"])
+    assert any("public, confidential or protected" in q for q in out["questions"])
 
 
 def test_flask_app_in_package(make_app):
@@ -93,3 +93,9 @@ def test_the_draft_leaves_out_secretserver_names(make_app):
     assert out["draft_spec"]["env"] == [{"name": "APP_MODE", "secret": False}]
     assert out["needs"]["set_by_platform"] == ["SECRETSERVER_TOKEN"]
     assert any("SECRETSERVER_TOKEN" in q and "binding" in q and "Secret Server" in q for q in out["questions"])
+
+
+def test_the_classification_question_names_the_levels_and_the_policy(python_app):
+    questions = detect(python_app)["questions"]
+    [question] = [q for q in questions if q.startswith("What data does this app handle")]
+    assert "public, confidential or protected" in question and "https://policies.example.com/data-classification" in question

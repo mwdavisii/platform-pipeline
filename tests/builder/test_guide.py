@@ -153,3 +153,16 @@ def test_guide_follows_the_platform_config(tmp_path, monkeypatch):
     doc = guide()
     assert doc["model_gateway_hosts"] == ["llm.example.org"] and doc["platform_config_sha256"] == platform_sha256()
     assert "llm.example.org" in {rule["id"]: rule["text"] for rule in doc["rules"]}["gateway-only"]
+
+
+def test_the_guide_gives_the_levels_and_the_policy_link(tmp_path, monkeypatch):
+    from contracts.classification import LEVELS, MEANS
+    doc = guide()
+    assert doc["data_classification"]["levels"] == [{"level": level, "means": MEANS[level]} for level in LEVELS]
+    assert doc["data_classification"]["policy_url"] == "https://policies.example.com/data-classification"
+    path = tmp_path / "platform.json"
+    path.write_text(json.dumps({**load_platform(), "classification_policy_url": "https://wiki.example.org/data"}))
+    monkeypatch.setenv("BUILDER_PLATFORM_CONFIG", str(path))
+    doc = guide()
+    assert doc["data_classification"]["policy_url"] == "https://wiki.example.org/data" and validate("builder-guide.v1", doc) == []
+    assert "data_classification.policy_url" in " ".join(next(f for f in doc["fields"] if f["field"] == "data_classification")["rules"])

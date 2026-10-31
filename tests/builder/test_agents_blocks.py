@@ -9,7 +9,7 @@ def test_blocks_are_marked_and_name_the_classification(notes_spec):
     assert set(blocks) == set(MANAGED_FILES) == {"AGENTS.md", "CLAUDE.md"}
     agents = blocks["AGENTS.md"]
     assert agents.startswith(BEGIN + "\n") and agents.endswith(END + "\n")
-    assert "`internal`" in agents and "Never make this repository public." in agents
+    assert "`public`" in agents and "Never make this repository public." in agents
     for rel in NEVER_EDIT:
         assert f"`{rel}`" in agents
     assert blocks["CLAUDE.md"] == f"{BEGIN}\n@AGENTS.md\n{END}\n"
@@ -18,7 +18,7 @@ def test_blocks_are_marked_and_name_the_classification(notes_spec):
 def test_block_text_depends_only_on_the_classification(notes_spec):
     other = {**notes_spec, "app_name": "other", "egress": [], "env": []}
     assert render_blocks(other) == render_blocks(notes_spec)
-    assert render_blocks({**notes_spec, "data_classification": "phi"})["AGENTS.md"] != render_blocks(notes_spec)["AGENTS.md"]
+    assert render_blocks({**notes_spec, "data_classification": "protected"})["AGENTS.md"] != render_blocks(notes_spec)["AGENTS.md"]
 
 
 def test_never_edit_lists_the_generated_files_and_dirs():
@@ -119,7 +119,7 @@ def test_without_links_the_block_keeps_the_placeholder_sentences(notes_spec):
 def test_the_platform_config_s_links_go_into_the_block(notes_spec):
     agents = render_blocks(notes_spec, {"landing_page_url": LANDING, "approved_models_url": MODELS})["AGENTS.md"]
     assert f"Install it from the golden-road landing page: <{LANDING}>." in agents
-    assert f"Use only the models approved for `internal` data: <{MODELS}>." in agents
+    assert f"Use only the models approved for `public` data: <{MODELS}>." in agents
     assert "not published yet" not in agents and "(the platform team has the link)" not in agents
 
 

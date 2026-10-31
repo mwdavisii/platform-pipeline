@@ -69,6 +69,7 @@
       }
     }
   },
+  "classification_policy_url": "https://policies.example.com/data-classification",
   "org": "mwdavisii",
   "github_host": "github.com",
   "actions_oidc_issuer": "https://token.actions.githubusercontent.com",

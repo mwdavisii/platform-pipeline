@@ -277,7 +277,7 @@ id = "T-10"
 when = { fact = "sensitive_to_logs", is = true }
 level = "elevated"
 on_unsure = "standard"
-escalate = { classifications = ["restricted", "phi"], level = "security_review" }
+escalate = { classifications = ["confidential", "protected"], level = "security_review" }
 summary = "Sensitive data to logs, errors, telemetry, or third parties"
 reason = "The change sends sensitive data where it can be read by people or systems that shouldn't have it."
 guidance = "Log identifiers, not values. Remove credentials and personal data from log lines, error messages and outbound calls."

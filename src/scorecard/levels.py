@@ -1,9 +1,9 @@
 """Scrutiny levels, data classifications, and the intake-driven floor and ASVS level."""
 
+from contracts.classification import LEVELS as CLASSIFICATIONS  # public < confidential < protected
 from golden_road.io import InputError
 
 LEVELS = ("standard", "elevated", "security_review")
-CLASSIFICATIONS = ("public", "internal", "restricted", "phi")
 
 
 def rank(level: str) -> int:

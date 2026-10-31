@@ -25,7 +25,7 @@ def step_14():
 
 def step_15():
     text = POC.read_text()
-    return text[text.index("## 15. "):text.index("## PoC gaps to record")]
+    return text[text.index("## 15. "):text.index("## 16. ")]   # only step 15: section 22 is named for builder 0.5.0
 
 
 def step_13():

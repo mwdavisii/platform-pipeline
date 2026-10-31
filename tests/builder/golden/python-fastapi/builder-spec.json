@@ -38,7 +38,7 @@
       }
     ]
   },
-  "data_classification": "internal",
+  "data_classification": "public",
   "egress": [
     {
       "host": "litellm.internal",

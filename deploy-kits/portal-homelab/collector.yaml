@@ -1,5 +1,5 @@
-# The collector: every five minutes records the repo admins and computes the evidence of each waiting registration, with the read App.
-# It holds only the read App's key.
+# The collector: every five minutes records the repo admins, computes the evidence of each waiting registration, observes the
+# factory's intake records and reads the scorecard's re-review events, with the read App. It holds only the read App's key.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -57,6 +57,24 @@ spec:
             configMapKeyRef:
               name: golden-road-portal-config
               key: PORTAL_MODEL_GATEWAY_HOSTS
+        - name: PORTAL_REVIEW_DUE_SOON_DAYS
+          valueFrom:
+            configMapKeyRef:
+              name: golden-road-portal-config
+              key: PORTAL_REVIEW_DUE_SOON_DAYS
+              optional: true
+        - name: PORTAL_REREVIEW_SIGNALS
+          valueFrom:
+            configMapKeyRef:
+              name: golden-road-portal-config
+              key: PORTAL_REREVIEW_SIGNALS
+              optional: true
+        - name: PORTAL_ARTIFACT_HOSTS
+          valueFrom:
+            configMapKeyRef:
+              name: golden-road-portal-config
+              key: PORTAL_ARTIFACT_HOSTS
+              optional: true
         - name: PORTAL_READ_APP_KEY_FILE
           value: /secrets/read-app/read-app.pem
         - name: PORTAL_DATABASE_URL

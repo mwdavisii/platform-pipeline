@@ -15,7 +15,7 @@ def decode(url):
 
 
 def test_the_link_carries_a_valid_draft_in_the_fragment():
-    doc = register.draft("acme/notes", "Stores notes; no email.", "internal", "low")
+    doc = register.draft("acme/notes", "Stores notes; no email.", "public")
     url = register.link("https://portal.example.org", doc)
     assert url.startswith("https://portal.example.org/register#") and "?" not in url
     assert decode(url) == doc and validate("registration-draft.v1", doc) == []
@@ -35,9 +35,9 @@ def test_a_draft_too_long_for_the_page_is_refused():
 
 def test_a_bad_draft_is_refused():
     with pytest.raises(InputError):
-        register.draft("notes", "x", None, None)
+        register.draft("notes", "x", None)
     with pytest.raises(InputError):
-        register.draft("acme/notes", "x" * 4001, None, None)
+        register.draft("acme/notes", "x" * 4001, None)
 
 
 def test_the_purpose_file_is_read_and_capped(tmp_path):
@@ -51,12 +51,12 @@ def test_the_purpose_file_is_read_and_capped(tmp_path):
 
 def test_the_command_prints_the_link_and_takes_the_classification_from_the_spec(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(register, "load_platform", lambda: {"portal_url": "https://portal.example.org"})
-    (tmp_path / "builder-spec.json").write_text(json.dumps({"data_classification": "restricted"}))
+    (tmp_path / "builder-spec.json").write_text(json.dumps({"data_classification": "confidential"}))
     (tmp_path / "purpose.txt").write_text("Stores clinic schedules; no PHI.")
-    code = main(["register", "--repo", "acme/notes", "--purpose-file", str(tmp_path / "purpose.txt"), "--tier", "moderate", "--root", str(tmp_path)])
+    code = main(["register", "--repo", "acme/notes", "--purpose-file", str(tmp_path / "purpose.txt"), "--root", str(tmp_path)])
     out, err = capsys.readouterr()
     doc = json.loads(out)
-    assert code == 0 and doc["draft"]["data_classification"] == "restricted" and decode(doc["url"]) == doc["draft"]
+    assert code == 0 and doc["draft"]["data_classification"] == "confidential" and decode(doc["url"]) == doc["draft"]
     assert "sign in, check every field" in err
 
 
@@ -85,6 +85,30 @@ def test_no_portal_is_exit_3_with_a_fix(monkeypatch, capsys, tmp_path):
 def test_bad_arguments_are_exit_2(capsys):
     assert main(["register", "--repo", "notes"]) == 2
     with pytest.raises(SystemExit) as exc:  # argparse refuses the choice itself: a JSON error on stderr, exit 2
-        main(["register", "--repo", "acme/notes", "--tier", "none"])
+        main(["register", "--repo", "acme/notes", "--classification", "none"])
     assert exc.value.code == 2
     capsys.readouterr()
+
+
+def test_a_spec_with_a_retired_classification_is_refused_with_the_replacement(tmp_path):
+    (tmp_path / "builder-spec.json").write_text(json.dumps({"data_classification": "internal"}))
+    with pytest.raises(InputError, match="`internal` is retired: use `confidential`"):
+        register.spec_classification(tmp_path)
+
+
+@pytest.mark.parametrize("old, new", [("internal", "confidential"), ("phi", "protected")])
+def test_a_retired_classification_flag_names_the_replacement(capsys, old, new):
+    with pytest.raises(SystemExit) as exc:
+        main(["register", "--repo", "acme/notes", "--classification", old])
+    assert exc.value.code == 2 and f"`{old}` is retired: use `{new}`" in json.loads(capsys.readouterr().err)["error"]
+    with pytest.raises(SystemExit):
+        main(["register", "--repo", "acme/notes", "--classification", "secret"])
+    assert "public, confidential, protected" in json.loads(capsys.readouterr().err)["error"]
+
+
+def test_the_draft_has_no_tier_and_the_command_takes_none(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(register, "load_platform", lambda: {"portal_url": "https://portal.example.org"})
+    assert "proposed_tier" not in register.draft("acme/notes", "Stores notes; no email.", "confidential")
+    with pytest.raises(SystemExit) as exc:
+        main(["register", "--repo", "acme/notes", "--tier", "low", "--root", str(tmp_path)])
+    assert exc.value.code == 2 and "--tier" in capsys.readouterr().err

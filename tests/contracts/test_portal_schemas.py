@@ -6,11 +6,11 @@ from contracts.schema import validate
 
 P1, P2, R1 = "p_" + "a" * 32, "p_" + "b" * 32, "r_" + "c" * 32
 INTAKE = {"schema": "intake/v2", "repo": "acme/notes", "tier": "moderate", "purpose": "Stores short team notes.",
-          "owner": P1, "data_classification": "internal", "registered_by": P1, "approved_by": P2,
+          "owner": P1, "data_classification": "public", "registered_by": P1, "approved_by": P2,
           "approved_at": "2026-10-23T12:00:00Z", "approval_justification": "Purpose and classification checked.",
           "review_by": "2027-10-23", "request": R1}
 DRAFT = {"schema": "registration-draft/v1", "repo": "acme/notes", "purpose": "Stores short team notes.",
-         "data_classification": "internal", "proposed_tier": "low"}
+         "data_classification": "public"}
 LINK = {"schema": "identity-link/v1", "person": P1, "github_login": "pat-example", "source": "github-oauth",
         "created_by": P1, "created_at": "2026-10-23T12:00:00Z"}
 
@@ -39,7 +39,7 @@ def test_intake_v2_rejects(mutate):
 
 @pytest.mark.parametrize("mutate", [
     lambda d: d.update(schema="registration-draft/v2"), lambda d: d.update(repo="acme"), lambda d: d.update(repo="acme/notes\n"),
-    lambda d: d.update(purpose="x" * 4001), lambda d: d.update(data_classification="secret"), lambda d: d.update(proposed_tier="none"),
+    lambda d: d.update(purpose="x" * 4001), lambda d: d.update(data_classification="secret"), lambda d: d.update(proposed_tier="low"),
     lambda d: d.update(owner=P1), lambda d: d.pop("repo"),
 ])
 def test_registration_draft_rejects(mutate):
@@ -65,7 +65,7 @@ def test_a_date_time_that_is_not_a_real_instant_is_rejected(stamp):
     assert validate("identity-link.v1", {**LINK, "created_at": stamp})
 
 
-FLOOR = {"evidence_commit": "e" * 40, "floor_tier": "moderate", "floor_classification": "internal"}
+FLOOR = {"evidence_commit": "e" * 40, "floor_tier": "moderate", "floor_classification": "public"}
 OVERRIDE = {"by": P2, "at": "2026-10-23T12:00:00Z", "reason": "The spec over-declares egress; checked with the team."}
 
 

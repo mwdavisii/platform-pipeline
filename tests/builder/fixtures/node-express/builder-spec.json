@@ -4,7 +4,7 @@
   "entrypoint": "server.js",
   "port": 8080,
   "health_path": "/healthz",
-  "data_classification": "internal",
+  "data_classification": "public",
   "egress": [],
   "env": [],
   "resources_tier": "default",

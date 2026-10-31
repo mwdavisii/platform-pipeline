@@ -47,6 +47,18 @@ configMapGenerator:
   # web and the writer at once; the link is an optional page describing how security shares a secret with golden-road-eso.
   - PORTAL_SECRET_SERVER=
   - PORTAL_SECRET_PROCESS_URL=
+  # The data classification policy the register and approval forms link to (https; empty hides the link). Set it to the same URL as
+  # configure.py --classification-policy-url; this is the placeholder until then.
+  - PORTAL_CLASSIFICATION_POLICY_URL=https://policies.example.com/data-classification
+  # Days after which an open re-review item is flagged stale on the Re-review page (0 turns the flag off). Empty is the default, 30.
+  - PORTAL_REREVIEW_STALE_DAYS=
+  # The collector's re-review settings. Days before a review date when it shows as due soon (0 turns that reason off; empty is 30); the
+  # scorecard signals that put an app on the list (trigger IDs, recorded signals, security_review; empty is the default:
+  # security_review, T-17, T-18, T-19, egress-removed); and the storage hosts an artifact download may be redirected to (name or
+  # *.suffix; empty is *.blob.core.windows.net, github.com's; the egress policy below is the narrower gate).
+  - PORTAL_REVIEW_DUE_SOON_DAYS=
+  - PORTAL_REREVIEW_SIGNALS=
+  - PORTAL_ARTIFACT_HOSTS=
 
 # One image for every process: the writer, the collector and the migration job take the image of the release's web Deployment,
 # so they can never drift from it.

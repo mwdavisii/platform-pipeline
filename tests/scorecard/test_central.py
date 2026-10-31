@@ -215,7 +215,7 @@ def test_a_repository_name_that_differs_only_in_case_is_named_in_the_skip_reason
 # ---- review round: the intake field that gates the poller ----
 from contracts.schema import validate  # noqa: E402
 
-V1 = {"schema": "intake/v1", "repo": "o/app", "tier": "low", "purpose": "A notes API for the team", "owner": "team", "data_classification": "internal"}
+V1 = {"schema": "intake/v1", "repo": "o/app", "tier": "low", "purpose": "A notes API for the team", "owner": "team", "data_classification": "public"}
 
 
 @pytest.mark.parametrize("value,ok", [("central", True), ("per-app", True), ("both", False), ("", False), (True, False), (None, False)])

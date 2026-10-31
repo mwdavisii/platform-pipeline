@@ -72,6 +72,15 @@ def test_an_any_value_outside_the_enum_is_refused(routing_factory):
         load_config(routing_factory)
 
 
+@pytest.mark.parametrize("condition, message", [('any = ["phi"]', "`phi` is retired: use `protected`"),
+                                                ('is = "internal"', "`internal` is retired: use `confidential`")])
+def test_a_retired_classification_in_a_condition_names_the_replacement(routing_factory, condition, message):
+    _edit(routing_factory, '[facts.tier_raised]', '[facts.classification]\nfrom = "spec"\nmeasure = "data_classification"\n\n[facts.tier_raised]')
+    _edit(routing_factory, '{ fact = "tier_raised", is = true }', '[{ fact = "tier_raised", is = true }, { fact = "classification", ' + condition + ' }]')
+    with pytest.raises(InputError, match=message):
+        load_config(routing_factory)
+
+
 def test_review_2_needs_routing_and_review_1_refuses_it(factory, routing_factory):
     (routing_factory / "config" / "routing.toml").unlink()
     with pytest.raises(InputError):

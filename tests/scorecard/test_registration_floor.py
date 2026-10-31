@@ -6,6 +6,7 @@ import json
 import pytest
 import yaml
 
+from contracts.classification import retired_message
 from contracts.schema import validate
 from golden_road.io import InputError
 from scorecard.build import build_scorecard
@@ -16,10 +17,10 @@ from tree_fixture import commit_tree
 SHA = "a" * 40
 NODE = {"app_type": "node", "entrypoint": "server.js"}
 GW = ("litellm.internal",)
-SPEC = {"app_name": "notes", "app_type": "python", "entrypoint": "app.main:app", "port": 8000, "data_classification": "internal",
+SPEC = {"app_name": "notes", "app_type": "python", "entrypoint": "app.main:app", "port": 8000, "data_classification": "public",
         "egress": [], "env": [], "resources_tier": "default"}
-RULES = {"schema": "registration-rules/v1", "no_spec": {"tier": "high", "data_classification": "restricted"},
-         "classification_tier": {"public": "low", "internal": "low", "restricted": "high", "phi": "high"},
+RULES = {"schema": "registration-rules/v1", "no_spec": {"tier": "high", "data_classification": "confidential"},
+         "classification_tier": {"public": "low", "confidential": "high", "protected": "high"},
          "raise_to": {"write_roles": "moderate", "secret_env": "moderate", "model_gateway_egress": "moderate", "other_egress": "moderate",
                       "many_dependencies": "moderate"},
          "many_dependencies_over": 50}
@@ -51,7 +52,7 @@ def rules_of(doc):
 def test_no_spec_is_the_no_spec_floor(tmp_path):
     doc = compute(tmp_path, {})
     assert doc["spec_present"] is False and rules_of(doc) == ["no_spec"]
-    assert reg.compute_floor(doc, RULES) == ("high", "restricted")
+    assert reg.compute_floor(doc, RULES) == ("high", "confidential")
 
 
 @pytest.mark.parametrize("bad", [b"{not json", json.dumps({**SPEC, "port": 80}).encode()])
@@ -62,7 +63,7 @@ def test_an_invalid_spec_counts_as_absent(tmp_path, bad):
 
 def test_an_oversized_or_non_file_spec_is_unreadable_and_raises_the_floor(tmp_path):
     doc = compute(tmp_path, {"builder-spec.json": b" " * 70000})
-    assert rules_of(doc) == ["unreadable:builder-spec.json"] and reg.compute_floor(doc, RULES) == ("high", "restricted")
+    assert rules_of(doc) == ["unreadable:builder-spec.json"] and reg.compute_floor(doc, RULES) == ("high", "confidential")
 
 
 @pytest.mark.parametrize("name", ["builder-spec.json", "requirements.txt", "package-lock.json", ".builder.lock"])
@@ -96,7 +97,7 @@ def test_a_file_in_the_working_tree_but_not_in_the_commit_does_not_count(tmp_pat
 ])
 def test_each_signal_raises_the_tier_to_moderate(tmp_path, spec, rule):
     doc = evidence(tmp_path, {}, **spec)
-    assert rules_of(doc) == [rule] and reg.compute_floor(doc, RULES) == ("moderate", "internal")
+    assert rules_of(doc) == [rule] and reg.compute_floor(doc, RULES) == ("moderate", "public")
 
 
 def test_the_model_gateway_host_comes_from_the_argument_and_other_egress_does_not_hide_it(tmp_path):
@@ -122,14 +123,14 @@ def test_a_bad_builder_lock_is_unreadable_and_a_missing_lockfile_is_recorded_onl
 
 
 def test_the_floor_is_the_higher_of_the_classification_and_the_signals(tmp_path):
-    doc = evidence(tmp_path, {}, data_classification="restricted", egress=[{"host": "api.example.org", "port": 443, "reason": "weather data"}])
-    assert reg.compute_floor(doc, RULES) == ("high", "restricted")
+    doc = evidence(tmp_path, {}, data_classification="confidential", egress=[{"host": "api.example.org", "port": 443, "reason": "weather data"}])
+    assert reg.compute_floor(doc, RULES) == ("high", "confidential")
 
 
 @pytest.mark.parametrize("tier, cls, floor, below", [
-    ("low", "internal", ("moderate", "internal"), True), ("moderate", "public", ("moderate", "internal"), True),
-    ("moderate", "internal", ("moderate", "internal"), False), ("high", "phi", ("moderate", "internal"), False),
-    ("unknown", "internal", ("low", "internal"), True), ("low", "unknown", ("low", "internal"), True),
+    ("low", "confidential", ("moderate", "confidential"), True), ("moderate", "public", ("moderate", "confidential"), True),
+    ("moderate", "confidential", ("moderate", "confidential"), False), ("high", "protected", ("moderate", "confidential"), False),
+    ("unknown", "public", ("low", "public"), True), ("low", "unknown", ("low", "public"), True),
 ])
 def test_below_the_floor_uses_the_orderings_and_unknown_is_below(tier, cls, floor, below):
     assert reg.below_floor(tier, cls, *floor) is below
@@ -139,7 +140,7 @@ def test_registration_floor_returns_tier_classification_and_the_rule_names(tmp_p
     root, commit = committed(tmp_path, {"builder-spec.json": {**SPEC, "env": [{"name": "API_TOKEN", "secret": True}]}})
     problems = []
     got = reg.registration_floor(root, RULES, repo="acme/notes", commit=commit, gateway_hosts=GW, problems=problems)
-    assert got == {"tier": "moderate", "data_classification": "internal", "rules": ["secret_env"]} and problems == []
+    assert got == {"tier": "moderate", "data_classification": "public", "rules": ["secret_env"]} and problems == []
 
 
 def test_an_evidence_document_that_is_not_valid_is_an_input_problem(tmp_path, monkeypatch):
@@ -166,7 +167,7 @@ def test_t21_fires_in_the_build_when_the_intake_is_below_the_floor_and_the_event
     _intake(factory, tier="low")
     card, context = build_scorecard(factory=factory, registry=fake_registry({}), **pr_checkout())
     [reason] = [r for r in card["reasons"] if r["trigger"] == "T-21"]
-    assert reason["summary"].startswith("Registered as low/internal; this change needs at least moderate/internal (signals: ")
+    assert reason["summary"].startswith("Registered as low/public; this change needs at least moderate/public (signals: ")
     assert reason["level"] == "security_review" and card["level"] == "security_review"
     assert "T-21" in [s["id"] for s in context["event"]["signals"]]
     assert validate("scorecard.v1", card) == [] and validate("re-review-event.v1", context["event"]) == []
@@ -215,3 +216,17 @@ def test_the_fixture_rules_load(factory):
 def test_the_no_spec_line_is_worded_for_a_commit_on_both_sides(tmp_path):
     doc = compute(tmp_path, {})
     assert doc["signals"] == [{"rule": "no_spec", "line": "No builder-spec.json in the repository at this commit."}]
+
+
+@pytest.mark.parametrize("old, floor", [("internal", ("high", "confidential")), ("phi", ("high", "protected"))])
+def test_a_spec_with_a_retired_classification_is_named_and_the_floor_is_never_below_what_it_maps_to(tmp_path, old, floor):
+    """Spec 2026-10-30 C4: the signal names the replacement, and a retired `phi` can't read as no_spec's confidential."""
+    doc = compute(tmp_path, {"builder-spec.json": {**SPEC, "data_classification": old}})
+    assert validate("registration-evidence.v1", doc) == [] and doc["spec_present"] is False
+    assert [s["line"] for s in doc["signals"] if s["rule"] == "no_spec"] == [f"builder-spec.json: {retired_message(old)}."]
+    assert reg.compute_floor(doc, RULES) == floor
+
+
+def test_a_deeply_nested_spec_is_no_spec_not_an_error(tmp_path):
+    doc = compute(tmp_path, {"builder-spec.json": b"[" * 3000 + b"]" * 3000})
+    assert doc["spec_present"] is False and "no_spec" in rules_of(doc) and reg.compute_floor(doc, RULES) == ("high", "confidential")

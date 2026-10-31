@@ -4,6 +4,7 @@ import yaml
 from golden_road.io import InputError
 from scorecard.config import load_config, load_confirmed_na, load_intake, repo_parts
 from scorecard.levels import asvs_level, effective_classification, floor, highest
+from scorecard.routing.config import load_routing, routing_path
 
 
 def _edit_config(factory, **changes):
@@ -72,12 +73,12 @@ def test_repo_names_cannot_leave_the_factory(repo):
 
 
 def test_levels_and_classifications(config):
-    notes = {"tier": "moderate", "data_classification": "internal"}
+    notes = {"tier": "moderate", "data_classification": "public"}
     assert highest([]) == "standard"
     assert highest(["elevated", "standard"]) == "elevated"
-    assert effective_classification("internal", None, "phi") == "phi"
+    assert effective_classification("public", None, "protected") == "protected"
     assert asvs_level(config, notes, None) == 2
-    assert asvs_level(config, {"tier": "low", "data_classification": "public"}, "restricted") == 2
+    assert asvs_level(config, {"tier": "low", "data_classification": "public"}, "confidential") == 2
     assert asvs_level(config, None, "public") == 3
     assert floor(config, {"tier": "high", "data_classification": "public"}) == "security_review"
     assert floor(config, None) == "standard"
@@ -317,7 +318,7 @@ repo: acme/notes
 tier: moderate
 purpose: "Stores short team notes. It does not send email, call external APIs, or store files."
 owner: p_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-data_classification: internal
+data_classification: public
 registered_by: p_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 approved_by: p_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 approved_at: "2026-10-23T12:00:00Z"
@@ -363,7 +364,7 @@ def test_intake_v2_approved_by_the_person_who_registered_it_is_an_input_error(fa
         load_intake(factory, "acme/notes")
 
 
-FLOORED = V2 + 'evidence_commit: "' + "e" * 40 + '"\nfloor_tier: moderate\nfloor_classification: internal\n'
+FLOORED = V2 + 'evidence_commit: "' + "e" * 40 + '"\nfloor_tier: moderate\nfloor_classification: public\n'
 OVERRIDDEN = FLOORED.replace("tier: moderate\npurpose", "tier: low\npurpose") + (
     "floor_override:\n  by: p_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n  at: \"2026-10-23T12:00:00Z\"\n"
     "  reason: The spec over-declares egress; checked with the team.\n")
@@ -376,12 +377,12 @@ def test_intake_v2_with_and_without_the_floor_fields_loads(factory, text):
 
 
 @pytest.mark.parametrize("text, needle", [
-    (FLOORED.replace("floor_classification: internal\n", ""), "all three"),
+    (FLOORED.replace("floor_classification: public\n", ""), "all three"),
     (FLOORED.replace("tier: moderate\npurpose", "tier: low\npurpose"), "below the floor"),
-    (FLOORED.replace("data_classification: internal", "data_classification: public"), "below the floor"),
+    (FLOORED.replace("floor_classification: public", "floor_classification: confidential"), "below the floor"),
     (OVERRIDDEN.replace("\n  by: p_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "\n  by: p_" + "d" * 32), "approved_by"),
     (OVERRIDDEN.replace('\n  at: "2026-10-23T12:00:00Z"', '\n  at: "2026-10-24T12:00:00Z"'), "approved_at"),
-    (OVERRIDDEN.replace("tier: low\npurpose", "tier: moderate\npurpose"), "not below the floor"),
+    (OVERRIDDEN.replace("tier: low\npurpose", "tier: moderate\npurpose"), "not below the floor: delete floor_override"),
     (V2 + "floor_override:\n  by: p_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n  at: \"2026-10-23T12:00:00Z\"\n  reason: " + "r" * 40 + "\n", "without a floor"),
 ])
 def test_an_intake_v2_floor_that_does_not_hold_is_an_input_error(factory, text, needle):
@@ -394,11 +395,11 @@ from scorecard.config import load_registration_rules  # noqa: E402
 
 
 def test_the_registration_rules_load(factory):
-    assert load_registration_rules(factory)["no_spec"] == {"tier": "high", "data_classification": "restricted"}
+    assert load_registration_rules(factory)["no_spec"] == {"tier": "high", "data_classification": "confidential"}
 
 
 @pytest.mark.parametrize("edit, needle", [
-    (lambda t: t.replace("phi: high", "phi: low"), "must not decrease"),
+    (lambda t: t.replace("protected: high", "protected: low"), "must not decrease"),
     (lambda t: t.replace("many_dependencies_over: 50", "many_dependencies_over: 50\nextra: 1"), "registration-rules.v1"),
     (lambda t: t + "no_spec: {tier: low, data_classification: public}\n", "duplicate key"),
     (lambda t: "", "registration-rules.v1"),
@@ -440,3 +441,66 @@ def test_the_central_mark_is_one_exact_line_that_the_workflows_grep_reads_the_sa
     else:
         with pytest.raises(InputError, match="scorecard: central"):
             load_intake(factory, "acme/notes")
+
+
+def test_an_intake_record_with_a_retired_classification_names_the_replacement(tmp_path):
+    (tmp_path / "intake/acme").mkdir(parents=True)
+    (tmp_path / "intake/acme/notes.yaml").write_text(
+        "schema: intake/v1\nrepo: acme/notes\ntier: low\npurpose: Stores short team notes.\nowner: team\ndata_classification: internal\n")
+    with pytest.raises(InputError, match="`internal` is retired: use `confidential`"):
+        load_intake(tmp_path, "acme/notes")
+
+
+def test_registration_rules_with_a_retired_level_name_the_replacement(tmp_path):
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config/registration.yaml").write_text(
+        "schema: registration-rules/v1\nno_spec: {tier: high, data_classification: restricted}\n"
+        "classification_tier: {public: low, confidential: high, protected: high}\n")
+    with pytest.raises(InputError, match="`restricted` is retired: use `confidential`"):
+        load_registration_rules(tmp_path)
+
+
+def test_a_routing_rule_with_a_retired_level_names_the_replacement(tmp_path):
+    path = routing_path(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('schema = "routing/v1"\n[[rules]]\nid = "x"\nescalate = { classifications = ["phi"], level = "security_review" }\n')
+    with pytest.raises(InputError, match="`phi` is retired: use `protected`"):
+        load_routing(tmp_path)
+
+
+def test_a_deeply_nested_routing_file_is_an_input_error(tmp_path):
+    path = routing_path(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('schema = "routing/v1"\nx = ' + "[" * 3000 + "]" * 3000 + "\n")
+    with pytest.raises(InputError, match="can't read"):
+        load_routing(tmp_path)
+
+
+def alias_bomb(head=""):
+    """~500 bytes of YAML whose aliases expand to 9**9 leaves: built as shared references it is small, walked it never ends."""
+    lines = [head + 'l0: &l0 ["x", "x", "x", "x", "x", "x", "x", "x", "x"]']
+    lines += [f"l{i}: &l{i} [" + ", ".join([f"*l{i - 1}"] * 9) + "]" for i in range(1, 9)]
+    return ("\n".join(lines) + "\n").encode()
+
+
+@pytest.mark.parametrize("text", [alias_bomb("schema: intake/v2\nrepo: acme/notes\n").decode(), "ANCHORED"])
+def test_factory_yaml_with_anchors_or_aliases_is_refused_before_it_is_built(factory, text):
+    """load_yaml reads every factory file (config, rules, intake): an alias bomb would hang factory-check and the poller."""
+    path = factory / "intake" / "acme" / "notes.yaml"
+    path.write_text(path.read_text().replace("tier: moderate", "tier: &t moderate") if text == "ANCHORED" else text)
+    with pytest.raises(InputError, match="anchors or aliases"):
+        load_intake(factory, "acme/notes")
+
+
+@pytest.mark.parametrize("ending", ["\r\n", "\u2028"])
+def test_a_central_mark_grep_would_not_see_is_refused(factory, ending):
+    """scorecard-assess greps the exact line (`grep -qxF`, lines end at \\n only): a CRLF line or one ended by U+2028 is not it."""
+    path = factory / "intake" / "acme" / "notes.yaml"
+    text = path.read_text()
+    if ending == "\r\n":
+        path.write_bytes((text.rstrip("\n") + "\nscorecard: central\r\n").encode())
+    else:  # YAML ends a line at U+2028 and reads the mark; grep doesn't
+        path.write_bytes(text.replace("tier: moderate\n", "tier: moderate\u2028scorecard: central\n").encode())
+    assert yaml.safe_load(path.read_bytes().decode())["scorecard"] == "central"
+    with pytest.raises(InputError, match="exact line"):
+        load_intake(factory, "acme/notes")

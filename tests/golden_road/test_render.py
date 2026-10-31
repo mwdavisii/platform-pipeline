@@ -178,7 +178,7 @@ def test_render_takes_no_binding(tree):
 
 def test_the_snapshot_fixture_is_what_its_hash_says():
     # Guards the fixture itself against an accidental edit along with render.py.
-    assert hashlib.sha256(SNAPSHOT.read_bytes()).hexdigest() == "b1646db56a035645ef4f4a1130ee4f430c6462712b94fecd3de63e71cecd31a9"
+    assert hashlib.sha256(SNAPSHOT.read_bytes()).hexdigest() == "409ac77b227a9d8c283d028fff1052f75bdc9c00f91a507d1001ea4b86b7af9a"
 
 
 def _edit(tree, name, fn):

@@ -102,7 +102,7 @@
         "escalate": {
           "type": "object", "additionalProperties": false, "required": ["classifications", "level"],
           "properties": {
-            "classifications": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["public", "internal", "restricted", "phi"]}},
+            "classifications": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["public", "confidential", "protected"]}},
             "level": {"$ref": "#/$defs/level"}}}
       }
     }

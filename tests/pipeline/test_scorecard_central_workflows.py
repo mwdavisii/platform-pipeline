@@ -1126,3 +1126,8 @@ def test_the_findings_check_is_posted_last_in_the_apply_step_and_never_from_bloc
             code = [line for line in s.get("run", "").splitlines() if not line.lstrip().startswith("#")]
             assert not any("blocking_findings" in line for line in code), s.get("name")
             assert "blocking_findings" not in json.dumps({k: v for k, v in s.items() if k != "run"}), s.get("name")
+
+
+def test_the_run_name_names_what_was_assessed_so_the_portal_can_check_it():
+    """the portal reads an event from a central run only when the run's title is the event's repo, PR and head."""
+    assert ADOC["run-name"] == "${{ inputs.repo }} ${{ inputs.pr }} ${{ inputs.head_sha }}"

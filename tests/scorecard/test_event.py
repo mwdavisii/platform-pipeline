@@ -61,3 +61,18 @@ def test_count_is_the_true_item_count_not_the_capped_refs():
 
 def test_a_reason_without_total_counts_its_refs():
     assert re_review_event(CARD, pr=11, head_sha="a" * 40, recorded=[])["signals"][0]["count"] == 1
+
+
+def test_a_summary_s_control_characters_become_spaces_so_the_event_stays_valid():
+    """re-review-event/v1 refuses control characters in a summary (the portal stores the event); a routing summary
+    can carry a fact's value, so the scorecard writes each such character as a space rather than failing its own run."""
+    card = {**CARD, "reasons": [{**CARD["reasons"][0], "summary": "Changed\nlines\x00 and \x85 tabs\t"}]}
+    event = re_review_event(card, pr=11, head_sha="a" * 40, recorded=[{**RECORDED[0], "summary": "egress removed:\rhost:443"}])
+    assert [s["summary"] for s in event["signals"]] == ["Changed lines  and   tabs ", "egress removed: host:443"]
+
+
+@pytest.mark.parametrize("bad", [{"created": "2026-02-30T08:00:00Z"}, {"signals": [{"id": "T-2", "kind": "trigger", "level": "elevated",
+                                                                                     "summary": "a\u0000b", "count": 1}]}])
+def test_the_contract_refuses_an_impossible_time_and_a_control_character(bad):
+    event = re_review_event(CARD, pr=11, head_sha="a" * 40, recorded=[])
+    assert validate("re-review-event.v1", {**event, **bad})

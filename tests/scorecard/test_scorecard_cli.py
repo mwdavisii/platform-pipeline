@@ -240,7 +240,7 @@ def test_high_tier_intake_is_security_review(app, run, factory):
     app.commit({"app.py": APP + "\n# tidy\n"})
     _, card, _, _ = run(assessment=full_assessment(app, run), repo="acme/clinic")
     assert card["floor"] == "security_review" and card["level"] == "security_review"
-    assert card["app"]["data_classification"] == "phi"
+    assert card["app"]["data_classification"] == "protected"
 
 
 def test_missing_intake_is_t8(app, run):

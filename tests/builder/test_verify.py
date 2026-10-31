@@ -628,3 +628,11 @@ def test_block_finding_id_tracks_the_block_not_the_team_text(generated):
 
     assert finding_id("a\n" + edited) == finding_id("b\n" + edited)
     assert finding_id("a\n" + edited) != finding_id("a\n" + edited.replace("Do make", "Please make"))
+
+
+def test_a_retired_classification_is_drift_that_names_the_replacement(generated):
+    spec = json.loads((generated / "builder-spec.json").read_text())
+    spec["data_classification"] = "phi"
+    (generated / "builder-spec.json").write_text(json.dumps(spec))
+    f = rules(verify(generated))["builder.spec-invalid"]
+    assert f["severity"] == "high" and "`phi` is retired: use `protected`" in f["rationale"]

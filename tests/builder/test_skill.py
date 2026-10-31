@@ -91,3 +91,10 @@ def test_skill_has_the_fix_my_pr_procedure():
 def test_watch_step_points_to_fix_my_pr():
     text = " ".join(SKILL.read_text().split())
     assert "fixing scanner findings is not part of this skill" not in text and "see Fix my PR" in text
+
+
+def test_skill_sends_the_user_to_the_policy_from_the_guide_and_never_picks():
+    text = " ".join(SKILL.read_text().split())
+    assert "`data_classification.policy_url`" in text and "`data_classification.levels`" in text
+    assert "public, confidential or protected" in text and "never choose it yourself" in text
+    assert '"data_classification": "internal"' not in text and "data_classification: internal" not in text

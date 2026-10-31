@@ -43,11 +43,11 @@ def factory(tmp_path):
     return dest
 
 
-def approved(repo="acme/newapp", approver=ADMIN, floor=("moderate", "internal"), tier="moderate", override_reason=""):
+def approved(repo="acme/newapp", approver=ADMIN, floor=("moderate", "public"), tier="moderate", override_reason=""):
     req = Request(RID, "registration", repo, "writing", {"schema": "registration-draft/v1", "repo": repo, "purpose": "Stores short team notes; no email.",
-                  "data_classification": "internal", "proposed_tier": "low"}, OWNER, NOW, NOW)
+                  "data_classification": "public"}, OWNER, NOW, NOW)
     evidence = Evidence(RID, 1, "e" * 40, {}, floor[0], floor[1], "f" * 40, NOW)
-    doc, errors = intake_record(req, approver_id=approver, tier=tier, classification="restricted", review_by="2027-10-23",
+    doc, errors = intake_record(req, approver_id=approver, tier=tier, classification="confidential", review_by="2027-10-23",
                                 justification="Raised the classification: it stores clinic names.", now=NOW, evidence=evidence,
                                 override_reason=override_reason)
     assert not errors, errors

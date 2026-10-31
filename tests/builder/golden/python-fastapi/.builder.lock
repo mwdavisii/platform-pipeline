@@ -1,6 +1,6 @@
 {
   "blocks": {
-    "AGENTS.md": "2b140e9a8ed3074cc6daaf9b874e730b06381430e0870207882b0d9a7bcf1f18",
+    "AGENTS.md": "291ab1a4909c45f87bb8aec34a364fbac40c176bfc5cafc6e6528ac0a9314c48",
     "CLAUDE.md": "80335c8c80902767fd3e773e3411f3e25b118b411de6e71de97616c818b5f1b7"
   },
   "builder_version": "0.2.0",
@@ -12,12 +12,12 @@
     "_platform/authz.py": "8d9b934260887fad674d58e3da6ec7b2f351ad6752140647ad674ea60e90df5e",
     "_platform/entry.py": "127dc14de8987988eaa6d3b653985b43149164391a008509dbbb564725aca3b1",
     "deploy/base/cilium-egress.yaml": "f9333ce425db19fb0698499f28d13478b7b74b8d703987f8d8a53300de665558",
-    "deploy/base/deployment.yaml": "38712e7a465562d9881b4718670886d47bfd3a36af66658eabc7614387064fec",
+    "deploy/base/deployment.yaml": "64219db853d76026dd24294145f1a83b2653e1d67b48ce620ddd58ee8bf3c515",
     "deploy/base/kustomization.yaml": "02631caa8e959121188c9e01c8b927f4f126a5e4503ef34ed3a2fe790325938f",
     "deploy/base/networkpolicy.yaml": "2d7c86b099a11421c7c7360e1276770b51d233ad6d5040b1fdeffecec6483238",
     "deploy/base/service.yaml": "48f543b062be3fcc37fc914775cfd7d0c54802faa24f3beffae4ba79736d1c21",
     "deploy/base/serviceaccount.yaml": "62bd31646f6e58b77350f24bac460209f0b476a656bcf8a68cdd0c25b3d19a1f"
   },
-  "platform_config_sha256": "5a9356820d553923b4d92a7f804ef2aac4eaec7a3dfa9c6a9d4efcb9e37eeb02",
-  "spec_sha256": "3a5e85b528b993b9f230592e4b771031ddc8b6b8c1004540d9ce5c6d4fca8f1a"
+  "platform_config_sha256": "6aea0ec1bf2f9bf01729966a1d3a2eaa14be0e5bdccc7944b006cfab8713a4ba",
+  "spec_sha256": "0275be5f7d38ca6cbea8744841801ed5a9b3c3891a78a77030b3501d835f079e"
 }

@@ -908,7 +908,7 @@ if test -d ~/.local/share/golden-road; then mv ~/.local/share/golden-road ~/.loc
 ```
 To restore, delete the current folders yourself and move a `.before-<agent>` folder back to its old name; or just delete the `.before-*` folders when you're done. The agents' personal skills folders are separate per agent, and `ls -d` in 14.8 told you they were empty.
 
-Answer as the app's owner, with neutral text and the same answers for every agent, so the runs are comparable: data classification `internal`; no egress; role `reader` with access `read` and role `writer` with access `write`; the rule `GET /api/notes` for `reader` and `writer`, and the rule `POST /api/notes` for `writer` only. Answer anything else the builder asks with the shortest neutral answer, and record it. Say yes only to the outward commands the skill names: `gh repo create <you>/fixture-<agent> --private`, the visibility read, the pushes of `main` and `golden-road`, and `gh pr create`; there is nothing for the intake: when doctor reports no intake record, the skill runs `golden-road register`, which only prints (record what it printed). Say no to anything else, and record it. Keep the transcript: 5c compares the agents on it.
+Answer as the app's owner, with neutral text and the same answers for every agent, so the runs are comparable: data classification `confidential`; no egress; role `reader` with access `read` and role `writer` with access `write`; the rule `GET /api/notes` for `reader` and `writer`, and the rule `POST /api/notes` for `writer` only. Answer anything else the builder asks with the shortest neutral answer, and record it. Say yes only to the outward commands the skill names: `gh repo create <you>/fixture-<agent> --private`, the visibility read, the pushes of `main` and `golden-road`, and `gh pr create`; there is nothing for the intake: when doctor reports no intake record, the skill runs `golden-road register`, which only prints (record what it printed). Say no to anything else, and record it. Keep the transcript: 5c compares the agents on it.
 
 Record, for each agent:
 - whether it ran `INSTALL_FOR_AGENTS.md`'s commands in order (access, uv, the stub with its attestation check) and loaded the stub from its personal skills folder;
@@ -1250,7 +1250,7 @@ The writer fails a binding with `not_registered` (no intake record for the repo 
 5. After 19.5: the writer's PR that rewrites `test/bindings.yaml` with neither, and a `test/composed.yaml` with no `AZURE_` or `DATABRICKS_` lines.
 
 ### 19.5 Roll back
-On the `test` tab remove the Azure identity: that removes the Databricks connection too, and the writer rewrites `bindings.yaml` with neither, and `composed.yaml` to match (who unlinked it and when stay on record; the file is never deleted). To turn the page off, empty `PORTAL_DIRECTORY` and restart the pods (the kit README's "Change a setting"). Keep the portal image: migrations 0006 and 0007 stay (19.1, step 4).
+On the `test` tab press **Remove** beside the Azure identity, then **Remove** again to confirm (Keep it changes nothing): that removes the Databricks connection too, and the writer rewrites `bindings.yaml` with neither, and `composed.yaml` to match (who unlinked it and when stay on record; the file is never deleted). To turn the page off, empty `PORTAL_DIRECTORY` and restart the pods (the kit README's "Change a setting"). Keep the portal image: migrations 0006 and 0007 stay (19.1, step 4).
 
 ## 20. The deploy repo (mock)
 `golden-road-deploy` is the platform's record of what runs where, as whom: each app's environment pins one signed release (`release.yaml`), has its own bindings (`bindings.yaml`), and holds the plain Kustomize a GitOps controller would apply, generated from the two and checked in CI. Promoting is a reviewed PR here. Read the repo's `README.md` (in `bootstrap/golden-road-deploy/`) for the layout.
@@ -1388,9 +1388,14 @@ Requirements: section 20 is done (the deploy repo exists and `hello-app`'s `test
 **Check:** the web starts, the writer's log has no "refusing to start", and `hello-app`'s page shows "Secrets (Delinea Secret Server)" on each tab.
 
 ### 21.2 The demo
-1. Open `hello-app`'s page, `test` tab. The Secrets section lists nothing until you search ("Search to list the secrets you can see."). Search `notes`. Secret Server is searched only when you submit, and only its first page of 20 is shown; with more, the page says "Only the first 20 are shown: narrow the search."
-2. **Check:** three results. `notes-api-key` shows a disabled "Not available" button and "Ask security to share it with `golden-road-eso`": it is not shared with the platform's account. `notes-tls` offers only its passphrase (its certificate is a file field, never offered). `notes-db` offers its fields.
-3. On `notes-db` pick the field `password`, name it `NOTES_DB_PASSWORD`, and add it. **Check:** the page says a change is pending; the writer opens a PR to `golden-road-deploy` that changes `apps/<you>/hello-app/test/bindings.yaml` and `apps/<you>/hello-app/test/composed.yaml` (two files, nothing else), `deploy-check` passes, and the writer merges it. The tab then lists `NOTES_DB_PASSWORD` from `notes-db` / `password`.
+1. Open `hello-app`'s page, `test` tab, and press **Add a secret**.
+2. The steps:
+   - **Source:** pick the folder `\Golden Road\hello-app` (you see only your folders).
+   - **Secret:** search `notes` in it. Secret Server is searched only here, and only its first page of 20 is shown; with more, the page says "Only the first 20 are shown: narrow the search."
+   - **Check:** `notes-api-key` is greyed "Not available" with "Ask security to share it with `golden-road-eso`": it is not shared with the platform's account.
+   - **Field and name:** on `notes-db` pick `password` and name it `NOTES_DB_PASSWORD`. `notes-tls` offers only its passphrase, never its certificate (a file field).
+   - **Review and save:** the review shows the reference (the folder, `notes-db / password`, `NOTES_DB_PASSWORD`); nothing is stored until you save.
+3. Save. **Check:** a toast says "Secret requested" and the page says a change is pending; the writer opens a PR to `golden-road-deploy` that changes `apps/<you>/hello-app/test/bindings.yaml` and `apps/<you>/hello-app/test/composed.yaml` (two files, nothing else), `deploy-check` passes, and the writer merges it. The tab then lists `NOTES_DB_PASSWORD` from `notes-db` / `password`.
 4. Read what it wrote, in your clone of the deploy repo (20.3):
    ```bash
    cd ~/poc/golden-road-deploy && git pull
@@ -1403,7 +1408,7 @@ Requirements: section 20 is done (the deploy repo exists and `hello-app`'s `test
 The writer fails a change with `secret_not_shared` (the secret is no longer shared with `golden-road-eso`), `secret_field_gone` (the field is no longer a non-file field of the secret's template), `secret_env_reserved` (the env name is one the platform reserves), `no_secret_server` (the writer has no `PORTAL_SECRET_SERVER`), `secret_verified_elsewhere` (the reference was checked by another Secret Server than the writer's), `secret_server_unavailable` (Secret Server didn't answer) or `compose_refused` (also when the app's own `builder-spec.json` sets the same env name), besides the reasons of 19.2. The page then says "The last change could not be recorded: <reason>."
 
 ### 21.3 What is refused
-On the page (a hand-made POST to the add form, as in 19.3; the portal's tests cover each):
+On the page (a hand-made POST to the add form, as in 19.3; the portal's tests cover each). The POST now also needs the secret's `folder`: one without it, or with another folder, is refused ("Choose the secret from its folder"). A hand-edited step URL (another folder, a skipped step) is refused at that step.
 - `finance-db` (id 2001, in a folder you can't see): "You can't see this secret in Secret Server."
 - `notes-api-key`: "This secret isn't shared with golden-road-eso: ask security to share it."
 - `notes-tls`'s `certificate` field: "That is not a field this secret can deliver: choose one of its template's fields (never a file)."
@@ -1418,13 +1423,115 @@ In the deploy repo (a PR from a branch of your clone, as in 20.5; record `deploy
 `external-secrets/` in the deploy repo holds the documented cluster side: `cluster-secret-store.yaml` (the `ClusterSecretStore` `delinea-secret-server`, whose username and password are `secretRef`s to the Secret `golden-road-eso` in the `external-secrets` namespace, never a value, and whose `conditions` let only `<repo>-test` and `<repo>-prod` namespaces use it), `cilium-egress.yaml` (ESO's pods may reach kube-dns, the Kubernetes API server and the Secret Server on 443, nothing else) and its `README.md`. Nothing points at the directory, and `deploy-check` refuses anything that does. On a real cluster the operators would install ESO, create that Secret by hand and apply both files by hand, never through Flux or Argo CD. None of it is part of this PoC.
 
 ### 21.5 Proof items (record the results), and roll back
-1. The search result with `notes-api-key` disabled.
+1. The Secret step with `notes-api-key` greyed "Not available".
 2. The writer's PR (the two files) and its `deploy-check` run.
 3. The `bindings.yaml`, `ExternalSecret` and `secretKeyRef` lines of 21.2, step 4.
 4. The refusal for `finance-db`, and each `deploy-check` failure of 21.3.
 5. After the roll back: the writer's PR that removes the secret from `test/bindings.yaml`, and a `test/composed.yaml` with no `ExternalSecret` and no `secretKeyRef`.
 
-**Roll back.** On the `test` tab press **Remove** beside `NOTES_DB_PASSWORD`: the writer rewrites `bindings.yaml` without it and `composed.yaml` to match. To turn the section off, empty `PORTAL_SECRET_SERVER` and restart the pods. Nothing on a cluster changed.
+**Roll back.** On the `test` tab press **Remove** beside `NOTES_DB_PASSWORD`, then **Remove** again to confirm (Keep it changes nothing): the writer rewrites `bindings.yaml` without it and `composed.yaml` to match. To turn the section off, empty `PORTAL_SECRET_SERVER` and restart the pods. Nothing on a cluster changed.
+
+## 22. Builder 0.5.0: three classification levels, the policy link and the portal reskin
+Builder 0.5.0 changes a contract. The data classification levels are `public`, `confidential` and `protected`, least to most sensitive. `internal`, `restricted` and `phi` are retired with no alias: the builder, the scorecard and the portal refuse a retired value and name its replacement, for example "`internal` is retired: use `confidential`". The registration no longer asks for a proposed tier: the platform computes the floor and the admin picks the tier when approving. **Mock only:** the policy link is a placeholder.
+
+### 22.0 What changes
+- **The mapping:** `public` stays `public`; `internal` and `restricted` become `confidential`; `phi` becomes `protected`.
+- **The floor** (`config/registration.yaml`): `public: low`, `confidential: high`, `protected: high`; no spec means `high` and `confidential`. This is stricter than before for most apps (`internal` allowed `low`).
+- **The scorecard** (`config/scorecard.yaml`): `classification_asvs_level` is `{public: 1, confidential: 2, protected: 2}`, and `sensitive_classifications` is `[confidential, protected]`.
+- **The policy link:** `configure.py --classification-policy-url URL` (https) records it in `platform/platform.json`; until then it is the placeholder `https://policies.example.com/data-classification`. `builder guide` gives it to the agent with the three levels and their one lines, and the skill shows them to the user. The portal links it where a person picks a classification, from `PORTAL_CLASSIFICATION_POLICY_URL` (empty hides it).
+- **No proposed tier:** `golden-road register` has no `--tier` and its draft has no `proposed_tier`. A link made before still works: the register page ignores the old field.
+- **The portal's look:**
+  - A sidebar.
+  - Start here as a checklist.
+  - Register with classification cards.
+  - My requests with filters (All, Needs attention, Merged).
+  - A timeline on each request.
+  - The app page as cards, where each Remove asks first (Remove, then Remove or Keep it).
+  - A one-line toast after each change.
+  - Secrets added in steps: Source, Secret, Field and name, Review and save.
+  - It works without JavaScript, under the same CSP.
+
+### 22.1 Roll out (in this order)
+The steps depend on each other: doing them out of order fails closed, but it stalls work until the rest catches up (each step says how).
+
+1. **Drain the writer, and approve nothing in the portal until step 5.** No registration may be approved and not yet merged (My requests shows none as Approved, Recording or Pull request open): an approved record still in flight names an old level, and the writer's recheck fails it with `schema_invalid`. Approve nothing in the portal until step 5 is done. If the order is broken, it fails closed: the old portal writes records with `internal` that the new `check-factory` refuses; the old collector can't read the new `registration.yaml` (its evidence waits with `rules_invalid`); and a new portal refuses the old rules the same way until the factory PR (step 3) is merged.
+2. Run `scripts/configure.py` with your usual flags, plus `--classification-policy-url <URL>` if you have a policy page. Release builder 0.5.0 (the lead's bump), then pin and publish as in 14.6, but don't regenerate `hello-app` there: step 4 does it.
+3. **The factory PR: one pull request, all of this together.** Its parts only work together; out of order, each half refuses the other. New config with the old pins: the old image's `factory-check` refuses `confidential`. New pins with the old config: the new image refuses `internal`, `restricted` and `phi` ("`internal` is retired: use `confidential`").
+   - **The pins:** set `BUILDER_IMAGE` to the 0.5.0 digest in all four factory workflows (`scorecard.yml`, `scorecard-poll.yml`, `scorecard-assess.yml` and `factory-check.yml`), as in 16.3.
+   - **`config/registration.yaml`:** edit `no_spec` to `{tier: high, data_classification: confidential}` and `classification_tier` to `{public: low, confidential: high, protected: high}`. Keep the rest of the file (`raise_to`, `many_dependencies_over`).
+   - **The scorecard's rules.** Never copy the bootstrap's `config/scorecard.yaml` over the factory's: it holds your gateway, model, budgets and tuning, and after section 17 it is a different schema.
+     - A review-1 factory (`schema: scorecard-config/v1`, no `config/routing.toml`): edit only `classification_asvs_level` to `{public: 1, confidential: 2, protected: 2}` and `sensitive_classifications` to `[confidential, protected]`.
+     - A review-2 factory (section 17: `config/routing.toml` next to a `scorecard-config/v2` `scorecard.yaml`): leave `scorecard.yaml` as it is (it names no classification). In `config/routing.toml`, set each rule's `escalate.classifications` by the mapping (T-10's `["restricted", "phi"]` becomes `["confidential", "protected"]`), and map every value in a condition over the spec measure `data_classification` (`is`, `any`). `docs/scorecard/routing.md` lists the three levels.
+   - **The intake records:** rewrite each record's `data_classification`, and in portal-written records `floor_classification`, by the mapping. Tiers stay as they are. A record's override may no longer be needed after the mapping (an `internal` app with a `restricted` floor is now `confidential` on a `confidential` floor): delete `floor_override` from any record no longer below its floor. `grep -l floor_override intake/*/*.yaml` lists the records to look at, and `check-factory` names each one that must change ("it has floor_override but the record is not below the floor: delete floor_override").
+   - **Check:** on the branch, run the pinned 0.5.0 image's `check-factory`, as in 17.1, step 7: one line of counts, no `error`. Then open the PR; `factory-check` passes. Merge it.
+   - **What changes on the apps' PRs:**
+     - `confidential` needs `high`, so `hello-app` (`moderate`) is registered below its floor: T-21 fires and `hello-app` is at `security_review` on every PR until it is approved again at `high`. An override doesn't clear T-21: the scorecard compares the record's tier with the floor and never reads `floor_override`.
+     - T-10 (sensitive data in logs) now escalates to `security_review` for `confidential` apps, and both live apps are `confidential`.
+4. **Each app's regenerate PR:** set `data_classification` in `builder-spec.json` by the mapping, run `builder generate .`, and merge.
+   - **Check:** the PR's scorecard reports T-2 `spec-unreadable`: the base `builder-spec.json` names a retired level, so it can't be compared, and the scorecard fails toward scrutiny on this one PR.
+5. **The portal:**
+   - Bump the portal to 0.5.0 (regenerate and merge), set `PORTAL_CLASSIFICATION_POLICY_URL` in the kit (its default is the placeholder) and redeploy. Migrations 0008 and 0009 run; while 0009 builds its `audit_log` index, the portal's writes pause briefly (a plain `CREATE INDEX` holds a write lock on the table for the few seconds it takes).
+   - **Check:** a registration that was pending before has evidence that names an old level, so Approve is disabled with "send it back". Send it back; when it is submitted again, the platform computes fresh evidence.
+   - 0008 and 0009 are forward-only, like 0007: don't roll the image back past them.
+
+### 22.2 The demo
+1. In an app, `builder generate .` with `"data_classification": "internal"` exits 2 with "data_classification: `internal` is retired: use `confidential`". Change it and generate again.
+2. `golden-road register --repo <you>/hello-app` prints a link whose draft has no `proposed_tier`; `--tier` is refused. Open the link: the classification shows as three cards with their one lines and "Read the data classification policy" (it opens in a new tab).
+3. On Approvals, tier and classification are cards with the floor's value tagged "floor". Choose below the floor: the override field appears, and Approve stays disabled until the reason is 30 characters long.
+4. My requests: Needs attention shows the pending and sent-back requests; the request page shows its timeline (Submitted, Sent back when it was, Reviewed, Recorded; a failed one reads "Recorded / Failed").
+5. On `hello-app`'s page, press Remove beside the Azure identity: the page asks first; Keep it changes nothing.
+6. Add a secret in steps (21.2).
+
+### 22.3 Proof items (record the results)
+1. The `builder generate` refusal of step 1.
+2. The register page with the three cards and the policy link.
+3. The factory PR, and an app's regenerate PR with its T-2 `spec-unreadable`.
+4. A send it back of a request pending at the upgrade, and its fresh evidence.
+5. The confirmation before a removal, and the toast after it.
+
+### 22.4 Roll back
+The rename is a contract change: going back means a 0.4.x builder, reverting the factory PR and each app's regenerate PR, and a portal image from before 0.5.0 on a database restored from before 0008. Prefer fixing forward.
+
+## 23. Builder 0.5.1: changing a registration and the re-review list
+Builder 0.5.1 changes the portal and, in small ways, the scorecard and the factory. A repo admin can change or renew an app's registration in the portal: the same form, evidence, floor and admin approval as a first registration, and the writer replaces the intake record only if it is still the one the admin saw. Admins get a Re-review page (`/admin/rereview`) listing apps whose review date has passed or is near, and apps whose scorecard runs raised a configured signal. **Mock only:** everything here is tested against a fake GitHub; the steps below are the first time it meets the real one.
+
+### 23.0 What changes
+- **Change or renew:** the register page for a repo that has an intake record is "Change or renew the registration", pre-filled from the record. The approval shows the record beside the proposal (current → proposed), "Owner changes from A to B" when another repo admin asks, and "A renewal" when the purpose and classification are the same. The writer's PR is "Change the registration of `<repo>`" and lists each changed field. If the record changed since the evidence was read, the request fails `record_changed` (or `record_conflict` when GitHub refuses the write): ask again. A record in the factory under two spellings of its name waits or fails `record_case_mismatch`. A first registration that meets a record still fails `already_registered`. A record marked `scorecard: central` keeps the mark.
+- **Re-review:** reasons `review_overdue`, `review_due_soon` (within `PORTAL_REVIEW_DUE_SOON_DAYS`, default 30, `0` off) and `scorecard_signal` (an event's signals match `PORTAL_REREVIEW_SIGNALS`; the default is any trigger at `security_review`, T-17, T-18, T-19 and `egress-removed`). An admin closes an item with a note (never for an app they own); a date item closes by itself when a renewal moves the date. An item open longer than `PORTAL_REREVIEW_STALE_DAYS` (default 30, `0` off) is flagged. `intake/v1` records are listed as "Registered outside the portal".
+- **Scorecard events are read only from runs GitHub vouches for:** the factory's own `scorecard-assess` dispatch of that head, from `main`, with a head on `main` (a run's title, from the workflow's new `run-name`, must name the event's repo, PR and head), or, in per-app mode, the app's own pull request run calling the factory's reusable workflow. Anything else is counted as `untrusted_run`. In per-app mode the pull request's author could still overwrite the artifact after the reusable workflow wrote it: an accepted risk that central mode doesn't have.
+- **The read App needs Actions: Read-only**, on the factory and on each per-app repo: it lists scorecard runs and downloads each run's `scorecard` artifact once, reading only `re-review-event.json` in memory. The collector's egress adds `productionresultssa*.blob.core.windows.net` (GitHub's artifact storage); `PORTAL_ARTIFACT_HOSTS` (empty: `*.blob.core.windows.net`) says where a download may be redirected.
+- **Factory YAML with anchors or aliases is refused**, by factory-check, the poller and the portal alike (a few hundred bytes of aliases can expand past anything a walk finishes).
+- **Migration 0010** adds the evidence's record columns and the re-review tables. It is forward-only.
+
+### 23.1 Roll out (in this order)
+1. **The factory's YAML.** YAML anchors or aliases (`&name`, `*name`, `<<:`) in `config/`, `intake/` or `na/` stop factory-check from 0.5.1. Look for them in the factory (`grep -rnE '(^|[:\[, -])[&*][A-Za-z]|<<:' config intake na`) and write each value out in a factory PR now, before the bump: the factory's checks still run the 0.5.0 builder, so they can't show it yet.
+   **Check:** the grep prints nothing on the factory's `main`. Step 4's builder then passes factory-check as it is.
+2. **The factory's workflows and rulesets.** Take this release's `.github/workflows/scorecard-assess.yml` (it adds `run-name`, which the portal checks) in a factory PR. The factory's default branch must be `main` (scorecard-assess runs only from main; otherwise the Re-review page shows `factory_not_main`). Add a tag ruleset to the factory that forbids creating tags named like a branch (at least `main`): GitHub reports a run dispatched from a tag named `main` as on branch `main`, and the portal's head-on-main check is the backstop. The central runs from before this workflow have no such title: they are recorded `untrusted_run` for good (their events are not read).
+   **Check:** the next central run's title is `<repo> <pr> <head sha>`.
+3. **The read App's permission.** Settings -> Developer settings -> GitHub Apps -> the read App -> Permissions: Repository permissions -> **Actions: Read-only**. Save, then accept the new permission on the installation (Settings -> Applications -> the read App -> Review request).
+   **Check:** the installation's page lists "Read access to actions".
+4. Release builder 0.5.1 (the lead's bump, as in 14.6), then the portal's regenerate PR, and merge it.
+5. **The kit:** take this release's `kustomization.yaml` keys (`PORTAL_REREVIEW_STALE_DAYS`, `PORTAL_REVIEW_DUE_SOON_DAYS`, `PORTAL_REREVIEW_SIGNALS`, `PORTAL_ARTIFACT_HOSTS`, all empty for the defaults), `collector.yaml` and `networkpolicies.yaml`, and apply. The migration job runs 0010.
+   **Check:** within five minutes the collector logs `collectors: intake: N records (0 unreadable), ...` and `collectors: re-review events: N stored, M skipped`, without `actions_unreadable`. `artifact_host_refused` on the Re-review page means GitHub redirects artifact downloads to a host outside `PORTAL_ARTIFACT_HOSTS` (nothing is recorded until it is allowed). A `(GitHub is busy: will retry)` on every pass for events means the artifact download is blocked: find the host in Hubble (`hubble observe --pod golden-road-portal-collector --verdict DROPPED`) and add it to the collector's egress (and to `PORTAL_ARTIFACT_HOSTS` if it isn't under `*.blob.core.windows.net`). The Re-review page's "The collector" list shows each part's last good pass.
+6. **Raise `hello-app` (T-21).** As `hello-app`'s repo admin, open its app page and press **Change or renew the registration** (or open `/register?repo=<you>/hello-app`). Keep the purpose, keep `confidential`, and submit. Another portal admin (not you) approves it at tier `high`.
+   **Check:** the writer's PR "Change the registration of `<you>/hello-app`" lists `Record: intake/v1 → intake/v2`, `Tier: moderate → high` and the owner change; if the record had `scorecard: central`, the new file keeps that line; `factory-check` passes and it merges. The next `hello-app` PR no longer lists T-21.
+7. Leave `golden-road-portal`'s record as it is: it is an `intake/v1` the portal can't approve for itself, and it shows under "Registered outside the portal".
+
+### 23.2 The demo
+1. Renew `hello-app` again: the approval says "A renewal of the current registration"; the PR lists only `Review by`.
+2. Edit `intake/<you>/hello-app.yaml` by hand (a factory PR) while a change is approved but not yet written: the writer fails it `record_changed`. Ask again; the fresh evidence names the new record.
+3. Set `PORTAL_REVIEW_DUE_SOON_DAYS=400` and restart the collector: `hello-app` shows "Review due soon" on `/admin/rereview` and a banner on its app page. Close it with a note; it stays closed. Set the value back.
+4. Open a `hello-app` PR that raises `resources_tier` (T-17). After its scorecard run, `/admin/rereview` shows a "Scorecard signal" item with the PR number, the head and `T-17`'s summary.
+
+### 23.3 Proof items (record the results)
+1. The approval screen of step 23.1.6 with current → proposed and the owner change.
+2. The writer's change PR and its merged file.
+3. The `record_changed` failure of the demo's step 2.
+4. The Re-review page with a date item and a scorecard item, and the audit log's `rereview_item.closed` entry.
+5. The collector's log lines and the page's "The collector" list.
+
+### 23.4 Roll back
+The portal image before 0.5.1 does not read the new tables, but 0010 is forward-only: roll the image back only with a database restored from before 0010. The read App's Actions permission, the factory's `run-name` and the tag ruleset can stay. Prefer fixing forward.
 
 ## PoC gaps to record
 - The scans are open-source reference scans (Semgrep CE with a small vendored rule set plus `p/default`, Trivy, CodeQL default setup), not the security team's tools, thresholds, or triage. Until step 11, Gate 1 waits on nothing beyond drift and the authz probe. Gate 1 sees only a CodeQL check run's conclusion, so it proves the analysis ran, not that no alert exists; the alert threshold is enforced at merge time.

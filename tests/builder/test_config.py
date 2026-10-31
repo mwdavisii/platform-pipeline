@@ -116,3 +116,27 @@ def test_an_unknown_mode_is_refused(value):
     from builder.config import scorecard_mode
     with pytest.raises(ValueError):
         scorecard_mode({"scorecard_mode": value})
+
+
+def test_the_committed_platform_configs_carry_the_policy_placeholder():
+    """The builder's own copy is always the placeholder; platform/platform.json is too until configure.py has run (org recorded),
+    and after that it holds a valid recorded link."""
+    from builder.config import classification_policy_url
+    from contracts.classification import POLICY_PLACEHOLDER
+    root = Path(__file__).resolve().parents[2]
+    assert json.loads((root / "src/builder/data/platform.json").read_text())["classification_policy_url"] == POLICY_PLACEHOLDER
+    live = json.loads((root / "platform/platform.json").read_text())
+    if live.get("org") is None:
+        assert live["classification_policy_url"] == POLICY_PLACEHOLDER
+    else:
+        assert classification_policy_url(live) == live["classification_policy_url"]
+
+
+def test_the_policy_url_is_the_recorded_link_or_the_placeholder_and_a_bad_one_is_an_error():
+    from builder.config import classification_policy_url
+    from contracts.classification import POLICY_PLACEHOLDER
+    assert classification_policy_url({"classification_policy_url": "https://wiki.example.org/p?x=1"}) == "https://wiki.example.org/p?x=1"
+    assert classification_policy_url({}) == POLICY_PLACEHOLDER
+    for bad in ("http://x.example.org", 7, "https://wiki.example.org/a b", "https://wiki.example.org/\"x"):
+        with pytest.raises(ValueError, match="classification_policy_url"):
+            classification_policy_url({"classification_policy_url": bad})

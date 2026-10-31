@@ -17,10 +17,10 @@ FACTORY_RULES = (ROOT / "bootstrap/scorecard-factory/config/registration.yaml").
 
 
 @pytest.mark.parametrize("text", [
-    FACTORY_RULES, FACTORY_RULES.replace("phi: high", "phi: low"), FACTORY_RULES + "extra: 1\n",
+    FACTORY_RULES, FACTORY_RULES.replace("protected: high", "protected: low"), FACTORY_RULES + "extra: 1\n",
     FACTORY_RULES + "no_spec: {tier: low, data_classification: public}\n", "schema: registration-rules/v1\n",
     "", "- a\n", FACTORY_RULES.replace("many_dependencies_over: 50", "many_dependencies_over: 2026-10-23"),
-    FACTORY_RULES.replace("internal: low", "internal: moderate"), FACTORY_RULES + "#" * 70000 + "\n", FACTORY_RULES + "#" * (65536 - len(FACTORY_RULES) - 1) + "\n",
+    FACTORY_RULES.replace("public: low", "public: moderate"), FACTORY_RULES + "#" * 70000 + "\n", FACTORY_RULES + "#" * (65536 - len(FACTORY_RULES) - 1) + "\n",
 ])
 def test_the_scorecard_and_the_portal_accept_the_same_rules(tmp_path, text):
     factory = tmp_path / "factory"

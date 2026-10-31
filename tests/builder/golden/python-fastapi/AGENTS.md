@@ -7,6 +7,6 @@
 - Call models only through the platform gateway, never a model provider directly. `builder guide` names the gateway host.
 - Never make this repository public.
 - Ask the user about data classification, roles and egress. Never decide them yourself.
-- This app's data classification is `internal`. The list of models approved for `internal` data is not published yet: ask the platform team before you add a model.
+- This app's data classification is `public`. The list of models approved for `public` data is not published yet: ask the platform team before you add a model.
 - To package or update this app, use the golden-road skill. Install it from the golden-road landing page (the platform team has the link).
 <!-- golden-road:end -->

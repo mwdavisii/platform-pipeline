@@ -358,10 +358,10 @@ def test_personal_poc_doc_covers_the_scans_codeql_dependabot_and_the_known_gap()
                    "sp-finance-reports", "AZURE_CLIENT_ID", "bindings/<you>/hello-app.yaml"):
         assert needle in text, needle
     steps = [int(m) for m in re.findall(r"^## (\d+)\.", text, re.M)]
-    assert steps == list(range(0, 22))
+    assert steps == list(range(0, 24))
     # the scans repo is published before hello-app is pushed, and the builder is released again only after both exist
     assert text.index("## 4. Publish `security-scans`") < text.index("## 5. Create `hello-app`") < text.index("## 11.") < text.index("## 12.")
-    assert text.index("## 13. Risk scorecard") < text.index("## 14. ") < text.index("## 16. Central AI review") < text.index("## 17. Switch the review to risk routing") < text.index("## 18. High findings hold the merge") < text.index("## 19. App connections (mock)") < text.index("## 20. The deploy repo (mock)") < text.index("## 21. Delinea Secret Server secrets (mock)") < text.index("## PoC gaps to record")
+    assert text.index("## 13. Risk scorecard") < text.index("## 14. ") < text.index("## 16. Central AI review") < text.index("## 17. Switch the review to risk routing") < text.index("## 18. High findings hold the merge") < text.index("## 19. App connections (mock)") < text.index("## 20. The deploy repo (mock)") < text.index("## 21. Delinea Secret Server secrets (mock)") < text.index("## 22. Builder 0.5.0: three classification levels, the policy link and the portal reskin") < text.index("## 23. Builder 0.5.1: changing a registration and the re-review list") < text.index("## PoC gaps to record")
     twenty = text[text.index("## 20. The deploy repo (mock)"):text.index("## 21. Delinea Secret Server secrets (mock)")]
     for needle in ("golden-road-deploy", "deploy-check", "suspend: true", "composed.yaml", "Mock only", "DEPLOY_APP_ID", "DEPLOY_APP_KEY",
                    "environments/bump", "namespace: hello-app-test", "SINGLE_APPROVER_PROMOTIONS", "mode: warn", "### 20.8 Proof items",
@@ -372,7 +372,7 @@ def test_personal_poc_doc_covers_the_scans_codeql_dependabot_and_the_known_gap()
     gaps = text[text.index("## PoC gaps to record"):]
     for needle in ("`main-review` bypass", "never merges a prod binding", "create and approve pull requests", "disabled_inactivity", "two packages"):
         assert needle in gaps, needle
-    twenty_one = text[text.index("## 21. Delinea Secret Server secrets (mock)"):text.index("## PoC gaps to record")]
+    twenty_one = text[text.index("## 21. Delinea Secret Server secrets (mock)"):text.index("## 22. ")]
     for needle in ("PORTAL_SECRET_SERVER=mock", "PORTAL_SECRET_PROCESS_URL", "PORTAL_SECRET_SERVER_URL", "PORTAL_DIRECTORY", "notes-api-key",
                    "golden-road-eso", "notes-db", "NOTES_DB_PASSWORD", "bindings.yaml", "composed.yaml", "hello-app-delinea",
                    "ClusterSecretStore", "delinea-secret-server", "key: '1042'", "property: password", "secretKeyRef", "finance-db",
@@ -382,6 +382,36 @@ def test_personal_poc_doc_covers_the_scans_codeql_dependabot_and_the_known_gap()
                    "no_secret_server", "secret_server_unavailable", "compose_refused", "external-secrets/", "cluster-secret-store.yaml",
                    "cilium-egress.yaml", "Mock only", "### 21.5 Proof items", "Remove", "first 20"):
         assert needle in twenty_one, needle
+    twenty_two = text[text.index("## 22. Builder 0.5.0"):text.index("## 23. ")]
+    for needle in ("`public`, `confidential` and `protected`", "`internal` is retired: use `confidential`", "`phi`", "no alias",
+                   "--classification-policy-url", "PORTAL_CLASSIFICATION_POLICY_URL", "https://policies.example.com/data-classification",
+                   "`public: low`, `confidential: high`, `protected: high`", "Drain the writer", "schema_invalid", "spec-unreadable", "T-21",
+                   "0008", "0009", "writes pause", "send it back", "proposed tier", "--tier", "Needs attention", "timeline", "Keep it",
+                   "Add a secret", "Review and save", "Mock only", "### 22.3 Proof items"):
+        assert needle in twenty_two, needle
+    roll_out = twenty_two[twenty_two.index("### 22.1"):twenty_two.index("### 22.2")]
+    for needle in ("Approve nothing in the portal until step 5", "rules_invalid", "don't regenerate `hello-app` there",
+                   "all four factory workflows", "check-factory", "config/routing.toml", "`escalate.classifications`",
+                   "Never copy the bootstrap's `config/scorecard.yaml`", "classification_asvs_level", "sensitive_classifications",
+                   "delete floor_override", "grep -l floor_override", "out of order", "T-10", "`security_review` on every PR",
+                   "doesn't clear T-21"):
+        assert needle in roll_out, needle
+    assert "Copy `config/registration.yaml` and `config/scorecard.yaml` from the bootstrap" not in roll_out
+    assert twenty_two.index("Drain the writer") < twenty_two.index("factory PR") < twenty_two.index("regenerate PR") < twenty_two.index("0008")
+    twenty_three = text[text.index("## 23. Builder 0.5.1"):text.index("## PoC gaps to record")]
+    for needle in ("Change or renew the registration", "record_changed", "record_conflict", "record_case_mismatch", "already_registered",
+                   "scorecard: central", "Actions: Read-only", "actions_unreadable", "PORTAL_REVIEW_DUE_SOON_DAYS", "PORTAL_REREVIEW_SIGNALS",
+                   "PORTAL_REREVIEW_STALE_DAYS", "PORTAL_ARTIFACT_HOSTS", "0010", "productionresultssa*.blob.core.windows.net",
+                   "re-review-event.json", "T-21", "Registered outside the portal", "collectors: re-review events:", "Mock only",
+                   "### 23.3 Proof items", "/admin/rereview", "anchors or aliases", "run-name", "untrusted_run", "tag ruleset",
+                   "factory_not_main", "per-app mode", "artifact_host_refused", "config intake na", "recorded `untrusted_run` for good"):
+        assert needle in twenty_three, needle
+    roll_out = twenty_three[twenty_three.index("### 23.1"):twenty_three.index("### 23.2")]
+    assert roll_out.index("anchors or aliases") < roll_out.index("scorecard-assess.yml") < roll_out.index("Actions: Read-only") \
+        < roll_out.index("0010") < roll_out.index("Change or renew the registration")
+    for needle in ("Add a secret", "Field and name", "Keep it"):
+        assert needle in twenty_one, needle
+    assert "Search to list the secrets you can see" not in twenty_one
     for needle in ("One reader account", "checked once, at submit", "RestApiDocs", "fieldSlugName", "/summary", "skip", "take",
                    "secret_name", "OAuth", "Secrets carry over", "renamed or moved", "no running Secret Server", "`SecretStore` per app"):
         assert needle in gaps, needle

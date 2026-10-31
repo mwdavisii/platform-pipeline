@@ -4,7 +4,7 @@ import bisect
 import re
 from pathlib import Path
 
-from .config import is_model_provider, load_platform
+from .config import classification_policy_url, is_model_provider, load_platform
 from .source import Tree, as_tree, package_json, source_files  # noqa: F401  (re-exported for later tasks)
 
 PY_SUFFIXES = {".py"}
@@ -192,7 +192,8 @@ def detect(root: Path) -> dict:
         questions.append(f"The app reads {', '.join(from_binding)}. The platform sets these from the app's binding (its Azure identity, "
                          "Databricks connection and Delinea Secret Server secrets, linked on the app's page in the portal), so they are "
                          "not in builder-spec.json.")
-    questions.append("What data does this app handle: public, internal, restricted, or phi?")
+    questions.append("What data does this app handle: public, confidential or protected? Ask the user, and point them to the data "
+                     f"classification policy: {classification_policy_url(platform)}")
 
     return {
         "status": "ok",

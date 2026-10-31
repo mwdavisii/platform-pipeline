@@ -13,6 +13,7 @@ import string
 import tomllib
 from pathlib import Path
 
+from contracts.classification import RETIRED, retired_message, retired_problems
 from contracts.schema import validate
 from golden_road.io import InputError
 
@@ -94,6 +95,9 @@ def _condition_problems(where: str, name: str, fact: dict, op: str, value) -> li
     if kind in ("enum", "ordered") and op in ("is", "any"):
         values = [value] if op == "is" else value
         bad = [v for v in values if v not in ENUMS[fact["measure"]]]
+        retired = [v for v in bad if fact["measure"] == "data_classification" and isinstance(v, str) and v in RETIRED]
+        if retired:  # builder 0.5.0: name the replacement (spec 2026-10-30 C4)
+            return [f"{where}: {retired_message(retired[0])}"]
         if bad:
             return [f"{where}: {bad[0]} is not a {fact['measure']} value"]
     return []
@@ -183,8 +187,11 @@ def load_routing(factory) -> tuple[dict, list[str]]:
         doc = tomllib.loads(path.read_text(encoding="utf-8"))
     except InputError:
         raise
-    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, RecursionError) as exc:
         raise InputError(f"can't read {path}: {type(exc).__name__}: {exc}"[:300]) from exc
+    retired = retired_problems(doc)  # before the schema, so the message names the replacement (spec 2026-10-30 C4)
+    if retired:
+        raise InputError(f"{path} is not a valid routing/v1: {retired[0]}")
     errors = validate("routing.v1", doc)
     if errors:
         raise InputError(f"{path} is not a valid routing/v1: {errors[0]}")

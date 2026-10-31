@@ -38,7 +38,7 @@
       }
     ]
   },
-  "data_classification": "internal",
+  "data_classification": "confidential",
   "egress": [
     {
       "host": "llm.mwdavisii.com",

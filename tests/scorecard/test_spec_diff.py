@@ -33,12 +33,13 @@ def test_loosened_authz_fires_t2(notes_spec):
 
 
 def test_authz_removed_egress_added_classification_lowered_secret_renamed(notes_spec):
+    base = {**notes_spec, "data_classification": "confidential"}
     head = copy.deepcopy(notes_spec)
     del head["authz"]
     head["egress"].append({"host": "api.example.com", "port": 443, "reason": "webhook"})
     head["data_classification"] = "public"
     head["env"] = [{"name": "NOTES_DATABASE_URL", "secret": True}]
-    assert _rules(_diff(notes_spec, head)) == [
+    assert _rules(_diff(base, head)) == [
         "T-2/authz-removed", "T-2/classification-lowered", "T-2/egress-added", "T-2/secret-env-changed",
     ]
 
@@ -58,7 +59,7 @@ def test_adding_authz_to_an_app_without_it_is_not_loosening(notes_spec):
 
 def test_raising_classification_is_not_a_signal(notes_spec):
     head = copy.deepcopy(notes_spec)
-    head["data_classification"] = "phi"
+    head["data_classification"] = "protected"
     assert _diff(notes_spec, head) == []
 
 
@@ -173,3 +174,11 @@ def test_nothing_is_recorded_without_two_readable_specs_or_without_a_change(note
     assert recorded_spec_signals(text, text) == []
     assert recorded_spec_signals(None, text) == [] and recorded_spec_signals(text, None) == []
     assert recorded_spec_signals("{bad", text) == [] and recorded_spec_signals(text, "{bad") == []
+
+
+def test_a_retired_classification_is_named_in_the_unreadable_spec_s_snippet(notes_spec):
+    old = json.dumps({**notes_spec, "data_classification": "internal"})
+    [base] = spec_changes(old, json.dumps(notes_spec), now=NOW)
+    assert base["rule_id"] == "T-2/spec-unreadable" and "`internal` is retired: use `confidential`" in base["evidence"][0]["snippet"]
+    [head] = spec_changes(json.dumps(notes_spec), json.dumps({**notes_spec, "data_classification": "phi"}), now=NOW)
+    assert head["rule_id"] == "T-2/spec-removed-or-invalid" and "`phi` is retired: use `protected`" in head["evidence"][0]["snippet"]

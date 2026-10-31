@@ -193,8 +193,10 @@ REQUIRED = {
 
 # Settings a process may go without that the kit still passes (from the ConfigMap, where an empty value means unset).
 OPTIONAL_PASSED = {"web": {"PORTAL_DIRECTORY", "PORTAL_IDENTITY_PROCESS_URL", "PORTAL_DATA_PROCESS_URL", "PORTAL_REPO_ADMINS_STALE_AFTER",
-                           "PORTAL_SECRET_SERVER", "PORTAL_SECRET_PROCESS_URL"},
-                   "writer": {"PORTAL_DIRECTORY", "PORTAL_REPO_ADMINS_STALE_AFTER", "PORTAL_SECRET_SERVER"}}
+                           "PORTAL_SECRET_SERVER", "PORTAL_SECRET_PROCESS_URL", "PORTAL_CLASSIFICATION_POLICY_URL",
+                           "PORTAL_REREVIEW_STALE_DAYS"},
+                   "writer": {"PORTAL_DIRECTORY", "PORTAL_REPO_ADMINS_STALE_AFTER", "PORTAL_SECRET_SERVER"},
+                   "collector": {"PORTAL_REVIEW_DUE_SOON_DAYS", "PORTAL_REREVIEW_SIGNALS", "PORTAL_ARTIFACT_HOSTS"}}
 
 
 def provided(built, o):
@@ -360,9 +362,10 @@ def test_network_policies_follow_the_least_privilege_shape(built):
     assert web_pg["policyTypes"] == ["Egress"] and [r["to"] for r in web_pg["egress"]] == [postgres_peer]
 
     def fqdns(c):
-        return sorted(m["matchName"] for r in c["spec"]["egress"] for m in r.get("toFQDNs", []))
+        return sorted(m.get("matchName") or m["matchPattern"] for r in c["spec"]["egress"] for m in r.get("toFQDNs", []))
 
-    for who, hosts in {"writer": ["api.github.com", "github.com"], "collector": ["api.github.com"], "migrate": []}.items():
+    for who, hosts in {"writer": ["api.github.com", "github.com"], "collector": ["api.github.com", "productionresultssa*.blob.core.windows.net"],
+                       "migrate": []}.items():
         c = cnps[f"golden-road-portal-{who}-egress"]
         assert c["spec"]["endpointSelector"]["matchLabels"] == {"app.kubernetes.io/name": f"golden-road-portal-{who}"}
         assert fqdns(c) == hosts, who
@@ -415,7 +418,7 @@ def test_the_readme_covers_the_setup_and_the_checks():
                    "administration", "pull_requests", "delete job", "gh release download", "PORTAL_WRITE_APP_KEY_FILE", "PORTAL_READ_APP_KEY_FILE",
                    "force: true", "commit the verified", "own GitOps repository", "wait for job/golden-road-portal-migrate",
                    "--for=condition=complete", "test release", "self_approved", "in writing", "Members", "personal account",
-                   "planned collectors", "environment variables of its pod", "PORTAL_MIGRATE_DATABASE_URL", "portal_owner", "portal_web", "portal_writer", "portal_collector"]:
+                   "Actions read is used by the re-review collector", "environment variables of its pod", "PORTAL_MIGRATE_DATABASE_URL", "portal_owner", "portal_web", "portal_writer", "portal_collector"]:
         assert needle in text, needle
 
 
@@ -446,3 +449,38 @@ def test_the_kit_is_in_the_public_export_and_holds_no_private_pattern_word(expor
             assert not forbidden.search(path.relative_to(ROOT).as_posix()), path
             for n, line in enumerate(path.read_text().splitlines(), 1):
                 assert not forbidden.search(line), f"{path.name}:{n}"
+
+
+@needs_kustomize
+def test_the_kit_passes_the_policy_placeholder_to_the_web_only(built):
+    from contracts.classification import POLICY_PLACEHOLDER
+    web = provided(built, built[("Deployment", "golden-road-portal")])
+    writer = provided(built, built[("Deployment", "golden-road-portal-writer")])
+    assert web["PORTAL_CLASSIFICATION_POLICY_URL"] == ("config", "PORTAL_CLASSIFICATION_POLICY_URL")
+    assert "PORTAL_CLASSIFICATION_POLICY_URL" not in writer
+    assert built[("ConfigMap", "golden-road-portal-config")]["data"]["PORTAL_CLASSIFICATION_POLICY_URL"] == POLICY_PLACEHOLDER
+
+
+def test_the_kit_s_readme_names_the_policy_setting():
+    assert "`PORTAL_CLASSIFICATION_POLICY_URL`" in (KIT / "README.md").read_text()
+
+
+@needs_kustomize
+def test_the_kit_passes_the_re_review_settings_to_the_process_that_reads_each(built):
+    web = provided(built, built[("Deployment", "golden-road-portal")])
+    collector = provided(built, built[("Deployment", "golden-road-portal-collector")])
+    data = built[("ConfigMap", "golden-road-portal-config")]["data"]
+    for name in ("PORTAL_REVIEW_DUE_SOON_DAYS", "PORTAL_REREVIEW_SIGNALS", "PORTAL_ARTIFACT_HOSTS"):
+        assert collector[name] == ("config", name) and name not in web and data[name] == ""
+    assert web["PORTAL_REREVIEW_STALE_DAYS"] == ("config", "PORTAL_REREVIEW_STALE_DAYS") and "PORTAL_REREVIEW_STALE_DAYS" not in collector
+
+
+def test_the_kit_s_readme_names_the_re_review_settings_and_what_actions_read_is_for():
+    text = " ".join((KIT / "README.md").read_text().split())
+    for needle in ("`PORTAL_REVIEW_DUE_SOON_DAYS`", "`PORTAL_REREVIEW_SIGNALS`", "`PORTAL_REREVIEW_STALE_DAYS`", "`PORTAL_ARTIFACT_HOSTS`",
+                   "Actions read is used by the re-review collector", "`productionresultssa*.blob.core.windows.net`",
+                   "collectors: intake: N records", "collectors: re-review events: N stored, M skipped", "actions_unreadable",
+                   "untrusted_run", "record_conflict", "record_case_mismatch", "artifact_host_refused", "not_a_file"):
+        assert needle in text, needle
+    assert "Actions and Checks read are for the planned collectors" not in text
+

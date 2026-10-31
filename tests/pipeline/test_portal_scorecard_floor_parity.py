@@ -26,7 +26,7 @@ from scorecard.signals import registration as scorecard_registration  # noqa: E4
 API, SHA, REPO = "https://api.github.com", "a" * 40, "acme/notes"
 GATEWAY = ("litellm.internal",)
 FACTORY = ROOT / "tests/scorecard/fixtures/factory"
-SPEC = {"app_name": "notes", "app_type": "python", "entrypoint": "app.main:app", "port": 8000, "data_classification": "internal",
+SPEC = {"app_name": "notes", "app_type": "python", "entrypoint": "app.main:app", "port": 8000, "data_classification": "public",
         "egress": [], "env": [], "resources_tier": "default"}
 WRITE = {"roles": [{"name": "editor", "access": "write"}, {"name": "reader", "access": "read"}], "default": "deny",
          "rules": [{"methods": ["GET"], "path": "/", "roles": ["reader"]}, {"methods": ["POST"], "path": "/n", "roles": ["editor"]}]}
@@ -54,8 +54,9 @@ CASES = {
     "spec exactly at the cap": {"builder-spec.json": spec() + b" " * (65536 - len(spec()))},
     "too many list items": {"builder-spec.json": spec(egress=[{"host": f"h{i}.example.org", "port": 443, "reason": "weather data"} for i in range(101)])},
     "a clean spec": {"builder-spec.json": spec(), "requirements.txt": b"fastapi==0.1\n"},
-    "a clean spec for phi": {"builder-spec.json": spec(data_classification="phi")},
-    "restricted": {"builder-spec.json": spec(data_classification="restricted")},
+    "a clean spec for protected": {"builder-spec.json": spec(data_classification="protected")},
+    "confidential": {"builder-spec.json": spec(data_classification="confidential")},
+    "a retired classification (phi)": {"builder-spec.json": spec(data_classification="phi")},
     "write roles": {"builder-spec.json": spec(authz=WRITE)},
     "read-only roles": {"builder-spec.json": spec(authz=READ_ONLY)},
     "secret env": {"builder-spec.json": spec(env=[{"name": "API_TOKEN", "secret": True}, {"name": "LOG_LEVEL", "secret": False}])},
@@ -141,8 +142,8 @@ def test_a_symlink_is_unreadable_and_a_rewritten_file_counts_as_stored_on_both_s
 
 
 @pytest.mark.parametrize("changes", [
-    {"no_spec": {"tier": "moderate", "data_classification": "internal"}},
-    {"classification_tier": {"public": "low", "internal": "moderate", "restricted": "high", "phi": "high"}},
+    {"no_spec": {"tier": "moderate", "data_classification": "public"}},
+    {"classification_tier": {"public": "moderate", "confidential": "high", "protected": "high"}},
     {"raise_to": {"write_roles": "high", "secret_env": "low", "model_gateway_egress": "low", "other_egress": "moderate", "many_dependencies": "high"}},
     {"many_dependencies_over": 3},
 ])

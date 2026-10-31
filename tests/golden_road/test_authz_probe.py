@@ -7,6 +7,7 @@ import pytest
 from builder.config import load_platform
 from builder.render.authz import policy_json
 from golden_road.authz_probe import build_cases, evaluate, load_matcher, probe, run_cases
+from golden_road.io import InputError
 
 PLATFORM = load_platform()
 
@@ -369,3 +370,15 @@ def test_every_detected_route_is_a_case(spec_app):
     cases = {(c["method"], c["path"]) for c in build_cases(spec, root, PLATFORM)}
     for route in find_routes(root, spec["app_type"]):
         assert (route["method"], route["path"]) in cases
+
+
+def test_a_retired_classification_is_named(python_app, notes_spec):
+    (python_app / "builder-spec.json").write_text(json.dumps({**notes_spec, "data_classification": "restricted"}))
+    with pytest.raises(InputError, match="`restricted` is retired: use `confidential`"):
+        probe(python_app, "http://127.0.0.1:9", platform=PLATFORM)
+
+
+def test_a_deeply_nested_spec_is_an_input_error(python_app):
+    (python_app / "builder-spec.json").write_text('{"data_classification": ' + "[" * 3000 + "]" * 3000 + "}")
+    with pytest.raises(InputError, match="builder-spec.json is invalid"):
+        probe(python_app, "http://127.0.0.1:9", platform=PLATFORM)

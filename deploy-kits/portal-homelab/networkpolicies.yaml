@@ -169,7 +169,10 @@ spec:
       - port: '443'
         protocol: TCP
 ---
-# Collector: DNS and the GitHub API (it reads repository admins; it never needs github.com).
+# Collector: DNS, the GitHub API (it never needs github.com), and Actions' artifact storage: GitHub redirects a scorecard artifact's
+# download there, and the collector sends no token to it. If GitHub serves artifacts from another host, the Re-review page shows
+# artifact_host_refused (a host outside PORTAL_ARTIFACT_HOSTS, nothing recorded) or github_busy (a host this policy blocks, retried each
+# pass): add that host here, and to PORTAL_ARTIFACT_HOSTS if it isn't under *.blob.core.windows.net.
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
@@ -192,6 +195,7 @@ spec:
         - matchPattern: '*'
   - toFQDNs:
     - matchName: api.github.com
+    - matchPattern: productionresultssa*.blob.core.windows.net
     toPorts:
     - ports:
       - port: '443'

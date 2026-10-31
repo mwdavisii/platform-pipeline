@@ -750,3 +750,38 @@ def test_a_bad_portal_url_changes_nothing(workspace, url):
     before = (workspace / "platform/platform.json").read_bytes()
     assert configure(workspace, *GOOD, "--portal-url", url).returncode != 0
     assert (workspace / "platform/platform.json").read_bytes() == before
+
+
+POLICY_PLACEHOLDER = "https://policies.example.com/data-classification"  # contracts.classification's
+
+
+def test_the_classification_policy_url_is_recorded_and_can_change(workspace):
+    def recorded():
+        return json.loads((workspace / "platform/platform.json").read_text())["classification_policy_url"]
+    assert configure(workspace, *GOOD).returncode == 0 and recorded() == POLICY_PLACEHOLDER
+    assert configure(workspace, *GOOD, "--classification-policy-url", "https://wiki.example.org/policies/data?id=7").returncode == 0
+    assert recorded() == "https://wiki.example.org/policies/data?id=7"
+    assert configure(workspace, *GOOD).returncode == 0 and recorded() == "https://wiki.example.org/policies/data?id=7"  # kept
+    assert configure(workspace, *GOOD, "--classification-policy-url", "https://wiki.example.org/p#levels").returncode == 0
+    assert recorded() == "https://wiki.example.org/p#levels"  # a fragment is allowed, as everywhere the rule applies
+
+
+@pytest.mark.parametrize("url", ["http://wiki.example.org/p", "https://user@wiki.example.org/p", "https://wiki.example.org/a b",
+                                 "https://wiki.replace-me.invalid/p", "ftp://wiki.example.org/p", "https://wiki.example.org/\"x",
+                                 "javascript:alert(1)", " https://wiki.example.org/p", "https://wiki.example.org/p\n",
+                                 "https://wiki.example.org/" + "a" * 2030, ""])
+def test_a_bad_classification_policy_url_changes_nothing(workspace, url):
+    before = (workspace / "platform/platform.json").read_bytes()
+    out = configure(workspace, *GOOD, "--classification-policy-url", url)
+    assert out.returncode != 0 and (workspace / "platform/platform.json").read_bytes() == before
+
+
+def test_a_bad_recorded_policy_url_is_refused_on_a_rerun_without_the_flag(workspace):
+    assert configure(workspace, *GOOD).returncode == 0
+    path = workspace / "platform/platform.json"
+    doc = json.loads(path.read_text())
+    doc["classification_policy_url"] = "https://wiki.example.org/a b"   # a hand edit
+    path.write_text(json.dumps(doc, indent=2) + "\n")
+    before = path.read_bytes()
+    out = configure(workspace, *GOOD)
+    assert out.returncode != 0 and "classification-policy-url" in out.stderr and path.read_bytes() == before

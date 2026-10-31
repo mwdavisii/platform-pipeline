@@ -15,9 +15,9 @@
       "properties": {"low": {"$ref": "#/$defs/asvs_level"}, "moderate": {"$ref": "#/$defs/asvs_level"}, "high": {"$ref": "#/$defs/asvs_level"}}
     },
     "classification_asvs_level": {
-      "type": "object", "additionalProperties": false, "required": ["public", "internal", "restricted", "phi"],
-      "properties": {"public": {"$ref": "#/$defs/asvs_level"}, "internal": {"$ref": "#/$defs/asvs_level"},
-                     "restricted": {"$ref": "#/$defs/asvs_level"}, "phi": {"$ref": "#/$defs/asvs_level"}}
+      "type": "object", "additionalProperties": false, "required": ["public", "confidential", "protected"],
+      "properties": {"public": {"$ref": "#/$defs/asvs_level"}, "confidential": {"$ref": "#/$defs/asvs_level"},
+                     "protected": {"$ref": "#/$defs/asvs_level"}}
     },
     "missing_intake_asvs_level": {"$ref": "#/$defs/asvs_level"},
     "tier_floor": {
@@ -36,7 +36,7 @@
       "description": "T-19 fires when the change has more changed lines (added plus removed) or more changed files than this.",
       "properties": {"lines": {"type": "integer", "minimum": 1}, "files": {"type": "integer", "minimum": 1}}
     },
-    "sensitive_classifications": {"type": "array", "uniqueItems": true, "items": {"enum": ["public", "internal", "restricted", "phi"]}},
+    "sensitive_classifications": {"type": "array", "uniqueItems": true, "items": {"enum": ["public", "confidential", "protected"]}},
     "gate1_checks": {"type": "array", "minItems": 1, "items": {"type": "object"}},
     "drift_check": {"type": "string", "minLength": 1},
     "platform_provided": {

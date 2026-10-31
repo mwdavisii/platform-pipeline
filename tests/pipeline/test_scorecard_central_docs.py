@@ -61,7 +61,9 @@ def test_the_poc_doc_has_the_proof_items_the_plan_lists():
 
 
 def test_the_docs_name_the_app_s_permissions_exactly():
-    for name, text in (("readme", flat(readme_section())), ("poc", flat(poc_section()))):  # the GHE doc's check is in test_internal_docs.py
+    # section 16 itself: later sections are about other Apps (23 gives the portal's read App Actions: Read-only)
+    sixteen = between(POC.read_text(), "## 16. Central AI review", "## 17. ")
+    for name, text in (("readme", flat(readme_section())), ("poc", flat(sixteen))):  # the GHE doc's check is in test_internal_docs.py
         for permission in ("Checks: Read and write", "Contents: Read-only", "Issues: Read and write", "Pull requests: Read and write",
                            "Commit statuses: Read-only", "Metadata: Read-only"):
             assert permission in text, (name, permission)

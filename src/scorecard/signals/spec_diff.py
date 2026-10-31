@@ -2,6 +2,7 @@
 
 import json
 
+from contracts.classification import retired_problems
 from contracts.schema import validate
 
 from ..levels import CLASSIFICATIONS
@@ -60,6 +61,15 @@ def _list(items) -> str:
     return ", ".join(items[:10]) + (f" and {len(items) - 10} more" if len(items) > 10 else "")
 
 
+def _retired_note(text: str | None) -> str:
+    """A retired classification the spec names, as ' (`phi` is retired: use `protected`)', so the finding says what to change; else ''."""
+    try:
+        problems = retired_problems(json.loads(text)) if text is not None else []
+    except (ValueError, RecursionError):
+        problems = []
+    return f" ({problems[0]})" if problems else ""
+
+
 def spec_changes(base_text: str | None, head_text: str | None, *, now: str) -> list[dict]:
     base, base_present = parse_spec(base_text)
     head, head_present = parse_spec(head_text)
@@ -76,11 +86,12 @@ def spec_changes(base_text: str | None, head_text: str | None, *, now: str) -> l
 
     if head is None:
         if base_present or head_present:
-            add("spec-removed-or-invalid", "iac", "builder-spec.json is missing or invalid in this change", "builder-spec.json removed or invalid")
+            add("spec-removed-or-invalid", "iac", "builder-spec.json is missing or invalid in this change" + _retired_note(head_text),
+                "builder-spec.json removed or invalid")
         return out
     if base is None and base_present:
         # The base spec exists but can't be parsed, so no comparison is possible: fail toward scrutiny, never `{}`.
-        add("spec-unreadable", "iac", "the base builder-spec.json is invalid, so this change can't be compared with it",
+        add("spec-unreadable", "iac", f"the base builder-spec.json is invalid{_retired_note(base_text)}, so this change can't be compared with it",
             "base builder-spec.json unreadable")
         return out
     old = base or {}

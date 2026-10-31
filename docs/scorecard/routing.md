@@ -75,7 +75,7 @@ The answer is never final on its own (`src/scorecard/routing/answers.py`). Anyth
 
 `from = "spec"`, `measure = ...`. The value type decides which conditions fit.
 
-- `data_classification` (ordered: `public`, `internal`, `restricted`, `phi`)
+- `data_classification` (ordered: `public`, `confidential`, `protected`; the retired `internal`, `restricted` and `phi` are refused with their replacement named)
 - `resources_tier` (ordered: `default`, `medium`)
 - `app_type` (enum: `python`, `node`, `static`)
 - `role_count` (number)
@@ -104,7 +104,7 @@ Nothing else is allowed: there is no expression language.
 - `level`: `standard`, `elevated` or `security_review`.
 - `on_unsure`: what an `unsure` agent answer does. `elevated` routes at elevated with the reason "the reviewer couldn't determine ...". `rule_level` routes at the rule's `level`. `standard` records it in `routing.undecided` and routes nothing. It is required on a rule over an agent fact and refused on any other.
 - `mode`: `enforce` (the default) or `shadow`. A shadow rule never changes the level and never appears in the PR comment. It appears in the job summary and in `scorecard.json` under `routing.shadow`.
-- `escalate`: `{ classifications = ["restricted", "phi"], level = "security_review" }` raises the level when the app's data classification is listed (T-10 uses it).
+- `escalate`: `{ classifications = ["confidential", "protected"], level = "security_review" }` raises the level when the app's data classification is listed (T-10 uses it).
 - `summary`, `reason`, `guidance`: texts, with the placeholders above.
 
 ## Add a rule safely

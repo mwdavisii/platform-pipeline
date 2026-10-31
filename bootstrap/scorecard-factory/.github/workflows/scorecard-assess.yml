@@ -4,6 +4,8 @@
 # the pinned builder image, and only the report job writes: the queued `scorecard / assessed` check, `scorecard / level: <level>`,
 # `scorecard / findings`, the label and the comment. A newer head of the same PR cancels this run. Nothing from the pull request is executed.
 name: scorecard-assess
+# The run's title: the golden road portal reads this run's re-review event only when the title is the event's repo, PR and head.
+run-name: ${{ inputs.repo }} ${{ inputs.pr }} ${{ inputs.head_sha }}
 
 on:
   workflow_dispatch:

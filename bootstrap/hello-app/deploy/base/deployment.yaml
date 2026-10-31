@@ -16,7 +16,7 @@ spec:
       labels:
         app.kubernetes.io/name: hello-app
         app.kubernetes.io/managed-by: golden-road-builder
-        platform/data-classification: internal
+        platform/data-classification: confidential
     spec:
       serviceAccountName: hello-app
       automountServiceAccountToken: false

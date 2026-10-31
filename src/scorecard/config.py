@@ -12,6 +12,7 @@ from pathlib import Path
 
 import yaml
 
+from contracts.classification import LEVELS as CLASSIFICATION_ORDER, retired_problems
 from contracts.schema import validate
 from golden_road.checks import load_required, validate_required
 from golden_road.io import InputError
@@ -71,8 +72,19 @@ def _strings(node):
             yield from _strings(value)
 
 
+class _AnchorsRefused(yaml.YAMLError):
+    pass
+
+
 class _Loader(yaml.SafeLoader):
-    """SafeLoader without implicit timestamps, so `2026-10-01` stays the string the schemas expect."""
+    """SafeLoader without implicit timestamps, so `2026-10-01` stays the string the schemas expect, and without anchors or aliases:
+    a few hundred bytes of aliases expand to a document no walk over it finishes, so they are refused before it is built."""
+
+    def compose_node(self, parent, index):
+        event = self.peek_event()
+        if isinstance(event, yaml.AliasEvent) or getattr(event, "anchor", None) is not None:
+            raise _AnchorsRefused("anchors or aliases")
+        return super().compose_node(parent, index)
 
 
 def _construct_mapping(loader, node, deep=False):
@@ -111,12 +123,17 @@ def load_yaml(path):
         return yaml.load(path.read_text(encoding="utf-8"), Loader=_Loader)  # noqa: S506 - _Loader is a SafeLoader
     except InputError:
         raise
+    except _AnchorsRefused:
+        raise InputError(f"{path} uses YAML anchors or aliases: write each value out") from None
     except (OSError, UnicodeDecodeError, yaml.YAMLError, RecursionError) as exc:
         raise InputError(f"can't read {path}: {type(exc).__name__}") from exc
 
 
 def _checked(path, schema: str):
     doc = load_yaml(path)
+    retired = retired_problems(doc)  # before the schema, so the message names the replacement (spec 2026-10-30 C4)
+    if retired:
+        raise InputError(f"{path} is not a valid {schema}: {retired[0]}")
     errors = validate(schema, doc)
     if errors:
         raise InputError(f"{path} is not a valid {schema}: {errors[0]}")
@@ -231,6 +248,9 @@ def load_intake(factory, repo: str) -> dict | None:
     schema = INTAKE_SCHEMAS.get(kind) if isinstance(kind, str) else None
     if schema is None:
         raise InputError(f"{path} is not an intake record: its schema must be one of {', '.join(INTAKE_SCHEMAS)}")
+    retired = retired_problems(doc)
+    if retired:
+        raise InputError(f"{path} is not a valid {schema}: {retired[0]}")
     errors = validate(schema, doc)
     if errors:
         raise InputError(f"{path} is not a valid {schema}: {errors[0]}")
@@ -240,14 +260,14 @@ def load_intake(factory, repo: str) -> dict | None:
         raise InputError(f"{path} is not valid: approved_by is the person who registered it (nobody approves their own registration)")
     if schema == "intake.v2":
         _check_floor(path, doc)
-    # scorecard-assess greps this exact line (the poller reads the YAML); any other spelling would split the two.
-    if doc.get("scorecard") == "central" and "scorecard: central" not in path.read_text(encoding="utf-8").splitlines():
+    # scorecard-assess greps this exact line (the poller reads the YAML); any other spelling would split the two. grep -qxF ends a line
+    # at \n only: read the bytes (read_text would turn \r\n into \n) and split there, so a CRLF line or one after U+2028 is not it.
+    if doc.get("scorecard") == "central" and "scorecard: central" not in path.read_bytes().decode("utf-8").split("\n"):
         raise InputError(f"{path} is not valid: the central mark must be the exact line `scorecard: central` (no quotes, comment or extra spaces)")
     return doc
 
 
 TIER_ORDER = ("low", "moderate", "high")
-CLASSIFICATION_ORDER = ("public", "internal", "restricted", "phi")
 FLOOR_FIELDS = ("evidence_commit", "floor_tier", "floor_classification")
 
 
@@ -267,7 +287,8 @@ def _check_floor(path, doc: dict) -> None:
     if below and override is None:
         raise InputError(f"{path} is not valid: the tier or data_classification is below the floor without floor_override")
     if override is not None and not below:
-        raise InputError(f"{path} is not valid: it has floor_override but the record is not below the floor")
+        raise InputError(f"{path} is not valid: it has floor_override but the record is not below the floor: delete floor_override "
+                         "(after a change of levels or floor rules, an override may no longer be needed)")
     if override is not None:
         if override["by"] != doc["approved_by"]:
             raise InputError(f"{path} is not valid: floor_override.by must be approved_by")
@@ -287,7 +308,7 @@ def load_registration_rules(factory) -> dict:
     doc = _checked(path, "registration-rules.v1")
     tiers = [TIER_ORDER.index(doc["classification_tier"][c]) for c in CLASSIFICATION_ORDER]
     if tiers != sorted(tiers):
-        raise InputError(f"{path} classification_tier must not decrease from public to phi")
+        raise InputError(f"{path} classification_tier must not decrease from public to protected")
     return doc
 
 

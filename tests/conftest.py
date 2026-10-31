@@ -9,7 +9,7 @@ NOTES_SPEC = {
     "server": "uvicorn",
     "port": 8080,
     "health_path": "/healthz",
-    "data_classification": "internal",
+    "data_classification": "public",
     "egress": [{"host": "litellm.internal", "port": 443, "reason": "model calls through the platform gateway"}],
     "env": [{"name": "NOTES_DB_URL", "secret": True}],
     "resources_tier": "default",

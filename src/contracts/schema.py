@@ -43,7 +43,7 @@ def _validator(name: str) -> Draft202012Validator:
 # `format: date-time` is checked only when an optional package is installed, so these fields are parsed here as well: the
 # schema's pattern fixes the shape, this proves the instant exists (no month 99, no February 30).
 DATE_TIME_FIELDS = {"intake.v2": ("approved_at", "floor_override.at"), "identity-link.v1": ("created_at",), "binding.v1": ("linked_at",),
-                   "binding.v2": ("linked_at",)}
+                   "binding.v2": ("linked_at",), "re-review-event.v1": ("created",)}
 
 
 def _at(document, dotted):

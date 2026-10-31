@@ -7,6 +7,8 @@ import os
 from importlib import resources
 from pathlib import Path
 
+from contracts.classification import POLICY_PLACEHOLDER, policy_link_ok
+
 
 def _data(name: str) -> str:
     return resources.files("builder").joinpath("data", name).read_text(encoding="utf-8")
@@ -26,6 +28,15 @@ def gate2_single_approver(platform: dict) -> bool:
     value = platform.get("gate2_single_approver", False)
     if type(value) is not bool:
         raise ValueError("gate2_single_approver in the platform config must be true or false")
+    return value
+
+
+def classification_policy_url(platform: dict) -> str:
+    """The data classification policy's link from the platform config (configure.py --classification-policy-url). Missing means the
+    placeholder; anything but a valid link (contracts.classification.policy_link_ok) is an error."""
+    value = platform.get("classification_policy_url", POLICY_PLACEHOLDER)
+    if not policy_link_ok(value):
+        raise ValueError("classification_policy_url in the platform config must be an https link (see contracts.classification)")
     return value
 
 

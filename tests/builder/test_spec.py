@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from builder.config import load_platform
@@ -258,3 +260,16 @@ def test_secretserver_names_are_the_platform_s(notes_spec, python_app):
     notes_spec["env"].append({"name": "SECRETSERVER_URL", "secret": False})
     errors = check(notes_spec, python_app)[0]
     assert any("SECRETSERVER_" in e and "Secret Server" in e for e in errors), errors
+
+
+@pytest.mark.parametrize("old, new", [("internal", "confidential"), ("restricted", "confidential"), ("phi", "protected")])
+def test_a_retired_classification_names_its_replacement(notes_spec, python_app, old, new):
+    errors, questions, warnings = check({**notes_spec, "data_classification": old}, python_app)
+    assert errors == [f"data_classification: `{old}` is retired: use `{new}`"] and questions == [] and warnings == []
+
+
+def test_a_deeply_nested_spec_is_an_error_not_a_crash(notes_spec, python_app):
+    deep = json.loads("[" * 3000 + "]" * 3000)
+    for spec in ({**notes_spec, "data_classification": deep}, deep):
+        errors, _, _ = check(spec, python_app)
+        assert errors

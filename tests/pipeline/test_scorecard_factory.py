@@ -49,6 +49,15 @@ def test_the_factory_config_is_the_tested_sample_config_with_only_the_deployment
     assert_factory_config_matches_sample(FACTORY, json.loads((ROOT / "platform/required-checks.json").read_text())["required"])
 
 
+def test_the_scorecard_s_classification_maps_are_the_three_levels():
+    """Spec 2026-10-30 decision 4: two old levels merged into confidential take the stricter value."""
+    from scorecard.config import load_config
+
+    config = load_config(FACTORY)
+    assert config["classification_asvs_level"] == {"public": 1, "confidential": 2, "protected": 2}
+    assert config["sensitive_classifications"] == ["confidential", "protected"]
+
+
 def test_the_deployment_values_start_empty_or_as_placeholders():
     from scorecard.config import load_config
 
@@ -75,7 +84,7 @@ def test_the_hello_app_intake_record_loads():
 
     owner = intake_owner()
     intake = load_intake(FACTORY, f"{owner}/hello-app")
-    assert intake["tier"] == "moderate" and intake["data_classification"] == "internal"
+    assert intake["tier"] == "moderate" and intake["data_classification"] == "confidential"
     assert intake["data_classification"] == json.loads((APP / "builder-spec.json").read_text())["data_classification"]
     assert sorted((FACTORY / "intake").rglob("*.yaml")) == sorted([FACTORY / f"intake/{owner}/golden-road-portal.yaml", FACTORY / f"intake/{owner}/hello-app.yaml"])
 
@@ -706,7 +715,7 @@ def test_the_poc_doc_creates_main_review_before_it_replaces_main():
 def test_the_factory_s_registration_rules_are_valid_and_security_owns_them():
     from scorecard.config import load_registration_rules
     rules = load_registration_rules(FACTORY)
-    assert rules["no_spec"] == {"tier": "high", "data_classification": "restricted"} and rules["many_dependencies_over"] == 50
+    assert rules["no_spec"] == {"tier": "high", "data_classification": "confidential"} and rules["many_dependencies_over"] == 50
     owners = (FACTORY / ".github/CODEOWNERS").read_text()
     if "ORG_PLACEHOLDER" in owners or re.search(r"^/config/registration\.yaml\s+@\S+/\S+", owners, re.M):  # team owners: the security team
         assert re.search(r"^/config/registration\.yaml\s+.*security", owners, re.M)

@@ -74,19 +74,19 @@ def test_a_no_answer_does_not_fire():
 
 def test_escalate_for_sensitive_classifications():
     routing = {"rules": [_rule("T-10", {"fact": "q", "is": True}, level="elevated", on_unsure="standard",
-                               escalate={"classifications": ["restricted", "phi"], "level": "security_review"})]}
-    assert evaluate(routing, {"q": _agent(True)}, classification="phi", floor="standard")[0] == "security_review"
-    assert evaluate(routing, {"q": _agent(True)}, classification="internal", floor="standard")[0] == "elevated"
+                               escalate={"classifications": ["confidential", "protected"], "level": "security_review"})]}
+    assert evaluate(routing, {"q": _agent(True)}, classification="protected", floor="standard")[0] == "security_review"
+    assert evaluate(routing, {"q": _agent(True)}, classification="public", floor="standard")[0] == "elevated"
 
 
 def test_spec_conditions():
-    facts = {"cls": _spec("ordered", "internal", "phi", order=["public", "internal", "restricted", "phi"]),
+    facts = {"cls": _spec("ordered", "public", "protected", order=["public", "confidential", "protected"]),
              "roles": _spec("number", 2, 3), "hosts": _spec("list", [], ["api.example.com"], added=["api.example.com"]),
              "grants": _spec("grants", [], [{"justification": "search uses POST bodies"}], added=[{"justification": "search uses POST bodies"}]),
              "none": _spec("ordered", None, None, order=["default", "medium"])}
     def fired(cond):
         return bool(evaluate({"rules": [_rule("T-30", cond)]}, facts, classification=None, floor="standard")[1])
-    assert fired({"fact": "cls", "changed": "up"}) and fired({"fact": "cls", "is": "phi"}) and fired({"fact": "cls", "any": ["restricted", "phi"]})
+    assert fired({"fact": "cls", "changed": "up"}) and fired({"fact": "cls", "is": "protected"}) and fired({"fact": "cls", "any": ["confidential", "protected"]})
     assert fired({"fact": "roles", "over": 2}) and fired({"fact": "roles", "at_least": 3}) and not fired({"fact": "roles", "over": 3})
     assert fired({"fact": "hosts", "changed": "added"}) and fired({"fact": "hosts", "any": ["api.example.com"]})
     assert fired({"fact": "grants", "changed": "added"}) and not fired({"fact": "none", "changed": "up"})

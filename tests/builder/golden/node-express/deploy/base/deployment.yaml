@@ -16,7 +16,7 @@ spec:
       labels:
         app.kubernetes.io/name: notes-node
         app.kubernetes.io/managed-by: golden-road-builder
-        platform/data-classification: internal
+        platform/data-classification: public
     spec:
       serviceAccountName: notes-node
       automountServiceAccountToken: false

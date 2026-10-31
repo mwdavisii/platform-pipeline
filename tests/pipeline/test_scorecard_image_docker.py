@@ -135,7 +135,7 @@ def test_the_agent_step_and_scorecard_run_in_the_image(builder_image, tmp_path):
     assert run.returncode == 0, run.stderr
     card = json.loads((tmp_path / "out/scorecard.json").read_text())
     # T-14: the gateway is unreachable. T-21: this fixture app has no builder-spec.json, so the floor computed from the PR is the
-    # no-spec one (high/restricted), above its moderate/internal registration, which takes the level to security_review.
+    # no-spec one (high/confidential), above its moderate/public registration, which takes the level to security_review.
     assert card["level"] == "security_review" and {"T-14", "T-21"} <= set(card["triggers_fired"]), card["triggers_fired"]
     assert any("signals: no_spec" in r["summary"] for r in card["reasons"] if r["trigger"] == "T-21")
     assert (tmp_path / "out/comment.md").read_text().startswith("<!-- golden-road:scorecard -->\n")

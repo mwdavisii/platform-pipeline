@@ -7,6 +7,7 @@ Returns (errors, questions, warnings). Errors mean the spec breaks a rule
 import re
 from pathlib import Path
 
+from contracts.classification import retired_problems
 from contracts.schema import validate as schema_validate
 
 from .config import is_denied_egress, is_model_provider
@@ -18,6 +19,9 @@ STATIC_PORT = 8080  # the unprivileged nginx port
 
 
 def check_spec(spec: dict, root: Path, platform: dict) -> tuple[list[str], list[str], list[str]]:
+    retired = retired_problems(spec)  # before the schema, so the message names the replacement (spec 2026-10-30 C4)
+    if retired:
+        return [f"data_classification: {message}" for message in retired], [], []
     errors = schema_validate("builder-spec.v1", spec)
     if errors:
         return errors, [], []

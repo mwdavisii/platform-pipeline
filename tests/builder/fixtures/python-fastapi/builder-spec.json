@@ -5,7 +5,7 @@
   "server": "uvicorn",
   "port": 8080,
   "health_path": "/healthz",
-  "data_classification": "internal",
+  "data_classification": "public",
   "egress": [
     {
       "host": "litellm.internal",

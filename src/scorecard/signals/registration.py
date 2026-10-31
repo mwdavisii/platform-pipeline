@@ -13,6 +13,7 @@ every file is read as the blob stored at the commit (symlinks and submodules are
 import json
 import re
 
+from contracts.classification import LEVELS, RETIRED, retired_message, retired_values
 from contracts.schema import validate
 from golden_road.io import InputError
 
@@ -63,27 +64,32 @@ def _json(raw):
 
 
 def _spec(root, commit, signals):
+    """(the spec or None, the level a retired data_classification maps to or None)."""
     raw = _read(root, commit, "builder-spec.json", CAPS["builder-spec.json"])
     if raw is None:
         signals.append(_signal("no_spec", "No builder-spec.json in the repository at this commit."))
-        return None
+        return None, None
     if raw is UNREADABLE:
         signals.append(_unreadable("builder-spec.json"))
-        return None
+        return None, None
     doc = _json(raw)
+    retired = retired_values(doc)
+    if retired:  # builder 0.5.0 (spec 2026-10-30 C4): name the replacement, and keep the level it maps to for the floor
+        signals.append(_signal("no_spec", f"builder-spec.json: {retired_message(retired[0])}."))
+        return None, max((RETIRED[v] for v in retired), key=LEVELS.index)
     if doc is UNREADABLE or validate("builder-spec.v1", doc):
         signals.append(_signal("no_spec", "builder-spec.json is not valid builder-spec/v1."))
-        return None
+        return None, None
     authz = doc.get("authz") or {}
     lists = [doc.get("egress", []), doc.get("env", []), authz.get("roles", []), authz.get("rules", [])]
     if any(len(items) > MAX_ITEMS for items in lists):
         signals.append(_unreadable("builder-spec.json"))
-        return None
+        return None, None
     copied = [e["name"] for e in doc["env"] if e.get("secret") is True] + [r["name"] for r in authz.get("roles", []) if r["access"] == "write"]
     if any(len(name) > MAX_NAME for name in copied):
         signals.append(_signal("no_spec", "builder-spec.json is not valid builder-spec/v1."))
-        return None
-    return doc
+        return None, None
+    return doc, None
 
 
 def _count(name, raw) -> int | None:
@@ -128,11 +134,11 @@ def _builder_version(root, commit, signals):
 def compute_evidence(root, *, repo: str, commit: str, gateway_hosts, many_dependencies_over: int) -> dict:
     """registration-evidence/v1 for the tree of `commit` in the repository at `root`. Raises InputError when the result isn't a valid document."""
     signals: list[dict] = []
-    spec = _spec(root, commit, signals)
+    spec, retired = _spec(root, commit, signals)
     version = _builder_version(root, commit, signals)
     dependencies = _dependencies(root, commit, spec, signals)
     doc = {"schema": "registration-evidence/v1", "repo": repo, "commit": commit, "spec_present": spec is not None,
-           "data_classification": None, "app_type": None, "resources_tier": None, "egress": [], "secret_env": [], "write_roles": [],
+           "data_classification": retired, "app_type": None, "resources_tier": None, "egress": [], "secret_env": [], "write_roles": [],
            "write_routes": 0, "builder_version": version, "dependencies": dependencies, "signals": signals}
     if spec is not None:
         authz = spec.get("authz") or {}
@@ -173,8 +179,10 @@ def compute_floor(evidence: dict, rules: dict) -> tuple[str, str]:
     if spec:
         cls = evidence["data_classification"] if evidence["data_classification"] in CLASSIFICATION_ORDER else CLASSIFICATION_ORDER[-1]
         tiers = [rules["classification_tier"][cls]]
-    else:
+    else:  # a retired spec's evidence carries the level it maps to: the floor is never below it (spec 2026-10-30 C4)
         cls, tiers = rules["no_spec"]["data_classification"], []
+        if evidence["data_classification"] in CLASSIFICATION_ORDER:
+            cls = max(cls, evidence["data_classification"], key=lambda c: _rank(CLASSIFICATION_ORDER, c))
     tiers += [rules["raise_to"][r] for r in RAISES if r in fired]
     if no_spec:
         cls = max(cls, rules["no_spec"]["data_classification"], key=lambda c: _rank(CLASSIFICATION_ORDER, c))

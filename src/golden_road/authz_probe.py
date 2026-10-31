@@ -20,6 +20,7 @@ from pathlib import Path
 from builder.config import load_platform
 from builder.detect import find_routes
 from builder.render.authz import policy_json
+from contracts.classification import retired_problems
 from contracts.schema import validate
 
 from .io import InputError, load_json
@@ -183,7 +184,7 @@ def wait_ready(base_url: str, path: str, timeout: float) -> bool:
 def probe(root, base_url: str, *, platform: dict | None = None, ready_timeout: float = 60.0, deadline: float = 300.0) -> dict:
     root = Path(root)
     spec = load_json(root / "builder-spec.json")
-    errors = validate("builder-spec.v1", spec)
+    errors = retired_problems(spec) or validate("builder-spec.v1", spec)  # a retired level names its replacement (spec 2026-10-30 C4)
     if errors:
         raise InputError(f"builder-spec.json is invalid: {errors[0]}")
     if not spec.get("authz"):

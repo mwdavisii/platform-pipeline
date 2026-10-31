@@ -28,6 +28,7 @@
   "dns": {"namespace": "kube-system", "pod_labels": {"k8s-app": "kube-dns"}},
   "in_cluster_egress": {},
   "identity_header": "X-Platform-Roles",
+  "classification_policy_url": "https://policies.example.com/data-classification",
   "resources_tiers": {
     "default": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"cpu": "250m", "memory": "256Mi"}},
     "medium": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "500m", "memory": "512Mi"}}

@@ -115,7 +115,7 @@ def test_assessment_rejects(mutate):
 )
 def test_intake_v1_rejects(mutate):
     doc = {"schema": "intake/v1", "repo": "acme/notes", "tier": "moderate", "purpose": "Stores short team notes.", "owner": "team",
-           "data_classification": "internal"}
+           "data_classification": "public"}
     assert validate("intake.v1", doc) == []
     mutate(doc)
     assert validate("intake.v1", doc)

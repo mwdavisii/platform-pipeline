@@ -108,6 +108,7 @@ def unconfigure_platform(platform_dir):
     doc["model_gateway_hosts"] = ["llm.replace-me.invalid"]
     doc["edge_ingress"] = {"namespace": "replace-me", "pod_labels": {"app": "replace-me"}}
     doc["identity_header"] = "X-replace-me"
+    doc["classification_policy_url"] = "https://policies.example.com/data-classification"  # contracts.classification.POLICY_PLACEHOLDER
     path.write_text(json.dumps(doc, indent=2) + "\n")
 
 

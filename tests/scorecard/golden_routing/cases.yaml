@@ -37,7 +37,7 @@
         "server": "uvicorn",
         "port": 8080,
         "health_path": "/healthz",
-        "data_classification": "internal",
+        "data_classification": "public",
         "egress": [
           {
             "host": "litellm.internal",
@@ -177,7 +177,7 @@
         "server": "uvicorn",
         "port": 8080,
         "health_path": "/healthz",
-        "data_classification": "internal",
+        "data_classification": "public",
         "egress": [
           {
             "host": "litellm.internal",
@@ -316,7 +316,7 @@
         "server": "uvicorn",
         "port": 8080,
         "health_path": "/healthz",
-        "data_classification": "internal",
+        "data_classification": "public",
         "egress": [
           {
             "host": "litellm.internal",
@@ -412,7 +412,7 @@
         "server": "uvicorn",
         "port": 8080,
         "health_path": "/healthz",
-        "data_classification": "internal",
+        "data_classification": "public",
         "egress": [
           {
             "host": "litellm.internal",
@@ -530,7 +530,7 @@
         "server": "uvicorn",
         "port": 8080,
         "health_path": "/healthz",
-        "data_classification": "internal",
+        "data_classification": "public",
         "egress": [
           {
             "host": "litellm.internal",
@@ -659,7 +659,7 @@
         "server": "uvicorn",
         "port": 8080,
         "health_path": "/healthz",
-        "data_classification": "internal",
+        "data_classification": "public",
         "egress": [
           {
             "host": "litellm.internal",
@@ -793,7 +793,7 @@
         "server": "uvicorn",
         "port": 8080,
         "health_path": "/healthz",
-        "data_classification": "internal",
+        "data_classification": "public",
         "egress": [
           {
             "host": "litellm.internal",
@@ -911,7 +911,7 @@
         "server": "uvicorn",
         "port": 8080,
         "health_path": "/healthz",
-        "data_classification": "internal",
+        "data_classification": "public",
         "egress": [
           {
             "host": "litellm.internal",
@@ -1027,7 +1027,7 @@
         "server": "uvicorn",
         "port": 8080,
         "health_path": "/healthz",
-        "data_classification": "internal",
+        "data_classification": "public",
         "egress": [
           {
             "host": "litellm.internal",
@@ -1144,7 +1144,7 @@
         "server": "uvicorn",
         "port": 8080,
         "health_path": "/healthz",
-        "data_classification": "internal",
+        "data_classification": "public",
         "egress": [
           {
             "host": "litellm.internal",
@@ -1285,7 +1285,7 @@
         "server": "uvicorn",
         "port": 8080,
         "health_path": "/healthz",
-        "data_classification": "internal",
+        "data_classification": "public",
         "egress": [
           {
             "host": "litellm.internal",
@@ -1389,7 +1389,7 @@
     requirements.txt: "fastapi==0.115.0 \\\n    --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nuvicorn==0.30.0\
       \ \\\n    --hash=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
     builder-spec.json: "{\n  \"app_name\": \"notes-api\",\n  \"app_type\": \"python\",\n  \"entrypoint\": \"app:app\",\n  \"server\": \"uvicorn\"\
-      ,\n  \"port\": 8080,\n  \"health_path\": \"/healthz\",\n  \"data_classification\": \"internal\",\n  \"egress\": [\n    {\n      \"host\"\
+      ,\n  \"port\": 8080,\n  \"health_path\": \"/healthz\",\n  \"data_classification\": \"public\",\n  \"egress\": [\n    {\n      \"host\"\
       : \"litellm.internal\",\n      \"port\": 443,\n      \"reason\": \"model calls through the platform gateway\"\n    }\n  ],\n  \"env\": [\n\
       \    {\n      \"name\": \"NOTES_DB_URL\",\n      \"secret\": true\n    }\n  ],\n  \"resources_tier\": \"default\",\n  \"authz\": {\n   \
       \ \"roles\": [\n      {\n        \"name\": \"reader\",\n        \"access\": \"read\"\n      },\n      {\n        \"name\": \"writer\",\n\
@@ -1434,7 +1434,7 @@
     requirements.txt: "fastapi==0.115.0 \\\n    --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nuvicorn==0.30.0\
       \ \\\n    --hash=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
     builder-spec.json: "{\n  \"app_name\": \"notes-api\",\n  \"app_type\": \"python\",\n  \"entrypoint\": \"app:app\",\n  \"server\": \"uvicorn\"\
-      ,\n  \"port\": 8080,\n  \"health_path\": \"/healthz\",\n  \"data_classification\": \"internal\",\n  \"egress\": [\n    {\n      \"host\"\
+      ,\n  \"port\": 8080,\n  \"health_path\": \"/healthz\",\n  \"data_classification\": \"public\",\n  \"egress\": [\n    {\n      \"host\"\
       : \"litellm.internal\",\n      \"port\": 443,\n      \"reason\": \"model calls through the platform gateway\"\n    }\n  ],\n  \"env\": [\n\
       \    {\n      \"name\": \"NOTES_DB_URL\",\n      \"secret\": true\n    }\n  ],\n  \"resources_tier\": \"default\",\n  \"authz\": {\n   \
       \ \"roles\": [\n      {\n        \"name\": \"reader\",\n        \"access\": \"read\"\n      },\n      {\n        \"name\": \"writer\",\n\
@@ -1477,7 +1477,7 @@
     requirements.txt: "fastapi==0.115.0 \\\n    --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nuvicorn==0.30.0\
       \ \\\n    --hash=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
     builder-spec.json: "{\n  \"app_name\": \"notes-api\",\n  \"app_type\": \"python\",\n  \"entrypoint\": \"app:app\",\n  \"server\": \"uvicorn\"\
-      ,\n  \"port\": 8080,\n  \"health_path\": \"/healthz\",\n  \"data_classification\": \"internal\",\n  \"egress\": [\n    {\n      \"host\"\
+      ,\n  \"port\": 8080,\n  \"health_path\": \"/healthz\",\n  \"data_classification\": \"public\",\n  \"egress\": [\n    {\n      \"host\"\
       : \"litellm.internal\",\n      \"port\": 443,\n      \"reason\": \"model calls through the platform gateway\"\n    }\n  ],\n  \"env\": [\n\
       \    {\n      \"name\": \"NOTES_DB_URL\",\n      \"secret\": true\n    }\n  ],\n  \"resources_tier\": \"default\",\n  \"authz\": {\n   \
       \ \"roles\": [\n      {\n        \"name\": \"reader\",\n        \"access\": \"read\"\n      },\n      {\n        \"name\": \"writer\",\n\
@@ -1520,7 +1520,7 @@
     requirements.txt: "fastapi==0.115.0 \\\n    --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nuvicorn==0.30.0\
       \ \\\n    --hash=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
     builder-spec.json: "{\n  \"app_name\": \"notes-api\",\n  \"app_type\": \"python\",\n  \"entrypoint\": \"app:app\",\n  \"server\": \"uvicorn\"\
-      ,\n  \"port\": 8080,\n  \"health_path\": \"/healthz\",\n  \"data_classification\": \"internal\",\n  \"egress\": [\n    {\n      \"host\"\
+      ,\n  \"port\": 8080,\n  \"health_path\": \"/healthz\",\n  \"data_classification\": \"public\",\n  \"egress\": [\n    {\n      \"host\"\
       : \"litellm.internal\",\n      \"port\": 443,\n      \"reason\": \"model calls through the platform gateway\"\n    }\n  ],\n  \"env\": [\n\
       \    {\n      \"name\": \"NOTES_DB_URL\",\n      \"secret\": true\n    }\n  ],\n  \"resources_tier\": \"default\",\n  \"authz\": {\n   \
       \ \"roles\": [\n      {\n        \"name\": \"reader\",\n        \"access\": \"read\"\n      },\n      {\n        \"name\": \"writer\",\n\
@@ -1563,7 +1563,7 @@
     requirements.txt: "fastapi==0.115.0 \\\n    --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nuvicorn==0.30.0\
       \ \\\n    --hash=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
     builder-spec.json: "{\n  \"app_name\": \"notes-api\",\n  \"app_type\": \"python\",\n  \"entrypoint\": \"app:app\",\n  \"server\": \"uvicorn\"\
-      ,\n  \"port\": 8080,\n  \"health_path\": \"/healthz\",\n  \"data_classification\": \"internal\",\n  \"egress\": [\n    {\n      \"host\"\
+      ,\n  \"port\": 8080,\n  \"health_path\": \"/healthz\",\n  \"data_classification\": \"public\",\n  \"egress\": [\n    {\n      \"host\"\
       : \"litellm.internal\",\n      \"port\": 443,\n      \"reason\": \"model calls through the platform gateway\"\n    }\n  ],\n  \"env\": [\n\
       \    {\n      \"name\": \"NOTES_DB_URL\",\n      \"secret\": true\n    }\n  ],\n  \"resources_tier\": \"default\",\n  \"authz\": {\n   \
       \ \"roles\": [\n      {\n        \"name\": \"reader\",\n        \"access\": \"read\"\n      },\n      {\n        \"name\": \"writer\",\n\
@@ -1606,7 +1606,7 @@
     requirements.txt: "fastapi==0.115.0 \\\n    --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nuvicorn==0.30.0\
       \ \\\n    --hash=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
     builder-spec.json: "{\n  \"app_name\": \"notes-api\",\n  \"app_type\": \"python\",\n  \"entrypoint\": \"app:app\",\n  \"server\": \"uvicorn\"\
-      ,\n  \"port\": 8080,\n  \"health_path\": \"/healthz\",\n  \"data_classification\": \"internal\",\n  \"egress\": [\n    {\n      \"host\"\
+      ,\n  \"port\": 8080,\n  \"health_path\": \"/healthz\",\n  \"data_classification\": \"public\",\n  \"egress\": [\n    {\n      \"host\"\
       : \"litellm.internal\",\n      \"port\": 443,\n      \"reason\": \"model calls through the platform gateway\"\n    }\n  ],\n  \"env\": [\n\
       \    {\n      \"name\": \"NOTES_DB_URL\",\n      \"secret\": true\n    }\n  ],\n  \"resources_tier\": \"default\",\n  \"authz\": {\n   \
       \ \"roles\": [\n      {\n        \"name\": \"reader\",\n        \"access\": \"read\"\n      },\n      {\n        \"name\": \"writer\",\n\
@@ -1649,7 +1649,7 @@
     requirements.txt: "fastapi==0.115.0 \\\n    --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nuvicorn==0.30.0\
       \ \\\n    --hash=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
     builder-spec.json: "{\n  \"app_name\": \"notes-api\",\n  \"app_type\": \"python\",\n  \"entrypoint\": \"app:app\",\n  \"server\": \"uvicorn\"\
-      ,\n  \"port\": 8080,\n  \"health_path\": \"/healthz\",\n  \"data_classification\": \"internal\",\n  \"egress\": [\n    {\n      \"host\"\
+      ,\n  \"port\": 8080,\n  \"health_path\": \"/healthz\",\n  \"data_classification\": \"public\",\n  \"egress\": [\n    {\n      \"host\"\
       : \"litellm.internal\",\n      \"port\": 443,\n      \"reason\": \"model calls through the platform gateway\"\n    }\n  ],\n  \"env\": [\n\
       \    {\n      \"name\": \"NOTES_DB_URL\",\n      \"secret\": true\n    }\n  ],\n  \"resources_tier\": \"default\",\n  \"authz\": {\n   \
       \ \"roles\": [\n      {\n        \"name\": \"reader\",\n        \"access\": \"read\"\n      },\n      {\n        \"name\": \"writer\",\n\
@@ -1697,7 +1697,7 @@
     requirements.txt: "fastapi==0.115.0 \\\n    --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n\
       uvicorn==0.30.0 \\\n    --hash=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
     builder-spec.json: "{\n  \"app_name\": \"notes-api\",\n  \"app_type\": \"python\",\n  \"entrypoint\": \"app:app\",\n \
-      \ \"server\": \"uvicorn\",\n  \"port\": 8080,\n  \"health_path\": \"/healthz\",\n  \"data_classification\": \"internal\"\
+      \ \"server\": \"uvicorn\",\n  \"port\": 8080,\n  \"health_path\": \"/healthz\",\n  \"data_classification\": \"public\"\
       ,\n  \"egress\": [\n    {\n      \"host\": \"litellm.internal\",\n      \"port\": 443,\n      \"reason\": \"model calls\
       \ through the platform gateway\"\n    }\n  ],\n  \"env\": [\n    {\n      \"name\": \"NOTES_DB_URL\",\n      \"secret\"\
       : true\n    }\n  ],\n  \"resources_tier\": \"default\",\n  \"authz\": {\n    \"roles\": [\n      {\n        \"name\"\

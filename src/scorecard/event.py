@@ -5,9 +5,19 @@ counts, and the recorded-only signals (versions, tier names, host:port values fr
 excerpts, justifications or finding text, so no model text can reach it.
 """
 
+import re
+
 from builder import VERSION as BUILDER_VERSION
 from contracts.schema import validate
 from golden_road.io import InputError
+
+
+CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")  # re-review-event/v1 refuses these in a summary: the portal stores and shows it
+
+
+def _one_line(signal: dict) -> dict:
+    """A routing summary can carry a fact's value: a control character in it becomes a space, so the event stays valid."""
+    return {**signal, "summary": CONTROL.sub(" ", signal["summary"])}
 
 
 def _order(signal: dict) -> tuple:
@@ -19,7 +29,7 @@ def re_review_event(card: dict, *, pr: int | None, head_sha: str, recorded: list
     fired = [{"id": r["trigger"], "kind": "trigger", "level": r["level"], "summary": r["summary"], "count": r.get("total", len(r["refs"]))}
              for r in card["reasons"]]
     signals, seen = [], set()
-    for signal in sorted(fired + [dict(s) for s in recorded], key=_order):
+    for signal in sorted((_one_line(s) for s in fired + [dict(s) for s in recorded]), key=_order):
         if signal["id"] not in seen:
             seen.add(signal["id"])
             signals.append(signal)

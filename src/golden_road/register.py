@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 
 from builder.config import load_platform
+from contracts.classification import LEVELS as CLASSIFICATIONS, RETIRED, retired_message
 from contracts.schema import validate
 
 from .io import InputError
@@ -15,8 +16,6 @@ from .io import InputError
 MAX_FRAGMENT = 16384  # register.js refuses a longer fragment
 MAX_PURPOSE = 4000
 PORTAL = re.compile(r"https://[A-Za-z0-9.-]+(:[0-9]{1,5})?/?")
-CLASSIFICATIONS = ("public", "internal", "restricted", "phi")
-TIERS = ("low", "moderate", "high")
 
 
 class NoPortal(Exception):
@@ -37,6 +36,8 @@ def spec_classification(root: Path) -> str | None:
         value = json.loads((root / "builder-spec.json").read_text(encoding="utf-8")).get("data_classification")
     except (OSError, ValueError, AttributeError):
         return None
+    if isinstance(value, str) and value in RETIRED:
+        raise InputError(f"builder-spec.json's data_classification: {retired_message(value)}. Change it and run builder generate . again.")
     return value if value in CLASSIFICATIONS else None
 
 
@@ -53,9 +54,11 @@ def read_purpose(path: Path | None) -> str | None:
     return text or None
 
 
-def draft(repo, purpose, classification, tier) -> dict:
+def draft(repo, purpose, classification) -> dict:
+    """The registration draft: the repo, and the purpose and classification when given. There is no tier: the platform computes a floor
+    and an admin decides (spec 2026-10-30 T1)."""
     doc = {"schema": "registration-draft/v1", "repo": repo}
-    for key, value in (("purpose", purpose), ("data_classification", classification), ("proposed_tier", tier)):
+    for key, value in (("purpose", purpose), ("data_classification", classification)):
         if value:
             doc[key] = value
     errors = validate("registration-draft.v1", doc)

@@ -7,8 +7,10 @@ tests/builder/test_guide.py fails if a validated field, an allowed value or a re
 import json
 from importlib import resources
 
+from contracts.classification import LEVELS, MEANS
+
 from . import VERSION
-from .config import load_platform, platform_sha256
+from .config import classification_policy_url, load_platform, platform_sha256
 from .errors import EXIT_DRIFT, EXIT_INVALID, EXIT_NEEDS_INPUT, EXIT_OK
 from .generate import BUILDER_DIRS
 from .lock import NEVER_EDIT, SPEC_PATH
@@ -30,7 +32,9 @@ FIELDS = {
     "server": (AGENT, ["python module:attr entrypoints only"]),
     "port": (AGENT, [f"static sites must use {STATIC_PORT}", "node apps must listen on process.env.PORT"]),
     "health_path": (AGENT, ["without it the health probe is TCP only"]),
-    "data_classification": (USER, ["ask the user; never infer it"]),
+    "data_classification": (USER, ["ask the user; never infer it",
+                                   "show the user data_classification.levels and data_classification.policy_url from this guide; "
+                                   "the user picks the level"]),
     "egress": (USER, ["every external host the app calls, with the reason"]),
     "egress[].host": (USER, ["model providers are rejected: model calls go to a model_gateway_hosts entry", "cloud metadata hosts are rejected"]),
     "egress[].port": (USER, []),
@@ -118,7 +122,8 @@ def _rules(gateways: list[str]) -> list[dict]:
 
 
 def guide() -> dict:
-    gateways = list(load_platform()["model_gateway_hosts"])
+    platform = load_platform()
+    gateways = list(platform["model_gateway_hosts"])
     fields = []
     for path, described in schema_fields().items():
         decided_by, rules = FIELDS[path]
@@ -127,6 +132,8 @@ def guide() -> dict:
         "builder_version": VERSION,
         "platform_config_sha256": platform_sha256(),
         "model_gateway_hosts": gateways,
+        "data_classification": {"levels": [{"level": level, "means": MEANS[level]} for level in LEVELS],
+                                "policy_url": classification_policy_url(platform)},
         "fields": fields,
         "reserved_env": {"names": dict(RESERVED_ENV), "prefixes": {f"{prefix}*": why for prefix, why in RESERVED_ENV_PREFIXES.items()}},
         "never_edit": list(NEVER_EDIT),

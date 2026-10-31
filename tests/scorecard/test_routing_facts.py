@@ -20,7 +20,7 @@ def _finding(trigger=None, vc=None, file="app.py", line=3):
 
 def _builtin(**kw):
     args = dict(findings=[], pr_hits=[], problems=[], lookup_failures=[], change_size={"lines": 10, "files": 1},
-                large_change={"lines": 1000, "files": 40}, intake={"tier": "low", "data_classification": "internal"},
+                large_change={"lines": 1000, "files": 40}, intake={"tier": "low", "data_classification": "public"},
                 registration=None, assessment_complete=True)
     return builtin_facts(**{**args, **kw})
 
@@ -45,11 +45,11 @@ def test_no_intake_problems_and_an_incomplete_review_are_facts():
 
 def test_large_change_and_registration_floor():
     facts = _builtin(change_size={"lines": 1001, "files": 2},
-                     registration={"tier": "high", "data_classification": "phi", "rules": ["phi field names"]})
+                     registration={"tier": "high", "data_classification": "protected", "rules": ["phi field names"]})
     assert facts["large_change"]["value"] and facts["large_change"]["params"] == {"lines": 1001, "files": 2}
     reg = facts["below_registration"]
     assert reg["value"] and reg["refs"] == [{"source": "phi field names"}]
-    assert reg["params"] == {"registered": "low/internal", "needed": "high/phi", "signals": "phi field names"}
+    assert reg["params"] == {"registered": "low/public", "needed": "high/protected", "signals": "phi field names"}
 
 
 def test_an_unmeasured_change_size_is_not_large():
@@ -61,7 +61,7 @@ def test_spec_measures(notes_spec):
     head = copy.deepcopy(notes_spec)
     head["authz"]["rules"].append({"methods": ["POST", "GET"], "path": "/api/search", "roles": ["reader"], "justification": "search uses POST bodies"})
     head["egress"].append({"host": "api.example.com", "port": 443, "reason": "weather data"})
-    head["data_classification"] = "restricted"
+    head["data_classification"] = "confidential"
     facts = spec_facts(json.dumps(notes_spec), json.dumps(head), GATEWAY)
     assert facts["role_count"]["value"] == 2 and facts["write_role_count"]["value"] == 1
     assert facts["secret_env"]["value"] == ["NOTES_DB_URL"]
@@ -70,7 +70,7 @@ def test_spec_measures(notes_spec):
     assert grants["base"] == [] and grants["added"] == [{"path": "/api/search", "methods": ["POST"], "roles": ["reader"],
                                                          "justification": "search uses POST bodies"}]
     c = facts["data_classification"]
-    assert (c["base"], c["head"], c["order"]) == ("internal", "restricted", ["public", "internal", "restricted", "phi"])
+    assert (c["base"], c["head"], c["order"]) == ("public", "confidential", ["public", "confidential", "protected"])
 
 
 def test_a_missing_or_invalid_spec_has_no_values():

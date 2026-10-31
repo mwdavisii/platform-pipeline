@@ -1,7 +1,7 @@
 name: charter-logs
-description: "Charter (data handling): update_note logs the whole request body. The intake classification is phi, so VC-6 is a security review."
+description: "Charter (data handling): update_note logs the whole request body. The intake classification is protected, so VC-6 is a security review."
 app: notes
-intake: {tier: moderate, data_classification: phi, purpose: "Stores short care-team notes about patients. It does not send email, call external APIs, or store files."}
+intake: {tier: moderate, data_classification: protected, purpose: "Stores short care-team notes about patients. It does not send email, call external APIs, or store files."}
 change:
   append:
     app.py: |

@@ -1,7 +1,7 @@
 name: charter-reader-writer
 description: "Charter (authorization logic): delete_note now lets any role delete, not only writers. The app-level control is weakened (VC-2)."
 app: notes
-intake: {tier: moderate, data_classification: internal, purpose: "Stores short team notes. It does not send email, call external APIs, or store files."}
+intake: {tier: moderate, data_classification: public, purpose: "Stores short team notes. It does not send email, call external APIs, or store files."}
 change:
   replace:
     app.py:

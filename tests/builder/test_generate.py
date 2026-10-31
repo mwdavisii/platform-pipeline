@@ -256,7 +256,7 @@ def test_generate_replaces_only_the_block(notes_spec, python_app):
     generate(python_app, notes_spec)
     path = python_app / "AGENTS.md"
     path.write_text("intro\n" + path.read_text().replace("Never make", "Feel free to make") + "outro\n")
-    notes_spec["data_classification"] = "restricted"
+    notes_spec["data_classification"] = "confidential"
     generate(python_app, notes_spec)
     assert path.read_text() == "intro\n" + render_blocks(notes_spec)["AGENTS.md"] + "outro\n"
 

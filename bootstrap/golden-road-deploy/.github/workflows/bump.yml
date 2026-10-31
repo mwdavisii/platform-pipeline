@@ -35,7 +35,7 @@ on:
 permissions: {}
 
 env:
-  BUILDER_IMAGE: ghcr.io/mwdavisii/golden-road-builder@sha256:0931e0cc50c18e8358952c3b5963e0d82d00e7bd1fe04d5805049f009419e0e1
+  BUILDER_IMAGE: ghcr.io/mwdavisii/golden-road-builder@sha256:68e266d326260005838ff77291cd4da66efb291658fbf99e25baceb59bf3d810
   # app: the deploy App's token opens the pull requests. configure.py --bump-workflow-token sets workflow, for the personal PoC only:
   # this workflow's own token, with the job's permissions rewritten to write, and a dispatch of deploy-check after each pull request.
   BUMP_TOKEN: workflow

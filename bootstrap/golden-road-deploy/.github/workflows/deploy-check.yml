@@ -26,7 +26,7 @@ on:
 permissions: {}
 
 env:
-  BUILDER_IMAGE: ghcr.io/mwdavisii/golden-road-builder@sha256:0931e0cc50c18e8358952c3b5963e0d82d00e7bd1fe04d5805049f009419e0e1
+  BUILDER_IMAGE: ghcr.io/mwdavisii/golden-road-builder@sha256:68e266d326260005838ff77291cd4da66efb291658fbf99e25baceb59bf3d810
   GATE_PREDICATE: https://golden-road.internal/gate-record/v1
   PROMOTION_PREDICATE: https://golden-road.internal/promotion/v1
   # refuse: a prod pin needs a promotion approved by someone other than the person who triggered it (the deploy-owner contract in

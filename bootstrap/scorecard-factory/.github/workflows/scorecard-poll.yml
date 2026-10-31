@@ -16,7 +16,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  BUILDER_IMAGE: ghcr.io/mwdavisii/golden-road-builder@sha256:0931e0cc50c18e8358952c3b5963e0d82d00e7bd1fe04d5805049f009419e0e1
+  BUILDER_IMAGE: ghcr.io/mwdavisii/golden-road-builder@sha256:68e266d326260005838ff77291cd4da66efb291658fbf99e25baceb59bf3d810
   ASSESS_WORKFLOW: scorecard-assess.yml
 
 jobs:

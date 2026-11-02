@@ -205,7 +205,7 @@ def test_0010_applies_to_a_database_migrated_through_0009_that_has_requests_and_
                           (old.id, "e" * 40, Jsonb(evidence_doc("acme/notes")), "f" * 40))
             waiting = store.create_registration(person_id=owner.id, draft={**draft, "repo": "acme/tools"}, now=NOW)
             store.add_evidence_problem(request_id=waiting.id, submission=1, problem="repo_unreadable", now=NOW)
-            monkeypatch.setattr(migrate, "migrations", lambda: every)
+            monkeypatch.setattr(migrate, "migrations", lambda: [p for p in every if p.stem[:4] <= "0010"])  # 0011 has its own test
             assert migrate.apply(dsn()) == ["0010_registration_changes_and_rereview"] and migrate.apply(dsn()) == []
             assert store.evidence_for(old.id, 1).record_sha is None and store.evidence_for(old.id, 1).record is None
             assert store.evidence_problem_for(waiting.id, 1) == "repo_unreadable"
@@ -548,7 +548,7 @@ def test_the_web_reads_the_collector_s_progress_and_never_writes_it(pg_db):
         c.execute("DELETE FROM rereview_pending_event")
     with conn_as(pg_db, "portal_web") as c:
         for table in ("rereview_watermark", "rereview_failed_run", "rereview_pending_event"):
-            c.execute(sql.SQL("SELECT count(*) FROM {}").format(sql.Identifier(table)))
+            c.execute(sql.Composed([sql.SQL("SELECT count(*) FROM "), sql.Identifier(table)]))
         with pytest.raises(errors.InsufficientPrivilege):
             c.execute("INSERT INTO rereview_pending_event (source, run_repo, run_id, repo, doc, seen_at) VALUES ('central', 'acme/f', 6, "
                       "'acme/x', '{}', now())")

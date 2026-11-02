@@ -215,7 +215,7 @@ def test_the_pr_files_verify_when_applied_to_main(tmp_path, released):
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(blob_for(tmp_path, path))
     from golden_road.deploy import verify_tree
-    assert verify_tree(released["deploy"]) == {"environments": 1, "problems": []}
+    assert verify_tree(released["deploy"]) == {"environments": 1, "problems": [], "warnings": []}
 
 
 def test_an_already_pinned_release_makes_no_api_write(tmp_path, released):
@@ -238,6 +238,25 @@ def test_the_schedule_bumps_a_pinned_app_to_its_newest_test_release(tmp_path, re
     paths, _ = tree_paths(tmp_path)
     assert paths == ["apps/acme/notes/test/release.yaml"], "only the pin changed: the same manifests compose to the same files"
     assert yaml.safe_load(blob_for(tmp_path, paths[0]))["release"] == NEWER_TAG
+
+
+def test_a_bump_never_changes_cloudflare_access(tmp_path, released):
+    """cloudflare-access.yaml depends only on bindings.yaml: compose writes it, and bump leaves it out of the pull request."""
+    d = released["deploy"] / "apps/acme/notes/test"
+    d.mkdir(parents=True)
+    (d / "bindings.yaml").write_text(yaml.safe_dump({
+        "schema": "binding/v2", "repo": REPO, "environment": "test", "linked_by": "p_" + "a" * 32, "linked_at": "2026-10-31T15:00:00Z",
+        "request": "r_" + "b" * 32,
+        "mcp": {"gateway": "mcp-test.example.com", "servers": [{"server_id": "notes", "name": "Notes", "verified_by": "mock-cloudflare"}]}}))
+    write_pin(released["deploy"], "test", TEST_TAG, released["text"], released["record"])
+    commit_all(released["deploy"])
+    newer = gate_record(release=NEWER_TAG, manifests_text=released["text"])
+    publish(tmp_path, NEWER_TAG, released["text"], newer, published="2026-10-29T16:05:00Z")
+    name, result = run(tmp_path)
+    assert result.returncode == 0, (name, result.stdout, result.stderr)
+    paths, _ = tree_paths(tmp_path)
+    assert paths == ["apps/acme/notes/test/release.yaml"]
+    assert not [p for p in paths if p.endswith("cloudflare-access.yaml")], "bump never writes the access file"
 
 
 def test_a_prod_release_opens_the_prod_pr(tmp_path, released):

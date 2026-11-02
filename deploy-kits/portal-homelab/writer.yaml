@@ -70,6 +70,30 @@ spec:
               name: golden-road-portal-config
               key: PORTAL_SECRET_SERVER
               optional: true
+        - name: PORTAL_CLOUDFLARE  # the Cloudflare the web picks MCP servers from; the writer re-checks every binding server against it
+          valueFrom:
+            configMapKeyRef:
+              name: golden-road-portal-config
+              key: PORTAL_CLOUDFLARE
+              optional: true
+        - name: PORTAL_MCP_GATEWAY_TEST  # the web's test gateway; the writer holds a binding's mcp.gateway to it
+          valueFrom:
+            configMapKeyRef:
+              name: golden-road-portal-config
+              key: PORTAL_MCP_GATEWAY_TEST
+              optional: true
+        - name: PORTAL_MCP_GATEWAY_PROD  # the web's prod gateway; the writer holds a binding's mcp.gateway to it
+          valueFrom:
+            configMapKeyRef:
+              name: golden-road-portal-config
+              key: PORTAL_MCP_GATEWAY_PROD
+              optional: true
+        - name: PORTAL_SKILLS_CATALOG  # the catalog the web picks from; the writer re-checks each skill and composes the skills ConfigMap from it
+          valueFrom:
+            configMapKeyRef:
+              name: golden-road-portal-config
+              key: PORTAL_SKILLS_CATALOG
+              optional: true
         - name: PORTAL_REPO_ADMINS_STALE_AFTER  # the web's limit: a binding's requester must be a recent admin of the repo
           valueFrom:
             configMapKeyRef:

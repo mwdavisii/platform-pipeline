@@ -83,7 +83,7 @@ def test_compose_writes_the_adapters_and_verify_checks_them(tmp_path, app, capsy
     assert json.loads(capsys.readouterr().out)["written"] == ["apps/acme/notes/test/composed.yaml", "apps/acme/notes/test/kustomization.yaml", FLUX, ARGO]
     want = adapters("acme", "notes", "test", "notes-test", repo_url=URL)
     assert {rel: (tmp_path / rel).read_text() for rel in want} == want
-    assert verify_tree(tmp_path) == {"environments": 1, "problems": []}
+    assert verify_tree(tmp_path) == {"environments": 1, "problems": [], "warnings": []}
 
 
 @pytest.mark.parametrize("rel", [FLUX, ARGO])

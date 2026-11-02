@@ -170,7 +170,7 @@ def detect(root: Path) -> dict:
         env_names = sorted((py_env | js_env) - _PLATFORM_ENV)
     else:
         hosts, env_names = [], []
-    from .spec import BINDING_ENV_PREFIXES, reserved_reason  # spec imports this module
+    from .spec import BINDING_ENV_NAMES, BINDING_ENV_PREFIXES, reserved_reason  # spec imports this module
     # A name the platform sets would fail the spec check, so the draft leaves it out; needs still lists it.
     platform_set = [n for n in env_names if reserved_reason(n)]
     draft["env"] = [{"name": n, "secret": bool(_SECRET_HINT.search(n))} for n in env_names if n not in platform_set]
@@ -187,11 +187,11 @@ def detect(root: Path) -> dict:
         questions.append(f"Found write endpoints ({listed}). Which roles exist, and which may write? This becomes the authz block.")
     if app_type == "node" and not node_reads_port(tree):
         questions.append("The server must listen on process.env.PORT.")
-    from_binding = [n for n in platform_set if n.startswith(BINDING_ENV_PREFIXES)]
+    from_binding = [n for n in platform_set if n.startswith(BINDING_ENV_PREFIXES) or n in BINDING_ENV_NAMES]
     if from_binding:
         questions.append(f"The app reads {', '.join(from_binding)}. The platform sets these from the app's binding (its Azure identity, "
-                         "Databricks connection and Delinea Secret Server secrets, linked on the app's page in the portal), so they are "
-                         "not in builder-spec.json.")
+                         "Databricks connection, Delinea Secret Server secrets, MCP servers and skills, linked on the app's page in the "
+                         "portal), so they are not in builder-spec.json.")
     questions.append("What data does this app handle: public, confidential or protected? Ask the user, and point them to the data "
                      f"classification policy: {classification_policy_url(platform)}")
 

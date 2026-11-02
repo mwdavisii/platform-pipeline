@@ -6,7 +6,7 @@ Usage: scripts/configure.py --org <org> --gateway-host <host> --edge-namespace N
                             [--github-host HOST] [--cert-oidc-issuer URL]
                             [--landing-page-url URL] [--approved-models-url URL] [--portal-url URL] [--classification-policy-url URL]
                             [--scorecard-mode {per-app,central} [--scorecard-app-id ID]] [--findings-bypass-team SLUG]
-                            [--bump-workflow-token]
+                            [--bump-workflow-token] [--mcp-gateway-test HOST] [--mcp-gateway-prod HOST] [--skills-repo OWNER/NAME]
 
 --scorecard-gateway-url is the chat-completions URL the scorecard's review agent calls from the CI runners. It
 defaults to https://<gateway host>/v1/chat/completions; pass it when the runners reach the gateway at another
@@ -45,6 +45,11 @@ per-app, records nothing and changes nothing. A later run may change the App ID;
 --findings-bypass-team (an org only; refused with --single-approver) names the team that may merge a PR past a high scorecard finding. It
 records findings_bypass_team in platform/platform.json and replaces the one bypass actor of the scorecard-findings rulesets (the repo admin
 role by default) with a Team whose actor_id is 0: the apply step looks the team's id up. Once recorded it can't change.
+
+--mcp-gateway-test and --mcp-gateway-prod are the host names of the two shared Cloudflare MCP gateways (one per environment), and
+--skills-repo is the platform's reviewed skills catalog (OWNER/NAME). They are recorded in platform/platform.json; deploy-check holds a
+binding's MCP gateway to them. Until given, the gateways are the placeholders mcp-test.example.com and mcp.example.com and the catalog is
+<org>/golden-road-skills. Like the links, a later run may change them.
 
 The edge selector and identity header come from the deploy owners. There are no defaults: the committed
 platform/platform.json carries `replace-me` placeholders for them, so an unconfigured tree is refused by the
@@ -250,6 +255,8 @@ FINDINGS_CONTEXT = "scorecard / findings"
 FINDINGS_RULESET_REL = Path(".github/rulesets/scorecard-findings.json")  # the app's only ruleset with a bypass actor
 APP_ID = re.compile(r"[1-9][0-9]{0,9}")
 TEAM_SLUG = re.compile(r"[a-z0-9][a-z0-9_-]{0,99}")
+SKILLS_REPO = re.compile(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}")  # builder.config.SKILLS_REPO
+MCP_GATEWAY_PLACEHOLDERS = {"test": "mcp-test.example.com", "prod": "mcp.example.com"}  # platform/platform.json as committed
 
 
 def _entry(context: str) -> re.Pattern:
@@ -513,6 +520,9 @@ def main() -> int:
                    help="PoC only: no deploy App; golden-road-deploy's bump writes with its own token and dispatches deploy-check")
     p.add_argument("--findings-bypass-team", default=None,
                    help="the slug of the org team that may merge past a high scorecard finding (default: the repo admin role, as in the PoC)")
+    p.add_argument("--mcp-gateway-test", default=None, help="the test environment's shared Cloudflare MCP gateway host (default mcp-test.example.com)")
+    p.add_argument("--mcp-gateway-prod", default=None, help="the prod environment's shared Cloudflare MCP gateway host (default mcp.example.com)")
+    p.add_argument("--skills-repo", default=None, help="the platform's reviewed skills catalog, OWNER/NAME (default <org>/golden-road-skills)")
     args = p.parse_args()
     if args.scorecard_app_id is not None and (not APP_ID.fullmatch(args.scorecard_app_id) or int(args.scorecard_app_id) >= 2**31):
         sys.exit("invalid --scorecard-app-id (the App ID: a positive whole number below 2147483648)")
@@ -525,6 +535,11 @@ def main() -> int:
         sys.exit("invalid --org")
     if not valid_host(args.gateway_host):
         sys.exit("invalid --gateway-host")
+    for flag, value in (("--mcp-gateway-test", args.mcp_gateway_test), ("--mcp-gateway-prod", args.mcp_gateway_prod)):
+        if value is not None and not valid_host(value):
+            sys.exit(f"invalid {flag}")
+    if args.skills_repo is not None and not SKILLS_REPO.fullmatch(args.skills_repo):
+        sys.exit("invalid --skills-repo (OWNER/NAME)")
     if not DNS_LABEL.fullmatch(args.edge_namespace):
         sys.exit("invalid --edge-namespace")
     if not args.edge_label:
@@ -561,7 +576,8 @@ def main() -> int:
         sys.exit("invalid --scorecard-gateway-url (an https URL with a host name and a path, no user info or fragment)")
     for value in (args.org, args.gateway_host, args.edge_namespace, args.identity_header, url, args.github_host or "",
                   args.cert_oidc_issuer or "", args.landing_page_url or "", args.approved_models_url or "", args.portal_url or "",
-                  args.classification_policy_url or "", args.findings_bypass_team or "", *args.edge_label):
+                  args.classification_policy_url or "", args.findings_bypass_team or "", args.mcp_gateway_test or "",
+                  args.mcp_gateway_prod or "", args.skills_repo or "", *args.edge_label):
         if "replace-me" in value.lower():
             sys.exit(f"{value!r} is still a placeholder")
 
@@ -580,7 +596,7 @@ def main() -> int:
     # Phase 1: compute and validate everything in memory. Nothing is written until all of it passes.
     if (root / "src").is_dir():
         sys.path.insert(0, str(root / "src"))
-    from builder.config import is_denied_egress, is_model_provider
+    from builder.config import is_denied_egress, is_model_provider, mcp_gateways, skills_repo
     from builder.errors import BuilderError
     from builder.spec import check_spec
     from contracts.classification import POLICY_PLACEHOLDER, policy_link_ok
@@ -590,6 +606,9 @@ def main() -> int:
         sys.exit("--gateway-host is a public model provider; use the platform gateway")
     if is_denied_egress(args.gateway_host, platform):
         sys.exit("--gateway-host is a denied egress host")
+    for flag, value in (("--mcp-gateway-test", args.mcp_gateway_test), ("--mcp-gateway-prod", args.mcp_gateway_prod)):
+        if value is not None and (is_model_provider(value, {**platform, "model_gateway_hosts": []}) or is_denied_egress(value, platform)):
+            sys.exit(f"{flag} is a public model provider or a denied host; use the shared Cloudflare MCP gateway")
     try:
         host, issuer = github_identity(platform, args.github_host, args.cert_oidc_issuer)
     except ValueError as exc:
@@ -626,6 +645,18 @@ def main() -> int:
         sys.exit("invalid --classification-policy-url (an https URL with a host name, at most 2048 characters; no user info, spaces, "
                  "quotes or brackets)")
     platform["classification_policy_url"] = policy_url
+    # Like the links, the MCP gateways and the skills catalog take part in no trust decision for the tree, so a later run may change
+    # them (a builder release then carries them). A recorded value is read through builder.config, so its shape is refused too.
+    try:
+        recorded_gateways, recorded_repo = mcp_gateways(platform), skills_repo(platform)
+    except ValueError as exc:
+        sys.exit(str(exc))
+    gateways = {"test": args.mcp_gateway_test or recorded_gateways.get("test") or MCP_GATEWAY_PLACEHOLDERS["test"],
+                "prod": args.mcp_gateway_prod or recorded_gateways.get("prod") or MCP_GATEWAY_PLACEHOLDERS["prod"]}
+    if gateways["test"] == gateways["prod"]:
+        sys.exit(f"the test and prod MCP gateways must differ (both are {gateways['test']})")
+    platform["mcp_gateways"] = gateways
+    platform["skills_repo"] = args.skills_repo or recorded_repo or f"{args.org}/golden-road-skills"
     recorded = platform.get("gate2_single_approver", False)
     if type(recorded) is not bool:
         sys.exit("gate2_single_approver in platform/platform.json must be true or false")

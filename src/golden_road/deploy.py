@@ -1,8 +1,11 @@
 """One environment directory of golden-road-deploy, on disk: apps/<owner>/<repo>/<env>/ holding release.yaml (deploy-release/v1),
 bindings.yaml (binding/v2, optional), base/manifests.yaml (the release's signed manifests, hash-checked) and the two generated
-files, composed.yaml and kustomization.yaml. compose_environment writes the generated files; verify_environment re-derives them
-in memory and reports every difference, so deploy-check can fail on a stale or hand-edited directory. Offline: nothing is
-fetched and nothing is applied.
+files, composed.yaml and kustomization.yaml, and a third, cloudflare-access.yaml, exactly when bindings.yaml has an mcp key.
+compose_environment writes the generated files; verify_environment re-derives them in memory and reports every difference, so
+deploy-check can fail on a stale or hand-edited directory. A binding's MCP gateway must be platform.json's for its environment, and
+its skills are rebuilt from the platform's catalog at each pinned commit (golden_road.skills_catalog). Offline: nothing is fetched
+and nothing is applied. cloudflare-access.yaml is never applied either: kustomization.yaml lists only composed.yaml, and a platform
+job (documented, not built) reconciles it into Cloudflare.
 
 Each environment also has two thin controller adapters, generated the same way: a Flux Kustomization under clusters/home/flux/
 with suspend: true, and an Argo CD Application under clusters/office/argo/ with no automated sync. Both point at the environment
@@ -17,19 +20,22 @@ from pathlib import Path
 
 import yaml
 
+from builder import config as builder_config
 from builder.spec import reserved_reason
 from contracts.schema import validate
 
-from . import off_by_default
-from .bindings import effects
-from .compose import EXTERNAL_SECRET_STORE, EXTERNAL_SECRET_SUFFIX, ComposeError, UniqueKeyLoader, compose, external_secret, kustomization
+from . import off_by_default, skills_catalog
+from .bindings import effects, mcp_token_name
+from .compose import (EXTERNAL_SECRET_STORE, EXTERNAL_SECRET_SUFFIX, MCP_TOKEN_KEYS, ComposeError, UniqueKeyLoader, cloudflare_access,
+                      compose, external_secret, kustomization)
 from .io import InputError, write_text_atomic
 from .render import MAX_FILE_BYTES, _read_yaml
 
 MAX_BINDING_BYTES = 65_536  # a binding is a few hundred bytes
 ENVIRONMENTS = ("test", "prod")
-GENERATED = ("composed.yaml", "kustomization.yaml")
-ALLOWED = {"release.yaml", "bindings.yaml", "base", "base/manifests.yaml", *GENERATED}
+GENERATED = ("composed.yaml", "kustomization.yaml")  # always generated
+CLOUDFLARE_ACCESS = "cloudflare-access.yaml"  # generated when bindings.yaml has an mcp key
+ALLOWED = {"release.yaml", "bindings.yaml", "base", "base/manifests.yaml", *GENERATED, CLOUDFLARE_ACCESS}
 NAMESPACE = re.compile(r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$")
 ENVIRONMENT_PATH = re.compile(r"^apps/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(test|prod)$")
 NAME_PART = re.compile(r"^[A-Za-z0-9_.-]+$")
@@ -147,40 +153,110 @@ def _reserved_secret_envs(binding) -> None:
             raise InputError(f"bindings.yaml's secret env {secret['env']} is reserved: {why}"[:300])
 
 
-def _generated(d: Path) -> tuple[dict, dict | None]:
+def _platform_gateways() -> dict:
+    """{"test": host, "prod": host} from the platform config the builder carries (configure.py --mcp-gateway-test/-prod)."""
+    try:
+        return builder_config.mcp_gateways(builder_config.load_platform())
+    except (ValueError, OSError) as exc:
+        raise InputError(str(exc)[:300]) from None
+
+
+def _mcp_problems(binding, *, strict: bool = True, warnings: list | None = None) -> None:
+    """bindings.yaml's mcp gateway is exactly platform.json's for the environment: a binding that changes can't send the app's token,
+    or its egress, anywhere else. Checked whenever the binding has an mcp key.
+
+    When the platform moves a gateway, the bindings that still name the old one are not all changed at once. So (final review, 0.6.0):
+    - an mcp with servers [] on an old gateway always passes: it grants nothing and opens no egress;
+    - with strict (the default, and every environment whose binding a pull request changes) a gateway that isn't platform.json's is
+      refused;
+    - without strict (an environment whose binding is unchanged: a pin, another app's PR) it is a warning, appended to `warnings`,
+      and the environment keeps the old gateway's egress until its servers are removed and added again.
+    A platform.json that names no gateway for the environment refuses every mcp, strict or not."""
+    mcp = (binding or {}).get("mcp")
+    if mcp is None:
+        return
+    environment = binding["environment"]
+    want = _platform_gateways().get(environment)
+    if mcp["gateway"] == want:
+        return
+    message = f"bindings.yaml's mcp gateway is {mcp['gateway']}, but platform.json's {environment} gateway is {want or 'not set'}"[:300]
+    if want is None or (strict and mcp.get("servers")):
+        raise InputError(message)
+    if mcp.get("servers") and warnings is not None:
+        warnings.append(f"{message}: kept because this binding is unchanged; remove its MCP servers and add them again")
+
+
+def _skills_for(binding, environment: str, catalog) -> dict | None:
+    """{name: {path: text}} for the binding's pinned skills, read from the catalog at each pin, or None when it pins none. A skill
+    another catalog verified, one not in this catalog at its commit, or one whose skill.yaml there doesn't list the environment, is
+    refused. (Its audience needs a person, so the portal checks that.)"""
+    pins = (binding or {}).get("skills") or []
+    if not pins:
+        return None
+    files = {}
+    for pin in pins:
+        name, commit = pin["name"], pin["commit"]
+        if pin["verified_by"] != catalog.name:
+            raise InputError(f"bindings.yaml's skill {name} was verified by {pin['verified_by']}, but this check reads {catalog.name}")
+        try:
+            meta, files[name] = catalog.skill(name, commit)
+        except skills_catalog.CatalogError as exc:
+            raise InputError(str(exc)[:300]) from None
+        if environment not in meta["environments"]:
+            raise InputError(f"skill {name} at {commit[:12]} is not allowed in {environment} (skill.yaml environments)")
+    return files
+
+
+def _generated(d: Path, catalog=None, *, strict_gateway: bool = True, warnings: list | None = None) -> tuple[dict, dict | None]:
     """({name: text} for the generated files, the binding they were composed from), from the files on disk. Raises InputError on
-    anything refused."""
+    anything refused. The skills catalog is read only when the binding pins skills (default: skills_catalog.default_catalog())."""
     release = load_release(d)
     binding = load_binding_v2(d, release)
     _reserved_secret_envs(binding)
+    gateway_warnings = []
+    _mcp_problems(binding, strict=strict_gateway, warnings=gateway_warnings)
+    if warnings is not None:
+        warnings.extend(f"{_rel(d)}: {w}" for w in gateway_warnings)
     base = d / "base"
     if base.is_symlink():
         raise InputError("base is a symlink")
     raw = _read_capped(base / "manifests.yaml", MAX_FILE_BYTES, "base/manifests.yaml")
     if hashlib.sha256(raw).hexdigest() != release["manifests_sha256"]:
         raise InputError("base/manifests.yaml is not the release's manifests: its sha256 is not release.yaml's manifests_sha256")
+    skills = None
+    if (binding or {}).get("skills"):
+        try:
+            skills = _skills_for(binding, release["environment"], catalog or skills_catalog.default_catalog())
+        except skills_catalog.CatalogError as exc:
+            raise InputError(str(exc)[:300]) from None
     try:
         text = raw.decode("utf-8")
-        return ({"composed.yaml": compose(text, release["image"], binding, namespace=release["namespace"]),
-                 "kustomization.yaml": kustomization(release["namespace"])}, binding)
+        texts = {"composed.yaml": compose(text, release["image"], binding, namespace=release["namespace"], skills=skills),
+                 "kustomization.yaml": kustomization(release["namespace"])}
+        access = cloudflare_access(binding)
     except UnicodeDecodeError:
         raise InputError("base/manifests.yaml is not UTF-8") from None
     except ComposeError as exc:
         raise InputError(str(exc)) from None
+    if access is not None:
+        texts[CLOUDFLARE_ACCESS] = access
+    return texts, binding
 
 
-def plan_environment(d) -> dict:
-    """{path: text} for one environment directory's composed.yaml and kustomization.yaml, computed without writing. Refuses the
-    directory on any problem verify_environment would report except the generated files being stale or missing."""
+def plan_environment(d, *, strict_gateway: bool = True, warnings: list | None = None) -> dict:
+    """{path: text} for one environment directory's composed.yaml and kustomization.yaml (and cloudflare-access.yaml, for a binding
+    with an mcp key), computed without writing. Refuses the directory on any problem verify_environment would report except the
+    generated files being stale or missing. strict_gateway=False is for a binding that isn't changing (bump's pins): an old MCP
+    gateway is then a warning (_mcp_problems)."""
     d = Path(d)
     problems = _scan(d)
     if problems:
         raise InputError(problems[0])
     try:
-        texts, _ = _generated(d)
+        texts, _ = _generated(d, strict_gateway=strict_gateway, warnings=warnings)
     except InputError as exc:
         raise InputError(f"{_rel(d)}: {exc}") from None
-    return {d / name: texts[name] for name in GENERATED}
+    return {d / name: text for name, text in texts.items()}
 
 
 def write_planned(planned: dict) -> list[Path]:
@@ -191,15 +267,15 @@ def write_planned(planned: dict) -> list[Path]:
 
 
 def compose_environment(d) -> list[Path]:
-    """Write composed.yaml and kustomization.yaml for one environment directory; returns the two paths. Writes nothing when
-    plan_environment refuses it."""
+    """Write composed.yaml and kustomization.yaml (and cloudflare-access.yaml, for a binding with an mcp key) for one environment
+    directory; returns their paths. Writes nothing when plan_environment refuses it. Never deletes a file."""
     return write_planned(plan_environment(d))
 
 
 def _external_secret_problems(rel: str, composed: bytes, binding) -> list[str]:
     """Defence in depth beside the drift check: the ExternalSecret in composed.yaml, as committed, is exactly the object compose
-    writes from the binding (the binding's secrets, from the platform's ClusterSecretStore, into the app's own Secret), and
-    composed.yaml carries no store of its own. The specific problems name what differs; the whole-object comparison catches the rest."""
+    writes from the binding (the binding's secrets, then its MCP token's two entries at the token's fixed Secret Server path, from
+    the platform's ClusterSecretStore, into the app's own Secret), and composed.yaml carries no store of its own. The specific problems name what differs; the whole-object comparison catches the rest."""
     try:
         objects = [o for o in yaml.load_all(composed.decode("utf-8"), Loader=UniqueKeyLoader) if o is not None]
     except (UnicodeDecodeError, yaml.YAMLError, RecursionError) as exc:
@@ -208,13 +284,16 @@ def _external_secret_problems(rel: str, composed: bytes, binding) -> list[str]:
     problems = [f"{rel}: a {kind} is the platform's (external-secrets/), never an environment's"
                 for kind in kinds if kind in ("SecretStore", "ClusterSecretStore")]
     found = [o for o in objects if isinstance(o, dict) and o.get("kind") == "ExternalSecret"]
-    want = [(env, str(sid), slug) for env, sid, slug in effects(binding)["secrets"]]
+    fx = effects(binding)
+    want = [(env, str(sid), slug) for env, sid, slug in fx["secrets"]]
+    if fx["mcp"]:
+        want += [(key, fx["mcp"]["secret_path"], prop) for key, prop in MCP_TOKEN_KEYS]
     if len(found) > 1:
-        return problems + [f"{rel}: {len(found)} ExternalSecrets; an environment's secrets make exactly one"]
+        return problems + [f"{rel}: {len(found)} ExternalSecrets; an environment's secrets and MCP token make exactly one"]
     if not found:
-        return problems + ([f"{rel}: the binding has secrets but there is no ExternalSecret"] if want else [])
+        return problems + ([f"{rel}: the binding has secrets or MCP servers but there is no ExternalSecret"] if want else [])
     if not want:
-        return problems + [f"{rel}: an ExternalSecret, but the binding has no secrets"]
+        return problems + [f"{rel}: an ExternalSecret, but the binding has no secrets or MCP servers"]
     es = found[0]
     meta = es.get("metadata") if isinstance(es.get("metadata"), dict) else {}
     spec = es.get("spec") if isinstance(es.get("spec"), dict) else {}
@@ -236,24 +315,25 @@ def _external_secret_problems(rel: str, composed: bytes, binding) -> list[str]:
         problems.append(f"{rel}: the ExternalSecret's data is not a list of secretKey and remoteRef key and property")
     elif got != want:
         extra = sorted({f"{k}={i}/{p}" for k, i, p in got} - {f"{k}={i}/{p}" for k, i, p in want}, key=str)
-        problems.append(f"{rel}: the ExternalSecret's data is not the binding's secrets"
+        problems.append(f"{rel}: the ExternalSecret's data is not the binding's secrets or MCP servers"
                         + (f" (not in the binding: {', '.join(str(e) for e in extra)})"[:300] if extra else ""))
     # The whole object, so nothing the specific checks don't name (dataFrom, target.template, metadata.namespace, apiVersion, an
     # extra key) can ride along: it is exactly what compose writes from the binding.
-    if not problems and (not isinstance(app, str) or es != external_secret(app, effects(binding)["secrets"])):
+    if not problems and (not isinstance(app, str) or es != external_secret(app, fx["secrets"], fx["mcp"])):
         problems.append(f"{rel}: the ExternalSecret is not exactly what golden-road compose writes from the binding")
     return problems
 
 
-def verify_environment(d) -> list[str]:
+def verify_environment(d, *, strict_gateway: bool = True, warnings: list | None = None) -> list[str]:
     """Every problem with one environment directory, as strings: its shape, its records, the base's hash, and generated files that
-    are missing or differ from what compose_environment writes. Never writes."""
+    are missing or differ from what compose_environment writes (cloudflare-access.yaml also when it is there for a binding with no
+    mcp). Never writes. strict_gateway=False: an old MCP gateway is a warning, not a problem (_mcp_problems)."""
     d = Path(d)
     problems = _scan(d)
     if problems:
         return problems
     try:
-        texts, binding = _generated(d)
+        texts, binding = _generated(d, strict_gateway=strict_gateway, warnings=warnings)
     except (InputError, OSError) as exc:
         return [f"{_rel(d)}: {exc}"]
     for name in GENERATED:
@@ -262,6 +342,14 @@ def verify_environment(d) -> list[str]:
             problems.append(f"{_rel(d, name)} is missing; run golden-road compose")
         elif path.stat().st_size != len(want) or path.read_bytes() != want:
             problems.append(f"{_rel(d, name)} differs from what golden-road compose writes")
+    access, want = d / CLOUDFLARE_ACCESS, texts.get(CLOUDFLARE_ACCESS)
+    if want is None:
+        if access.exists():
+            problems.append(f"{_rel(d, CLOUDFLARE_ACCESS)} is there, but bindings.yaml has no mcp: remove it")
+    elif not access.is_file():
+        problems.append(f"{_rel(d, CLOUDFLARE_ACCESS)} is missing; run golden-road compose")
+    elif access.stat().st_size != len(want.encode("utf-8")) or access.read_bytes() != want.encode("utf-8"):
+        problems.append(f"{_rel(d, CLOUDFLARE_ACCESS)} differs from what golden-road compose writes")
     composed = d / "composed.yaml"
     if composed.is_file() and composed.stat().st_size <= MAX_FILE_BYTES:
         problems += _external_secret_problems(_rel(d, "composed.yaml"), composed.read_bytes(), binding)
@@ -312,32 +400,53 @@ def find_environments(root) -> tuple[list[Path], list[str]]:
     return found, problems
 
 
-def verify_tree(root, expect_url: str | None = None) -> dict:
+BINDING_CHANGE = re.compile(r"(apps/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(?:test|prod))/(?:bindings|cloudflare-access)\.yaml")
+
+
+def changed_bindings(paths) -> set:
+    """The environments ("apps/<owner>/<repo>/<env>") whose bindings.yaml or cloudflare-access.yaml is among `paths` (the pull
+    request's changed paths, deploy-check's out/changed.txt): the ones held to platform.json's MCP gateway."""
+    return {m.group(1) for p in paths if (m := BINDING_CHANGE.fullmatch(p.strip()))}
+
+
+def verify_tree(root, expect_url: str | None = None, changed: set | None = None) -> dict:
     """{"environments": n, "problems": [...]} for the whole deploy repo: every environment verified, the tree's shape, no two
-    environments sharing a namespace (not even one app's test and prod: the convention is <repo>-<env>), and every environment's
+    environments sharing a namespace (not even one app's test and prod: the convention is <repo>-<env>) or an MCP token name (a
+    backstop: bindings.mcp_token_name is one-to-one), and every environment's
     two adapters exactly as compose writes them, with no adapter left for an environment that is gone, and the whole repo off by
     default (golden_road.off_by_default). With `expect_url` (the workflows pass $GITHUB_SERVER_URL/$GITHUB_REPOSITORY), the Flux
-    source's url must be this repository, and so must every adapter's (they are compared with what compose writes from it)."""
+    source's url must be this repository, and so must every adapter's (they are compared with what compose writes from it).
+    `changed` (changed_bindings of the pull request's paths; None: every environment) names the environments held strictly to
+    platform.json's MCP gateway; the others' old gateway is listed under "warnings", so a gateway move doesn't block the repo."""
     environments, problems = find_environments(root)
     if expect_url is not None:
         try:
             check_repo_url(deploy_repo_url(root), expect_url)
         except InputError as exc:
             problems.append(str(exc))
-    by_namespace, loaded = {}, {}
+    by_namespace, by_token, loaded, warnings = {}, {}, {}, []
     for d in environments:
-        problems.extend(verify_environment(d))
+        problems.extend(verify_environment(d, strict_gateway=changed is None or _rel(d) in changed, warnings=warnings))
         try:
             loaded[d] = release = load_release(d)
         except (InputError, OSError):
             continue  # verify_environment reported it
         by_namespace.setdefault(release["namespace"], []).append(_rel(d))
+        try:
+            binding = load_binding_v2(d, release)
+            if binding is not None and "mcp" in binding:
+                by_token.setdefault(mcp_token_name(binding["repo"], binding["environment"]), []).append(_rel(d))
+        except (InputError, OSError, ValueError):
+            pass  # verify_environment reported it
     for namespace, users in sorted(by_namespace.items()):
         if len(users) > 1:
             problems.append(f"namespace {namespace} is used by more than one environment: {', '.join(users)}")
+    for token, users in sorted(by_token.items()):
+        if len(users) > 1:
+            problems.append(f"MCP token {token} is named by more than one environment: {', '.join(users)}")
     problems.extend(_verify_adapters(Path(root), environments, loaded))
     problems.extend(off_by_default.problems(root))  # nothing reconciles or denies on its own, read from every YAML document
-    return {"environments": len(environments), "problems": problems}
+    return {"environments": len(environments), "problems": problems, "warnings": warnings}
 
 
 def pins(root) -> dict:

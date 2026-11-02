@@ -70,11 +70,16 @@
     }
   },
   "classification_policy_url": "https://policies.example.com/data-classification",
+  "mcp_gateways": {
+    "test": "mcp-test.example.com",
+    "prod": "mcp.example.com"
+  },
   "org": "mwdavisii",
   "github_host": "github.com",
   "actions_oidc_issuer": "https://token.actions.githubusercontent.com",
   "landing_page_url": "https://github.com/mwdavisii/golden-road-agents",
   "portal_url": "https://viber.mwdavisii.com",
+  "skills_repo": "mwdavisii/golden-road-skills",
   "scorecard_mode": "central",
   "scorecard_app_id": 5450243
 }

@@ -87,7 +87,7 @@ jobs:
           # Renames are listed as a removal and an addition, so both paths are checked. A path with unusual characters is quoted
           # by git and so matches nothing below.
           git -C deploy diff --name-only --no-renames HEAD^1 HEAD -- > out/changed.txt
-          layout='^(apps/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(test|prod)/(release\.yaml|bindings\.yaml|composed\.yaml|kustomization\.yaml|base/manifests\.yaml)|apps/\.gitkeep|clusters/(home/flux|office/argo)/[a-z0-9-]+\.yaml|clusters/(home/flux|office/argo)/README\.md|README\.md|\.github/.+|policy/.+|external-secrets/(README\.md|cluster-secret-store\.yaml|cilium-egress\.yaml))$'
+          layout='^(apps/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(test|prod)/(release\.yaml|bindings\.yaml|composed\.yaml|kustomization\.yaml|cloudflare-access\.yaml|base/manifests\.yaml)|apps/\.gitkeep|clusters/(home/flux|office/argo)/[a-z0-9-]+\.yaml|clusters/(home/flux|office/argo)/README\.md|README\.md|\.github/.+|policy/.+|external-secrets/(README\.md|cluster-secret-store\.yaml|cilium-egress\.yaml))$'
           grep -vE "$layout" out/changed.txt > out/outside.txt || [ $? -eq 1 ]
           if [ -s out/outside.txt ]; then
             echo "Paths outside the deploy layout:"
@@ -110,6 +110,11 @@ jobs:
           docker pull -q "$BUILDER_IMAGE" > /dev/null
           docker logout ghcr.io
 
+      # Skills are rebuilt from the platform's catalog at each pinned commit. Mock: the catalog bundled in the builder image. The
+      # real version checks out platform.json's skills_repo with fetch-depth: 0 (read-only token), mounts it with
+      # -v "$PWD/skills:/skills:ro" and sets -e GOLDEN_ROAD_SKILLS_CATALOG=/skills on gr. A pin must be a commit reachable from
+      # the checkout's refs/remotes/origin/main (merged, so security reviewed it); a tree, a tag or an unmerged branch's commit is
+      # "not in the catalog". Not wired: no step does that yet.
       - name: Compose and verify every environment
         run: |
           set -euo pipefail
@@ -117,7 +122,9 @@ jobs:
           gr() { docker run --rm --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --network none --read-only --tmpfs /tmp --user "$(id -u):$(id -g)" -v "$PWD/deploy:/deploy:ro" -v "$PWD/out:/out" "$BUILDER_IMAGE" "$@"; }
           rc=0
           # The Flux source (and so every adapter) must name this repository: an adapter pointing at another repo would reconcile it.
-          gr golden-road deploy-verify --root /deploy --expect-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" > out/verify.json || rc=$?
+          # --changed: only an environment whose bindings.yaml or cloudflare-access.yaml this PR changes must name platform.json's MCP
+          # gateway. After the platform moves a gateway, the others still on the old one are warnings, so pins and other apps' PRs pass.
+          gr golden-road deploy-verify --root /deploy --expect-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" --changed /out/changed.txt > out/verify.json || rc=$?
           if [ "$rc" -eq 1 ]; then
             echo "deploy-verify problems:"
             jq -c '.problems[]' out/verify.json  # one JSON string per line: a problem quotes the pull request's paths and values
@@ -127,6 +134,7 @@ jobs:
             echo "::error::deploy-verify could not check the repo (exit $rc)"
             exit 1
           fi
+          jq -r '.warnings[]? | "::warning::" + .' out/verify.json  # an unchanged environment still on a moved MCP gateway
           echo "$(jq .environments out/verify.json) environments verified"
           gr golden-road deploy-pins --root /deploy --output /out/pins.json
 

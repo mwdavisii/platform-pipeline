@@ -18,6 +18,6 @@
     "deploy/base/service.yaml": "48f543b062be3fcc37fc914775cfd7d0c54802faa24f3beffae4ba79736d1c21",
     "deploy/base/serviceaccount.yaml": "62bd31646f6e58b77350f24bac460209f0b476a656bcf8a68cdd0c25b3d19a1f"
   },
-  "platform_config_sha256": "6aea0ec1bf2f9bf01729966a1d3a2eaa14be0e5bdccc7944b006cfab8713a4ba",
+  "platform_config_sha256": "89beaf56f8a82d61df4b218109f0df1d5c1d913fc624a8b7885a204414484aee",
   "spec_sha256": "0275be5f7d38ca6cbea8744841801ed5a9b3c3891a78a77030b3501d835f079e"
 }

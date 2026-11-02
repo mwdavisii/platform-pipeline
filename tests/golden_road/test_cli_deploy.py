@@ -17,7 +17,7 @@ def test_compose_then_verify_all(tmp_path, app, capsys):
     assert main(["compose", "--root", str(tmp_path), "apps/acme/notes/prod"]) == 0
     capsys.readouterr()
     assert main(["deploy-verify", "--root", str(tmp_path)]) == 0
-    assert json.loads(capsys.readouterr().out) == {"environments": 2, "problems": []}
+    assert json.loads(capsys.readouterr().out) == {"environments": 2, "problems": [], "warnings": []}
 
 
 def test_compose_takes_several_environments(tmp_path, app, capsys):
@@ -53,7 +53,7 @@ def test_every_environment_has_its_own_namespace(tmp_path, app, capsys):
     assert main(["compose", "--root", str(tmp_path), "apps/acme/notes/test", "apps/acme/notes/prod", "apps/acme/other/test"]) == 0
     capsys.readouterr()
     assert main(["deploy-verify", "--root", str(tmp_path)]) == 0
-    assert json.loads(capsys.readouterr().out) == {"environments": 3, "problems": []}
+    assert json.loads(capsys.readouterr().out) == {"environments": 3, "problems": [], "warnings": []}
 
 
 @pytest.mark.parametrize("stray", ["apps/acme/notes/staging/release.yaml", "apps/acme/notes/README.md", "apps/acme/x.yaml",
@@ -90,7 +90,7 @@ def test_deploy_verify_reports_one_app_under_two_cases(tmp_path, app, capsys):
 def test_an_empty_deploy_repo_verifies(tmp_path, capsys):
     (tmp_path / "apps").mkdir(); (tmp_path / "apps/.gitkeep").write_text("")
     assert main(["deploy-verify", "--root", str(tmp_path)]) == 0
-    assert json.loads(capsys.readouterr().out) == {"environments": 0, "problems": []}
+    assert json.loads(capsys.readouterr().out) == {"environments": 0, "problems": [], "warnings": []}
 
 
 def test_no_apps_directory_is_an_input_error(tmp_path, capsys):

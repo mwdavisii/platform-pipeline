@@ -194,9 +194,12 @@ REQUIRED = {
 # Settings a process may go without that the kit still passes (from the ConfigMap, where an empty value means unset).
 OPTIONAL_PASSED = {"web": {"PORTAL_DIRECTORY", "PORTAL_IDENTITY_PROCESS_URL", "PORTAL_DATA_PROCESS_URL", "PORTAL_REPO_ADMINS_STALE_AFTER",
                            "PORTAL_SECRET_SERVER", "PORTAL_SECRET_PROCESS_URL", "PORTAL_CLASSIFICATION_POLICY_URL",
-                           "PORTAL_REREVIEW_STALE_DAYS"},
-                   "writer": {"PORTAL_DIRECTORY", "PORTAL_REPO_ADMINS_STALE_AFTER", "PORTAL_SECRET_SERVER"},
-                   "collector": {"PORTAL_REVIEW_DUE_SOON_DAYS", "PORTAL_REREVIEW_SIGNALS", "PORTAL_ARTIFACT_HOSTS"}}
+                           "PORTAL_REREVIEW_STALE_DAYS", "PORTAL_CLOUDFLARE", "PORTAL_MCP_GATEWAY_TEST", "PORTAL_MCP_GATEWAY_PROD",
+                           "PORTAL_MCP_PROCESS_URL", "PORTAL_SKILLS_CATALOG", "PORTAL_SERVICENOW", "PORTAL_ORG_NAME",
+                           "PORTAL_LIFECYCLE_GRACE_DAYS"},
+                   "writer": {"PORTAL_DIRECTORY", "PORTAL_REPO_ADMINS_STALE_AFTER", "PORTAL_SECRET_SERVER", "PORTAL_CLOUDFLARE",
+                              "PORTAL_MCP_GATEWAY_TEST", "PORTAL_MCP_GATEWAY_PROD", "PORTAL_SKILLS_CATALOG"},
+                   "collector": {"PORTAL_REVIEW_DUE_SOON_DAYS", "PORTAL_REREVIEW_SIGNALS", "PORTAL_ARTIFACT_HOSTS", "PORTAL_SERVICENOW"}}
 
 
 def provided(built, o):
@@ -484,3 +487,33 @@ def test_the_kit_s_readme_names_the_re_review_settings_and_what_actions_read_is_
         assert needle in text, needle
     assert "Actions and Checks read are for the planned collectors" not in text
 
+
+
+WEB_NEW = ("PORTAL_CLOUDFLARE", "PORTAL_MCP_GATEWAY_TEST", "PORTAL_MCP_GATEWAY_PROD", "PORTAL_MCP_PROCESS_URL", "PORTAL_SKILLS_CATALOG",
+           "PORTAL_SERVICENOW", "PORTAL_ORG_NAME", "PORTAL_LIFECYCLE_GRACE_DAYS")
+
+
+@needs_kustomize
+def test_the_kit_passes_the_0_6_0_settings_to_the_process_that_reads_each(built):
+    web = provided(built, built[("Deployment", "golden-road-portal")])
+    writer = provided(built, built[("Deployment", "golden-road-portal-writer")])
+    collector = provided(built, built[("Deployment", "golden-road-portal-collector")])
+    data = built[("ConfigMap", "golden-road-portal-config")]["data"]
+    for name in WEB_NEW:
+        assert web[name] == ("config", name), name
+    for name in ("PORTAL_CLOUDFLARE", "PORTAL_MCP_GATEWAY_TEST", "PORTAL_MCP_GATEWAY_PROD", "PORTAL_SKILLS_CATALOG"):
+        assert writer[name] == ("config", name), name
+    assert collector["PORTAL_SERVICENOW"] == ("config", "PORTAL_SERVICENOW") and "PORTAL_SERVICENOW" not in writer
+    assert (data["PORTAL_CLOUDFLARE"], data["PORTAL_SKILLS_CATALOG"], data["PORTAL_SERVICENOW"]) == ("mock", "mock", "mock")
+    for name in ("PORTAL_MCP_GATEWAY_TEST", "PORTAL_MCP_GATEWAY_PROD", "PORTAL_ORG_NAME", "PORTAL_LIFECYCLE_GRACE_DAYS", "PORTAL_MCP_PROCESS_URL"):
+        assert data[name] == "", name
+    for name in ("PORTAL_CLOUDFLARE_ACCOUNT_ID", "PORTAL_SERVICENOW_URL"):
+        assert name not in data and name not in web and name not in writer and name not in collector
+
+
+def test_the_kit_s_readme_names_the_0_6_0_settings_and_that_the_mocks_need_no_egress():
+    text = " ".join((KIT / "README.md").read_text().split())
+    for name in WEB_NEW:
+        assert f"`{name}`" in text, name
+    for needle in ("the mock is on", "no egress", "collectors: cmdb: N synced, M unchanged"):
+        assert needle in text, needle

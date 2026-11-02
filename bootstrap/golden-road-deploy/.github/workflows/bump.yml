@@ -274,7 +274,8 @@ jobs:
               skip "$env_path: golden-road deploy-pin refused $tag (the error is above). A repo name that gives no namespace needs release.yaml's namespace set by hand."
               continue
             fi
-            if ! gr golden-road compose --root /deploy --expect-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "$env_path" > out/compose.json; then
+            # --unchanged-binding: a pin never changes bindings.yaml, so a moved MCP gateway is a warning here, not a refusal
+            if ! gr golden-road compose --root /deploy --expect-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" --unchanged-binding "$env_path" > out/compose.json; then
               skip "$env_path: golden-road compose refused $tag (the error is above)"
               continue
             fi
@@ -283,6 +284,9 @@ jobs:
             : > out/entries.jsonl
             ok=1
             for f in "${written[@]}"; do
+              # cloudflare-access.yaml depends only on bindings.yaml, which a bump never changes: it stays out of the pull request
+              # (deploy-check holds main's copy to bindings.yaml), so bump's layout never names it.
+              if [[ "$f" =~ ^apps/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(test|prod)/cloudflare-access\.yaml$ ]]; then continue; fi
               [[ "$f" =~ $layout ]] || fail "$env_path: compose wrote $f, outside the deploy layout"
               case "/$f/" in */./*|*/../*) fail "$env_path: compose wrote $f, outside the deploy layout";; esac
               { [ -f "work/$f" ] && [ ! -L "work/$f" ]; } || fail "$env_path: $f is not a regular file"

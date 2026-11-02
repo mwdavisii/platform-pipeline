@@ -95,6 +95,15 @@ def test_the_draft_leaves_out_secretserver_names(make_app):
     assert any("SECRETSERVER_TOKEN" in q and "binding" in q and "Secret Server" in q for q in out["questions"])
 
 
+def test_the_draft_leaves_out_mcp_and_skills_names(make_app):
+    out = detect(make_app({"main.py": 'import os\nU = os.environ["MCP_URL"]\nC = os.getenv("CF_ACCESS_CLIENT_ID")\n'
+                                      'S = os.environ["SKILLS_DIR"]\nM = os.environ["APP_MODE"]\n'}))
+    assert out["draft_spec"]["env"] == [{"name": "APP_MODE", "secret": False}]
+    assert out["needs"]["set_by_platform"] == ["CF_ACCESS_CLIENT_ID", "MCP_URL", "SKILLS_DIR"]
+    assert any(all(n in q for n in ("CF_ACCESS_CLIENT_ID", "MCP_URL", "SKILLS_DIR")) and "binding" in q and "MCP servers" in q and "skills" in q
+               for q in out["questions"])
+
+
 def test_the_classification_question_names_the_levels_and_the_policy(python_app):
     questions = detect(python_app)["questions"]
     [question] = [q for q in questions if q.startswith("What data does this app handle")]

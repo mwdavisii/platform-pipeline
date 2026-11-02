@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from builder.config import gate2_single_approver, is_model_provider, load_base_images, load_platform, platform_sha256
+from builder.config import gate2_single_approver, is_model_provider, load_base_images, load_platform, mcp_gateways, platform_sha256, skills_repo
 
 
 def test_platform_config_has_required_keys():
@@ -140,3 +140,24 @@ def test_the_policy_url_is_the_recorded_link_or_the_placeholder_and_a_bad_one_is
     for bad in ("http://x.example.org", 7, "https://wiki.example.org/a b", "https://wiki.example.org/\"x"):
         with pytest.raises(ValueError, match="classification_policy_url"):
             classification_policy_url({"classification_policy_url": bad})
+
+
+def test_the_platform_names_two_gateways_and_the_catalog():
+    assert mcp_gateways({"mcp_gateways": {"test": "mcp-test.example.com", "prod": "mcp.example.com"}}) == {
+        "test": "mcp-test.example.com", "prod": "mcp.example.com"}
+    assert mcp_gateways({}) == {}
+    assert skills_repo({"skills_repo": "acme/golden-road-skills"}) == "acme/golden-road-skills" and skills_repo({}) is None
+    assert mcp_gateways(load_platform()) == {"test": "mcp-test.example.com", "prod": "mcp.example.com"}
+
+
+@pytest.mark.parametrize("bad", [{"test": "x"}, {"test": "mcp.example.com", "dev": "y.example.com"}, ["mcp.example.com"], {"test": 1},
+                                 {"test": "mcp.example.com\n"}, {"test": "mcp.example.com", "prod": "mcp.example.com"}])
+def test_a_bad_gateway_map_is_refused(bad):
+    with pytest.raises(ValueError, match="mcp_gateways"):
+        mcp_gateways({"mcp_gateways": bad})
+
+
+@pytest.mark.parametrize("bad", ["acme", "acme/x/y", 1, "acme/skills\n", ""])
+def test_a_bad_skills_repo_is_refused(bad):
+    with pytest.raises(ValueError, match="skills_repo"):
+        skills_repo({"skills_repo": bad})

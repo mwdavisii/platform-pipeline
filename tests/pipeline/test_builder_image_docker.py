@@ -80,3 +80,14 @@ def test_package_version_guide_and_doctor(builder_image):
 def test_the_image_mints_an_app_jwt(builder_image):
     assert run(builder_image, "python", "-c", "import jwt, cryptography").returncode == 0
     assert run(builder_image, "golden-road", "app-token", "--help").returncode == 0
+
+
+def test_deploy_verify_in_the_image_reads_the_bundled_skills_catalog(builder_image):
+    """deploy-check runs golden-road deploy-verify in this image with --network none: the catalog fixture is in the wheel
+    (plan 2026-10-31 MCP, skills and CMDB, item 3), the same bytes the portal's writer builds the skills ConfigMap from."""
+    main = json.loads((ROOT / "src/golden_road/data/mock_skills_catalog.json").read_text())["main"]
+    script = ("import sys;from golden_road import skills_catalog as c;cat=c.default_catalog();"
+              f"meta,files=cat.skill('incident-triage','{main}');print(cat.name, meta['name'], ' '.join(sorted(files)))")
+    out = run(builder_image, "python", "-c", script)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.split() == ["mock-skills-catalog", "incident-triage", "SKILL.md", "checklists/sev1.md"]

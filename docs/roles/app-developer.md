@@ -2,8 +2,8 @@
 
 ## Purpose
 
-Take an app that works on your machine to a signed release, with the identity, data connection and secrets it needs in each
-environment. Your coding agent does the packaging; you make every decision. The platform does the checks, the release and the
+Take an app that works on your machine to a signed release, with the identity, data connection, secrets, MCP servers and skills it
+needs in each environment, and keep owning it once it is registered. Your coding agent does the packaging; you make every decision. The platform does the checks, the release and the
 signatures, and you never edit what it generates.
 
 ## Who
@@ -35,6 +35,9 @@ your own repos, the repo's admin "as the portal last saw it" (from the collector
 | Packaging, checks, release, Gate 2 | Real | The same |
 | Azure identity and Databricks choices | Picked from a mock directory; nothing is created in Azure or Databricks | Picked from a real directory (not built yet) |
 | Secrets | Picked from a mock Secret Server; no value exists anywhere | Not built: the writer works only with the mock (anything else fails as `no_secret_server`), and the External Secrets Operator files are applied by hand |
+| MCP servers | Picked from a mock Cloudflare gateway; no service token is issued | The platform's shared Cloudflare gateways; a platform job issues the app's token (not built) |
+| Skills | Picked from the catalog fixture bundled with the portal | The platform's `golden-road-skills` catalog repo |
+| The CMDB record | A mock ServiceNow; nothing suspends, asks, tasks or decommissions | ServiceNow CMDB and the real lifecycle process |
 | Deployment | Nothing runs: the deploy repo's files are generated and checked, never applied | Cluster operators switch reconciling on |
 
 ## Procedures
@@ -170,8 +173,8 @@ the "security's process" link).
 2. Save. A toast says "Secret requested".
 
 The env var name can't be one the platform reserves: `PORT`, `NODE_ENV`, `NODE_OPTIONS`, `PATH`, `HOME`, or a name starting
-with `LD_`, `PYTHON`, `GUNICORN_`, `UVICORN_`, `NODE_`, `NPM_`, `AZURE_`, `DATABRICKS_` or `SECRETSERVER_`
-(`bootstrap/golden-road-portal/portal/env_names.py`). A name your `builder-spec.json` already sets is not refused on the page:
+with `LD_`, `PYTHON`, `GUNICORN_`, `UVICORN_`, `NODE_`, `NPM_`, `AZURE_`, `DATABRICKS_`, `SECRETSERVER_`, `MCP_` or
+`CF_ACCESS_`, or `SKILLS_DIR` (`bootstrap/golden-road-portal/portal/env_names.py`). A name your `builder-spec.json` already sets is not refused on the page:
 the change fails when the writer records it (`compose_refused`). An environment holds at most 20 secrets.
 
 **Check:** the tab lists the env var with its secret and field once the writer's PR merges.
@@ -195,6 +198,60 @@ Databricks connection too. The writer rewrites `bindings.yaml` (never deletes it
 3. An admin decides the tier and the next review date. If you are not the record's owner, approving makes you the owner.
 
 **Check:** the request page shows the change against the current record; once merged, the app page's banner is gone.
+
+### 12. Add an MCP server
+
+**Goal:** the app can call an MCP server on its environment's shared Cloudflare gateway, with its own service token.
+
+Before you start: the server is on that environment's gateway, and Cloudflare lets you use it (ask through the "how to ask for a
+server on the gateway" link if it isn't there).
+
+1. On the tab, under "MCP servers (Cloudflare gateway)", press **Add an MCP server**. The steps are Environment (from the tab),
+   Server, and Review and save.
+2. On Server, only servers you may use and that are ready are listed. A server greyed with "This server needs each person's own
+   sign-in, so an app can't use it." acts as each signed-in person (OAuth on their behalf), which an app's token can't do: pick
+   another, or ask the gateway's admins for a version that apps can use.
+3. Save. A toast says "MCP server requested".
+
+The writer opens a PR in `golden-road-deploy` that changes `bindings.yaml` and `composed.yaml`, and writes `cloudflare-access.yaml`
+when it changes. The container gets `MCP_URL` (the gateway's `/mcp` URL), `MCP_SERVERS` (the server ids, comma-separated) and
+`CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` (the app's Cloudflare service token, from Secret Server: send both as headers on
+every call), and egress to the gateway on 443. An environment holds at most 20 servers. Remove one with **Remove** (procedure 10).
+
+**Check:** the tab lists the server once the writer's PR merges, and "What the container gets" lists `MCP_URL` and `MCP_SERVERS`.
+
+### 13. Add, update or remove a skill
+
+**Goal:** the app reads a skill security approved, from files mounted read-only at `/skills`.
+
+1. On the tab, under "Skills (platform catalog)", press **Add a skill**. The steps are Environment, Skill, and Review and save. Only
+   skills approved for that environment and for you (everyone, or a group you are in) are offered.
+2. Save. A toast says "Skill requested". The skill is pinned to the catalog's commit at that moment: a newer catalog changes
+   nothing until you update it.
+3. **Update:** when the catalog has a newer version, the skill's row says "newer" and offers **Update**, which asks for the current
+   commit (a new request). **Remove** asks first, as in procedure 10.
+
+The app finds its skills at `SKILLS_DIR` (`/skills`), one folder per skill (`/skills/<name>/SKILL.md` and its other files). At most
+20 skills per environment, and together at most 512 KiB.
+
+**Check:** the tab lists the skill with its pinned commit, and the catalog column reads "the same".
+
+### 14. Know what owning your app means
+
+**Goal:** you know what you agree to when you register an app, and you can see its ServiceNow record.
+
+1. The register form shows "What owning this app means": patching (you approve patches when scans find new vulnerabilities, and
+   access may be suspended for a critical one), validation (you confirm the app is still in use when asked), and leaving (when you
+   leave or move, you and your manager name a new owner or the app is decommissioned). To submit, you must tick
+   "I understand what owning this app means", for a first registration, a change or a renewal.
+2. Once the app is registered, the platform records it in ServiceNow CMDB, with you as its owner (the ServiceNow user with your
+   sign-in email). The app page then shows the card "Your app is registered in ServiceNow (`<number>`)", and the request's timeline
+   the step "Registered in ServiceNow".
+3. If the page says "ServiceNow has no user with the owner's email" (`cmdb_owner_unknown`), your sign-in email doesn't match one
+   ServiceNow user. Ask a portal admin; the platform retries on every pass. The owner is the registration's: to change it, a new
+   owner changes the registration (procedure 11), never ServiceNow.
+
+**Check:** the app page shows the card with the number; the request's timeline shows "Registered in ServiceNow".
 
 ## What you must never do
 
@@ -225,6 +282,12 @@ Databricks connection too. The writer rewrites `bindings.yaml` (never deletes it
 | "... could not be recorded: record_changed" or `record_conflict` | Someone edited the record in the factory after the admin approved | Submit the change again |
 | The request waits with `record_unreadable` or `record_case_mismatch` | The read App can't read the factory's record, or the factory has it under two spellings of the repo's name | Ask the platform team |
 | "... could not be recorded: not_a_file" or `recheck: scorecard_changed` | The record's path in the factory isn't a plain file, or the approval dropped the record's `scorecard:` mark | Ask the platform team (`not_a_file`); submit the change again (`scorecard_changed`) |
+| An MCP server is greyed "This server needs each person's own sign-in, so an app can't use it." | It acts as each signed-in person | Pick another server, or ask the gateway's admins |
+| No MCP servers are listed, or "Your sign-in has no email address" | Cloudflare lets you use none on that gateway, or your sign-in has no email | Ask through the "how to ask for a server" link; check your email in the identity provider |
+| "... could not be recorded: recheck: mcp_server_gone" (or `mcp_server_not_ready`, `mcp_server_user_auth`) | The server left the gateway, isn't ready, or now needs each person's sign-in | Remove it, or wait and add it again |
+| "... could not be recorded: recheck: skill_gone" or `skill_environment` | The pinned skill isn't in the catalog at that commit, or no longer allows this environment | Update or remove the skill |
+| "That skill is not approved for prod." | Its `skill.yaml` lists only `test` | Ask security to approve it for prod (a catalog PR) |
+| The app page says "ServiceNow has no user with the owner's email" | `cmdb_owner_unknown`: the owner's email matches no single ServiceNow user | Ask a portal admin (procedure 14) |
 | `scorecard / assessed` failed with "not assessed" | A draft, a fork PR, a red Gate 1, or a review that couldn't run | Mark it ready, fix Gate 1, or push again |
 
 ## Gaps
@@ -235,3 +298,8 @@ Databricks connection too. The writer rewrites `bindings.yaml` (never deletes it
 - **The app page shows the portal's record,** not the deploy repo's file: a hand edit there is not shown and is overwritten.
 - **A secret's visibility to you is checked once, at submit,** and secrets already in an environment carry over under the name of
   whoever makes the next change there.
+- **Which MCP servers you may use is the mock's policy data.** The real version asks Cloudflare per person; it is checked once, at
+  submit. A skill's audience is checked once, at submit, too.
+- **No service token exists.** The job that would issue the app's Cloudflare token and set each server's policy is not built.
+- **The ownership notice describes a process that doesn't run yet:** nothing suspends, asks, tasks or decommissions, and nothing
+  retires the CI when an app leaves.

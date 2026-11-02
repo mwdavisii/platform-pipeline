@@ -358,10 +358,10 @@ def test_personal_poc_doc_covers_the_scans_codeql_dependabot_and_the_known_gap()
                    "sp-finance-reports", "AZURE_CLIENT_ID", "bindings/<you>/hello-app.yaml"):
         assert needle in text, needle
     steps = [int(m) for m in re.findall(r"^## (\d+)\.", text, re.M)]
-    assert steps == list(range(0, 24))
+    assert steps == list(range(0, 25))
     # the scans repo is published before hello-app is pushed, and the builder is released again only after both exist
     assert text.index("## 4. Publish `security-scans`") < text.index("## 5. Create `hello-app`") < text.index("## 11.") < text.index("## 12.")
-    assert text.index("## 13. Risk scorecard") < text.index("## 14. ") < text.index("## 16. Central AI review") < text.index("## 17. Switch the review to risk routing") < text.index("## 18. High findings hold the merge") < text.index("## 19. App connections (mock)") < text.index("## 20. The deploy repo (mock)") < text.index("## 21. Delinea Secret Server secrets (mock)") < text.index("## 22. Builder 0.5.0: three classification levels, the policy link and the portal reskin") < text.index("## 23. Builder 0.5.1: changing a registration and the re-review list") < text.index("## PoC gaps to record")
+    assert text.index("## 13. Risk scorecard") < text.index("## 14. ") < text.index("## 16. Central AI review") < text.index("## 17. Switch the review to risk routing") < text.index("## 18. High findings hold the merge") < text.index("## 19. App connections (mock)") < text.index("## 20. The deploy repo (mock)") < text.index("## 21. Delinea Secret Server secrets (mock)") < text.index("## 22. Builder 0.5.0: three classification levels, the policy link and the portal reskin") < text.index("## 23. Builder 0.5.1: changing a registration and the re-review list") < text.index("## 24. Builder 0.6.0: MCP servers, skills and the CMDB record (mock)") < text.index("## PoC gaps to record")
     twenty = text[text.index("## 20. The deploy repo (mock)"):text.index("## 21. Delinea Secret Server secrets (mock)")]
     for needle in ("golden-road-deploy", "deploy-check", "suspend: true", "composed.yaml", "Mock only", "DEPLOY_APP_ID", "DEPLOY_APP_KEY",
                    "environments/bump", "namespace: hello-app-test", "SINGLE_APPROVER_PROMOTIONS", "mode: warn", "### 20.8 Proof items",
@@ -398,7 +398,7 @@ def test_personal_poc_doc_covers_the_scans_codeql_dependabot_and_the_known_gap()
         assert needle in roll_out, needle
     assert "Copy `config/registration.yaml` and `config/scorecard.yaml` from the bootstrap" not in roll_out
     assert twenty_two.index("Drain the writer") < twenty_two.index("factory PR") < twenty_two.index("regenerate PR") < twenty_two.index("0008")
-    twenty_three = text[text.index("## 23. Builder 0.5.1"):text.index("## PoC gaps to record")]
+    twenty_three = text[text.index("## 23. Builder 0.5.1"):text.index("## 24. Builder 0.6.0")]
     for needle in ("Change or renew the registration", "record_changed", "record_conflict", "record_case_mismatch", "already_registered",
                    "scorecard: central", "Actions: Read-only", "actions_unreadable", "PORTAL_REVIEW_DUE_SOON_DAYS", "PORTAL_REREVIEW_SIGNALS",
                    "PORTAL_REREVIEW_STALE_DAYS", "PORTAL_ARTIFACT_HOSTS", "0010", "productionresultssa*.blob.core.windows.net",
@@ -411,6 +411,21 @@ def test_personal_poc_doc_covers_the_scans_codeql_dependabot_and_the_known_gap()
         < roll_out.index("0010") < roll_out.index("Change or renew the registration")
     for needle in ("Add a secret", "Field and name", "Keep it"):
         assert needle in twenty_one, needle
+    twenty_four = text[text.index("## 24. Builder 0.6.0"):text.index("## PoC gaps to record")]
+    for needle in ("PORTAL_CLOUDFLARE=mock", "PORTAL_SKILLS_CATALOG=mock", "PORTAL_SERVICENOW=mock", "--mcp-gateway-test", "--skills-repo",
+                   "cloudflare-access.yaml", "notes", "tickets", "incident-triage", "APM0001001", "I understand what owning this app means",
+                   "PORTAL_ORG_NAME", "PORTAL_LIFECYCLE_GRACE_DAYS", "0011", "Mock only", "### 24.4 Proof items", "### 24.5 Roll back",
+                   "This server needs each person's own sign-in, so an app can't use it.", "That skill is not approved for prod.",
+                   "differs from what golden-road compose writes", "but platform.json's test gateway is", "mwdavisii@example.com",
+                   "collectors: cmdb: N synced, 0 unchanged", "Registered in ServiceNow", "hello-app-skills", "/golden-road/mcp-tokens/cf-mcp-",
+                   "### When the platform moves an MCP gateway", "--unchanged-binding", "email_verified", "mcp_owner_invalid",
+                   "mcp_verified_elsewhere", "skill_verified_elsewhere"):
+        assert needle in twenty_four, needle
+    turn_on = twenty_four[twenty_four.index("### 24.1"):twenty_four.index("### 24.2")]
+    assert turn_on.index("--mcp-gateway-test") < turn_on.index("deploy-check.yml") < turn_on.index("0011")
+    for needle in ("per-person view", "reconcile job", "retiring a CI", "1000 characters", "checked once, at submit",
+                   "trusts the identity provider's verified email"):
+        assert needle in gaps, needle
     assert "Search to list the secrets you can see" not in twenty_one
     for needle in ("One reader account", "checked once, at submit", "RestApiDocs", "fieldSlugName", "/summary", "skip", "take",
                    "secret_name", "OAuth", "Secrets carry over", "renamed or moved", "no running Secret Server", "`SecretStore` per app"):

@@ -1,6 +1,7 @@
 import pytest
 import yaml
-from golden_road.compose import EXTERNAL_SECRET_STORE, ComposeError, compose, kustomization, parse_manifests
+from golden_road.compose import (EXTERNAL_SECRET_STORE, SKILL_MAX_BYTES, SKILL_MAX_FILES, ComposeError, cloudflare_access, compose,
+                                 kustomization, parse_manifests, skill_files_problem)
 from golden_road.render import render
 
 IMAGE = "ghcr.io/acme/notes@sha256:" + "b" * 64
@@ -258,3 +259,152 @@ def test_a_secret_may_not_take_a_platform_prefix(signed, env, identity):
     binding = {**(BINDING if identity else {}), "secrets": [{**SECRET, "env": env}]}
     with pytest.raises(ComposeError, match=env):
         compose(signed, IMAGE, binding)
+
+
+MCP_BINDING = {"repo": "acme/notes", "environment": "test",
+               "mcp": {"gateway": "mcp-test.example.com", "servers": [{"server_id": "notes", "name": "Notes", "verified_by": "mock-cloudflare"}]}}
+PATH = "/golden-road/mcp-tokens/cf-mcp-acme--notes-test"
+TOKEN_DATA = [{"secretKey": "CF_ACCESS_CLIENT_ID", "remoteRef": {"key": PATH, "property": "client-id"}},
+              {"secretKey": "CF_ACCESS_CLIENT_SECRET", "remoteRef": {"key": PATH, "property": "client-secret"}}]
+GATEWAY_RULE = {"toFQDNs": [{"matchName": "mcp-test.example.com"}], "toPorts": [{"ports": [{"port": "443", "protocol": "TCP"}]}]}
+SKILLS = {"incident-triage": {"SKILL.md": "# Incident triage\n", "checklists/sev1.md": "1. Page.\n"}}
+SKILL_BINDING = {"repo": "acme/notes", "environment": "test",
+                 "skills": [{"name": "incident-triage", "commit": "6" * 40, "verified_by": "mock-skills-catalog"}]}
+
+
+def test_mcp_servers_become_env_egress_and_the_token_s_two_entries(signed):
+    out = docs(compose(signed, IMAGE, MCP_BINDING, namespace="notes-test"))
+    app = out[2]["metadata"]["name"]
+    env = out[2]["spec"]["template"]["spec"]["containers"][0]["env"]
+    assert {"name": "MCP_URL", "value": "https://mcp-test.example.com/mcp"} in env and {"name": "MCP_SERVERS", "value": "notes"} in env
+    for key in ("CF_ACCESS_CLIENT_ID", "CF_ACCESS_CLIENT_SECRET"):
+        assert {"name": key, "valueFrom": {"secretKeyRef": {"name": f"{app}-delinea", "key": key}}} in env
+    assert out[-1] == external_secret_for(app, TOKEN_DATA)  # an ExternalSecret with only the token, no Delinea secrets
+    assert GATEWAY_RULE in out[5]["spec"]["egress"]
+    assert "azure.workload.identity/client-id" not in str(out)
+
+
+def test_mcp_adds_only_the_gateway_s_egress(signed):
+    before = docs(compose(signed, IMAGE, None))[4]["spec"]["egress"]
+    after = docs(compose(signed, IMAGE, MCP_BINDING))[4]["spec"]["egress"]
+    assert after == before + [GATEWAY_RULE]
+
+
+def test_secrets_come_first_then_the_token(signed):
+    out = docs(compose(signed, IMAGE, {**MCP_BINDING, "secrets": [SECRET]}))
+    assert [d["secretKey"] for d in out[-1]["spec"]["data"]] == ["NOTES_DB_PASSWORD", "CF_ACCESS_CLIENT_ID", "CF_ACCESS_CLIENT_SECRET"]
+    env = [e["name"] for e in out[1]["spec"]["template"]["spec"]["containers"][0]["env"]]
+    assert env[-5:] == ["MCP_URL", "MCP_SERVERS", "NOTES_DB_PASSWORD", "CF_ACCESS_CLIENT_ID", "CF_ACCESS_CLIENT_SECRET"]
+
+
+def test_an_mcp_without_servers_composes_like_none(signed):
+    empty = {**MCP_BINDING, "mcp": {"gateway": "mcp-test.example.com", "servers": []}}
+    assert compose(signed, IMAGE, empty) == compose(signed, IMAGE, None)
+
+
+@pytest.mark.parametrize("env", ["CF_ACCESS_CLIENT_ID", "MCP_URL"])
+def test_a_token_or_mcp_env_the_app_sets_is_refused(signed, env):
+    text = edited(signed, lambda o: o[1]["spec"]["template"]["spec"]["containers"][0]["env"].append({"name": env, "value": "x"}))
+    with pytest.raises(ComposeError, match=env):
+        compose(text, IMAGE, MCP_BINDING)
+
+
+def test_skills_become_a_read_only_config_map_mounted_with_items(signed):
+    out = docs(compose(signed, IMAGE, SKILL_BINDING, namespace="notes-test", skills=SKILLS))
+    app = out[2]["metadata"]["name"]
+    cm = next(o for o in out if o["kind"] == "ConfigMap")
+    assert cm == {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": f"{app}-skills"},
+                  "data": {"incident-triage__SKILL.md": "# Incident triage\n", "incident-triage__checklists__sev1.md": "1. Page.\n"}}
+    pod = out[2]["spec"]["template"]["spec"]
+    assert {"name": "skills", "configMap": {"name": f"{app}-skills", "items": [
+        {"key": "incident-triage__SKILL.md", "path": "incident-triage/SKILL.md"},
+        {"key": "incident-triage__checklists__sev1.md", "path": "incident-triage/checklists/sev1.md"}]}} in pod["volumes"]
+    assert {"name": "skills", "mountPath": "/skills", "readOnly": True} in pod["containers"][0]["volumeMounts"]
+    assert {"name": "SKILLS_DIR", "value": "/skills"} in pod["containers"][0]["env"]
+    assert [o["kind"] for o in out][-1] == "ConfigMap"  # no secrets or MCP servers: no ExternalSecret
+
+
+def test_the_external_secret_stays_last(signed):
+    out = docs(compose(signed, IMAGE, {**SKILL_BINDING, **MCP_BINDING, "skills": SKILL_BINDING["skills"]}, skills=SKILLS))
+    assert [o["kind"] for o in out][-2:] == ["ConfigMap", "ExternalSecret"]
+
+
+def test_skills_compose_deterministically_whatever_the_order_given(signed):
+    shuffled = {"incident-triage": dict(reversed(list(SKILLS["incident-triage"].items())))}
+    assert compose(signed, IMAGE, SKILL_BINDING, skills=shuffled) == compose(signed, IMAGE, SKILL_BINDING, skills=SKILLS)
+
+
+@pytest.mark.parametrize("skills, match", [
+    (None, "incident-triage"), ({}, "incident-triage"), ({**SKILLS, "other": {"SKILL.md": "x"}}, "other"),
+    ({"incident-triage": {"checklists/sev1.md": "x"}}, "SKILL.md"),
+    ({"incident-triage": {"SKILL.md": "a\x00b"}}, "text"),
+    ({"incident-triage": {"SKILL.md": 7}}, "text"),
+    ({"incident-triage": ["SKILL.md"]}, "files"),
+    ({"incident-triage": {"SKILL.md": "x", "../x.md": "x"}}, "path"),
+    ({"incident-triage": {"SKILL.md": "x", "a/../../x.md": "x"}}, "path"),
+    ({"incident-triage": {"SKILL.md": "x", "/etc/passwd": "x"}}, "path"),
+    ({"incident-triage": {"SKILL.md": "x", "a//b.md": "x"}}, "path"),
+    ({"incident-triage": {"SKILL.md": "x", "a\\b.md": "x"}}, "path"),
+    ({"incident-triage": {"SKILL.md": "x", "a__b.md": "x"}}, "path"),
+    ({"incident-triage": {"SKILL.md": "x", ".hidden": "x"}}, "path"),
+    ({"incident-triage": {"SKILL.md": "x", "a/" * 130 + "b.md": "x"}}, "path"),
+    ({"incident-triage": {"SKILL.md": "x", **{f"f{i}.md": "x" for i in range(SKILL_MAX_FILES)}}}, "files"),
+    ({"incident-triage": {"SKILL.md": "x" * (SKILL_MAX_BYTES + 1)}}, "KiB"),
+])
+def test_skill_content_outside_the_rules_is_refused(signed, skills, match):
+    with pytest.raises(ComposeError, match=match):
+        compose(signed, IMAGE, SKILL_BINDING, skills=skills)
+
+
+def test_the_environment_s_total_is_capped(signed):
+    big = {f"s{i}": {"SKILL.md": "x" * (200 * 1024)} for i in range(3)}  # each under 256 KiB, together over 512 KiB
+    binding = {**SKILL_BINDING, "skills": [{"name": n, "commit": "6" * 40, "verified_by": "mock-skills-catalog"} for n in big]}
+    with pytest.raises(ComposeError, match="512 KiB"):
+        compose(signed, IMAGE, binding, skills=big)
+
+
+@pytest.mark.parametrize("fn", [
+    lambda o: o[1]["spec"]["template"]["spec"].setdefault("volumes", []).append({"name": "skills", "emptyDir": {}}),
+    lambda o: o[1]["spec"]["template"]["spec"]["containers"][0].setdefault("volumeMounts", []).append({"name": "x", "mountPath": "/skills"}),
+    lambda o: o[1]["spec"]["template"]["spec"]["containers"][0].setdefault("volumeMounts", []).append({"name": "x", "mountPath": "/skills/a"}),
+    lambda o: o[1]["spec"]["template"]["spec"].setdefault("initContainers", []).append(
+        {"name": "seed", "volumeMounts": [{"name": "x", "mountPath": "/skills"}]}),
+], ids=["volume", "mount", "mount-below", "init-container"])
+def test_a_deployment_with_its_own_skills_volume_or_mount_is_refused(signed, fn):
+    with pytest.raises(ComposeError, match="skills"):
+        compose(edited(signed, fn), IMAGE, SKILL_BINDING, skills=SKILLS)
+
+
+def test_an_owner_with_no_token_name_is_refused(signed):
+    bad = {**MCP_BINDING, "repo": "a--b/notes"}
+    with pytest.raises(ComposeError, match="owner"):
+        compose(signed, IMAGE, bad)
+    with pytest.raises(ComposeError, match="owner"):
+        cloudflare_access({**bad, "mcp": {"gateway": "mcp-test.example.com", "servers": []}})
+
+
+@pytest.mark.parametrize("env", ["MCP_URL", "CF_ACCESS_CLIENT_ID", "SKILLS_DIR"])
+def test_a_secret_may_not_take_an_mcp_or_skills_name(signed, env):
+    with pytest.raises(ComposeError, match=env):
+        compose(signed, IMAGE, {"secrets": [{**SECRET, "env": env}]})
+
+
+def test_cloudflare_access_is_the_binding_s_desired_state():
+    text = cloudflare_access({**MCP_BINDING})
+    assert text.startswith("# Generated by golden-road compose from bindings.yaml")
+    assert yaml.safe_load(text) == {"schema": "cloudflare-access/v1", "repo": "acme/notes", "environment": "test",
+                                    "gateway": "mcp-test.example.com",
+                                    "token": {"name": "cf-mcp-acme--notes-test", "secret_path": PATH}, "servers": ["notes"]}
+    assert cloudflare_access({"repo": "acme/notes", "environment": "test"}) is None
+    assert yaml.safe_load(cloudflare_access({**MCP_BINDING, "mcp": {"gateway": "mcp-test.example.com", "servers": []}}))["servers"] == []
+
+
+def test_cloudflare_access_is_a_valid_cloudflare_access_v1():
+    from contracts.schema import validate
+    assert validate("cloudflare-access.v1", yaml.safe_load(cloudflare_access(MCP_BINDING))) == []
+
+
+def test_skill_files_problem_is_the_one_rule_the_portal_uses():
+    assert skill_files_problem("incident-triage", SKILLS["incident-triage"]) is None
+    assert "SKILL.md" in skill_files_problem("x", {"a.md": "x"})
+    assert "name" in skill_files_problem("../x", {"SKILL.md": "x"})

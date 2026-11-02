@@ -103,13 +103,17 @@ def _parser() -> argparse.ArgumentParser:
     rn.add_argument("--output", required=True, type=Path)
     cp = sub.add_parser("compose", help="Write composed.yaml, kustomization.yaml and the adapters for golden-road-deploy environments.",
                         description="For each apps/<owner>/<repo>/<env> path (relative to --root), check release.yaml, bindings.yaml and "
-                                    "base/manifests.yaml, then write composed.yaml and kustomization.yaml, and the environment's suspended "
+                                    "base/manifests.yaml, then write composed.yaml and kustomization.yaml (and cloudflare-access.yaml when "
+                                    "bindings.yaml has an mcp key; skills are read from the catalog GOLDEN_ROAD_SKILLS_CATALOG names, else "
+                                    "the bundled mock), and the environment's suspended "
                                     "Flux Kustomization and manual-sync Argo CD Application under clusters/ (the repo URL from "
                                     "clusters/home/flux/gitrepository.yaml). Offline. Exit 0: written, the paths "
                                     "as JSON on stdout. Exit 2: a refused input (a JSON error on stderr); nothing is written for that path.")
     cp.set_defaults(handler=_cmd_compose)
     cp.add_argument("--root", type=Path, default=Path("."), help="the golden-road-deploy checkout (default: .)")
     cp.add_argument("--expect-url", help="refuse unless clusters/home/flux/gitrepository.yaml's url is this one (https://<host>/<org>/golden-road-deploy)")
+    cp.add_argument("--unchanged-binding", action="store_true",
+                    help="the bindings aren't changing (bump's pins): an MCP gateway platform.json moved away from is a warning on stderr, not a refusal")
     cp.add_argument("environments", nargs="+", help="apps/<owner>/<repo>/<test|prod>")
     dv = sub.add_parser("deploy-verify", help="Check every golden-road-deploy environment offline. Reads only; changes nothing.",
                         description="Verify every apps/<owner>/<repo>/<env>: schemas, the base's hash, generated files and adapters not stale, "
@@ -118,6 +122,9 @@ def _parser() -> argparse.ArgumentParser:
     dv.set_defaults(handler=_cmd_deploy_verify)
     dv.add_argument("--root", type=Path, default=Path("."), help="the golden-road-deploy checkout (default: .)")
     dv.add_argument("--expect-url", help="also report a problem unless clusters/home/flux/gitrepository.yaml's url (and so every adapter's) is this one")
+    dv.add_argument("--changed", type=Path,
+                    help="a file of the pull request's changed paths, one per line: only environments whose bindings.yaml or cloudflare-access.yaml "
+                         "changed must name platform.json's MCP gateway; the others' old gateway is listed under warnings (default: every environment)")
     pn = sub.add_parser("deploy-pin", help="Write one golden-road-deploy environment's release.yaml and base/manifests.yaml from a published release.",
                         description="From a release tag and its two assets (manifests.yaml, gate-record.json), write <env>/release.yaml and "
                                     "<env>/base/manifests.yaml. The gate record must pass, be this repo's, and hash the manifests; for prod it is "
@@ -299,16 +306,25 @@ def _cmd_compose(args) -> int:
     url = deploy.deploy_repo_url(args.root)
     if args.expect_url is not None:
         deploy.check_repo_url(url, args.expect_url)
+    warnings = []
     for d in dirs:
-        planned.update(deploy.plan_environment(d))
+        planned.update(deploy.plan_environment(d, strict_gateway=not args.unchanged_binding, warnings=warnings))
         planned.update(deploy.plan_adapters(args.root, d, url))
     written = [p.relative_to(args.root).as_posix() for p in deploy.write_planned(planned)]
+    for w in warnings:
+        print(f"warning: {w}", file=sys.stderr)
     print(json.dumps({"written": written}))
     return EXIT_PASS
 
 
 def _cmd_deploy_verify(args) -> int:
-    report = deploy.verify_tree(args.root, expect_url=args.expect_url)
+    changed = None
+    if args.changed is not None:
+        try:
+            changed = deploy.changed_bindings(args.changed.read_text(encoding="utf-8").splitlines())
+        except (OSError, UnicodeDecodeError) as exc:
+            raise InputError(f"--changed can't be read: {type(exc).__name__}") from None
+    report = deploy.verify_tree(args.root, expect_url=args.expect_url, changed=changed)
     print(json.dumps(report, indent=2))
     return EXIT_FAIL if report["problems"] else EXIT_PASS
 

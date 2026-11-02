@@ -273,3 +273,17 @@ def test_a_deeply_nested_spec_is_an_error_not_a_crash(notes_spec, python_app):
     for spec in ({**notes_spec, "data_classification": deep}, deep):
         errors, _, _ = check(spec, python_app)
         assert errors
+
+
+@pytest.mark.parametrize("name, needle", [("MCP_URL", "MCP_"), ("MCP_SERVERS", "MCP_"), ("CF_ACCESS_CLIENT_ID", "CF_ACCESS_"),
+                                          ("SKILLS_DIR", "SKILLS_DIR")])
+def test_mcp_and_skills_names_are_the_platform_s(notes_spec, python_app, name, needle):
+    notes_spec["env"].append({"name": name, "secret": False})
+    errors = check(notes_spec, python_app)[0]
+    assert any(f"env name {name} is reserved" in e and needle in e for e in errors), errors
+
+
+@pytest.mark.parametrize("name", ["MCP", "MY_MCP_URL", "CF_ACCESS", "SKILLS_DIRS", "SKILLS"])
+def test_names_near_the_mcp_and_skills_names_pass(notes_spec, python_app, name):
+    notes_spec["env"].append({"name": name, "secret": False})
+    assert check(notes_spec, python_app)[0] == []

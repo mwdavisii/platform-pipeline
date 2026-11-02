@@ -108,13 +108,18 @@ def test_no_adapter_is_committed_until_an_app_is_bumped_in():
 
 def test_the_committed_tree_verifies():
     from golden_road.deploy import deploy_repo_url, verify_tree
-    assert verify_tree(DEPLOY) == {"environments": 0, "problems": []}
+    assert verify_tree(DEPLOY) == {"environments": 0, "problems": [], "warnings": []}
     assert deploy_repo_url(DEPLOY) == f"https://github.com/{org()}/golden-road-deploy"  # what compose writes into the Argo adapters
 
 
 def test_the_readme_says_nothing_reconciles():
     text = (DEPLOY / "README.md").read_text()
     assert "suspend: true" in text and "warn" in text and "automated" in text
+
+
+def test_the_readme_says_the_access_file_is_reconciled_and_not_applied():
+    text = " ".join((DEPLOY / "README.md").read_text().split())
+    assert "cloudflare-access.yaml" in text and "reconcile" in text and "not applied" in text
 
 
 def test_configure_fills_the_org(tmp_path):
@@ -149,7 +154,7 @@ def test_configure_fills_the_org(tmp_path):
     assert policy["spec"]["images"] == [{"glob": "ghcr.io/example-org/**"}] and policy["spec"]["mode"] == "warn"
     assert policy["spec"]["authorities"][0]["keyless"]["identities"][0]["subject"].startswith("https://github.com/example-org/platform-pipeline/")
     assert deploy_repo_url(deploy) == "https://github.com/example-org/golden-road-deploy"
-    assert verify_tree(deploy) == {"environments": 0, "problems": []}
+    assert verify_tree(deploy) == {"environments": 0, "problems": [], "warnings": []}
 
 
 def test_the_cluster_secret_store_is_the_platform_s_and_holds_no_credential():
@@ -200,3 +205,12 @@ def test_the_external_secrets_readme_says_deploy_check_does_not_confirm_a_refere
     text = " ".join((DEPLOY / "external-secrets/README.md").read_text().split())
     assert "deploy-check does not confirm a reference against Secret Server" in text
     assert "writer" in text and "edited by hand" in text and "security's review" in text
+
+
+def test_deploy_check_holds_only_changed_bindings_to_the_gateway_and_bump_never_refuses_an_unchanged_one():
+    """Final review of 0.6.0: a gateway move doesn't block the deploy repo (tests/golden_road/test_deploy_gateway_move.py)."""
+    check = (DEPLOY / ".github/workflows/deploy-check.yml").read_text()
+    bump = (DEPLOY / ".github/workflows/bump.yml").read_text()
+    assert "golden-road deploy-verify --root /deploy" in check and "--changed /out/changed.txt" in check
+    assert "'.warnings[]? | \"::warning::\" + .'" in check
+    assert "golden-road compose --root /deploy" in bump and "--unchanged-binding" in bump

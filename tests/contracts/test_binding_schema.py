@@ -114,3 +114,48 @@ def test_at_most_20_secrets_and_env_names_are_unique():
 @pytest.mark.parametrize("name", ["notes-db", "a", "Notes DB.v2_prod", "a" * 128, "1042"])
 def test_a_secret_server_like_name_is_accepted(name):
     assert validate("binding.v2", with_secrets({**SECRET, "secret_name": name})) == []
+
+
+MCP = {"gateway": "mcp-test.example.com", "servers": [{"server_id": "notes", "name": "Notes", "verified_by": "mock-cloudflare"}]}
+SKILL = {"name": "incident-triage", "commit": "6b1f0c2d9e8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c", "verified_by": "mock-skills-catalog"}
+
+
+def with_(**parts):
+    return {**copy.deepcopy(V2), **parts}
+
+
+def test_a_binding_may_carry_mcp_servers_and_skills():
+    assert validate("binding.v2", with_(mcp=MCP, skills=[SKILL])) == []
+    assert validate("binding.v2", with_(mcp={"gateway": "mcp-test.example.com", "servers": []})) == []  # kept after the last removal
+    assert validate("binding.v2", V2) == []  # every document written before 0.6.0 still validates
+
+
+@pytest.mark.parametrize("server", [
+    {"server_id": "Notes"}, {"server_id": "-x"}, {"server_id": "a" * 65}, {"server_id": "a\n"}, {"name": ""}, {"name": "a" * 201},
+    {"name": "a\u0007b"}, {"verified_by": "cloudflare"}, {"token": "x"}, {"name": "Notes\n"},
+])
+def test_a_bad_mcp_server_is_refused(server):
+    item = {**MCP["servers"][0], **server}
+    assert validate("binding.v2", with_(mcp={"gateway": MCP["gateway"], "servers": [item]}))
+
+
+@pytest.mark.parametrize("gateway", ["", "MCP.example.com", "mcp", "https://mcp.example.com", "mcp.example.com/mcp", "a" * 254,
+                                     "mcp.example.com\n"])
+def test_a_bad_gateway_is_refused(gateway):
+    assert validate("binding.v2", with_(mcp={"gateway": gateway, "servers": []}))
+
+
+@pytest.mark.parametrize("skill", [
+    {"name": "Incident"}, {"name": "a_b"}, {"commit": "6b1f0c2"}, {"commit": "G" * 40}, {"verified_by": "skills-catalog"}, {"files": []},
+    {"name": "incident-triage\n"}, {"commit": "a" * 40 + "\n"},
+])
+def test_a_bad_skill_is_refused(skill):
+    assert validate("binding.v2", with_(skills=[{**SKILL, **skill}]))
+
+
+def test_at_most_20_and_unique():
+    servers = [{**MCP["servers"][0], "server_id": f"s{i}"} for i in range(21)]
+    assert validate("binding.v2", with_(mcp={"gateway": MCP["gateway"], "servers": servers}))
+    assert "mcp.servers: server ids must be unique" in validate("binding.v2", with_(mcp={"gateway": MCP["gateway"], "servers": [MCP["servers"][0]] * 2}))
+    assert validate("binding.v2", with_(skills=[{**SKILL, "name": f"s{i}"} for i in range(21)]))
+    assert "skills: names must be unique" in validate("binding.v2", with_(skills=[SKILL, {**SKILL, "commit": "a" * 40}]))

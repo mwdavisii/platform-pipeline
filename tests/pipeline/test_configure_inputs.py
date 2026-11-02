@@ -169,3 +169,51 @@ def test_rejects_bad_values_without_touching_files(workspace, args):
     assert configure(workspace, *args).returncode != 0
     assert (workspace / "platform/platform.json").read_text() == before
     assert "ORG_PLACEHOLDER" in (workspace / "bootstrap/hello-app/.github/workflows/ci.yml").read_text()
+
+
+MCP = ["--mcp-gateway-test", "mcp-test.acme.example", "--mcp-gateway-prod", "mcp.acme.example", "--skills-repo", "acme/golden-road-skills"]
+
+
+def test_records_the_mcp_gateways_and_the_skills_catalog(workspace):
+    (workspace / "bootstrap/hello-app/blob.json").unlink()
+    out = configure(workspace, *GOOD, *MCP)
+    assert out.returncode == 0, out.stderr
+    platform = json.loads((workspace / "platform/platform.json").read_text())
+    assert platform["mcp_gateways"] == {"test": "mcp-test.acme.example", "prod": "mcp.acme.example"}
+    assert platform["skills_repo"] == "acme/golden-road-skills"
+    out = configure(workspace, *GOOD)  # a later run without the flags keeps them
+    assert out.returncode == 0, out.stderr
+    again = json.loads((workspace / "platform/platform.json").read_text())
+    assert again["mcp_gateways"] == platform["mcp_gateways"] and again["skills_repo"] == platform["skills_repo"]
+    out = configure(workspace, *GOOD, "--mcp-gateway-prod", "mcp2.acme.example")  # and a later run may change one
+    assert out.returncode == 0, out.stderr
+    assert json.loads((workspace / "platform/platform.json").read_text())["mcp_gateways"] == {
+        "test": "mcp-test.acme.example", "prod": "mcp2.acme.example"}
+
+
+def test_without_the_flags_the_gateways_are_placeholders_and_the_catalog_is_the_org_s(workspace):
+    (workspace / "bootstrap/hello-app/blob.json").unlink()
+    assert configure(workspace, *GOOD).returncode == 0
+    platform = json.loads((workspace / "platform/platform.json").read_text())
+    assert platform["mcp_gateways"] == {"test": "mcp-test.example.com", "prod": "mcp.example.com"}
+    assert platform["skills_repo"] == "example-org/golden-road-skills"
+
+
+@pytest.mark.parametrize("args", [
+    ["--mcp-gateway-test", "MCP.acme.example"],
+    ["--mcp-gateway-test", "mcp"],
+    ["--mcp-gateway-test", "mcp.acme.example\n"],
+    ["--mcp-gateway-prod", "api.openai.com"],
+    ["--mcp-gateway-prod", "metadata.google.internal"],
+    ["--mcp-gateway-test", "mcp.replace-me.example"],
+    ["--mcp-gateway-test", "mcp.acme.example", "--mcp-gateway-prod", "mcp.acme.example"],
+    ["--mcp-gateway-test", "mcp.example.com"],  # the same host as the placeholder prod gateway
+    ["--skills-repo", "golden-road-skills"],
+    ["--skills-repo", "acme/golden-road-skills/x"],
+    ["--skills-repo", "acme/replace-me"],
+])
+def test_refuses_a_bad_mcp_gateway_or_skills_repo_without_touching_files(workspace, args):
+    (workspace / "bootstrap/hello-app/blob.json").unlink()
+    before = snapshot(workspace)
+    assert configure(workspace, *GOOD, *args).returncode != 0
+    assert snapshot(workspace) == before

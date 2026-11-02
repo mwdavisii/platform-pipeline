@@ -26,6 +26,7 @@ version = {attr = "builder.VERSION"}
 [tool.setuptools.package-data]
 contracts = ["schemas/*.json"]
 builder = ["data/*.json", "data/authz/*.tmpl"]
+golden_road = ["data/*.json"]
 scorecard = ["standards/*.csv", "prompts/*.md"]
 
 [tool.pytest.ini_options]

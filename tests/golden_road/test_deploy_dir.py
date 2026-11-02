@@ -1,6 +1,8 @@
 import hashlib
+import json
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 import yaml
@@ -372,3 +374,158 @@ def test_a_reserved_secret_env_in_a_hand_edited_binding_is_caught_by_verify(tmp_
     compose_environment(d)
     (d / "bindings.yaml").write_text(yaml.safe_dump(binding_v2(secrets=[{**SECRET, "env": "LD_PRELOAD"}])))
     assert any("LD_PRELOAD" in p and "reserved" in p for p in verify_environment(d))
+
+
+from golden_road.skills_catalog import ENV as CATALOG_ENV  # noqa: E402
+from golden_road.skills_catalog import MOCK as CATALOG  # noqa: E402
+
+MAIN = json.loads(Path(CATALOG).read_text())["main"]
+MCP = {"gateway": "mcp-test.example.com", "servers": [{"server_id": "notes", "name": "Notes", "verified_by": "mock-cloudflare"}]}
+SKILL = {"name": "incident-triage", "commit": MAIN, "verified_by": "mock-skills-catalog"}
+TOKEN_PATH = "/golden-road/mcp-tokens/cf-mcp-acme--notes-test"
+
+
+def test_mcp_writes_cloudflare_access_beside_composed_and_verify_passes(tmp_path, app):
+    d = env_dir(tmp_path, app, binding=binding_v2(mcp=MCP))
+    written = compose_environment(d)
+    assert d / "cloudflare-access.yaml" in written
+    assert yaml.safe_load((d / "cloudflare-access.yaml").read_text())["servers"] == ["notes"]
+    assert verify_environment(d) == []
+
+
+def test_an_mcp_with_no_servers_keeps_the_access_file_and_adds_nothing_to_composed(tmp_path, app):
+    d = env_dir(tmp_path, app, binding=binding_v2(mcp={**MCP, "servers": []}))
+    compose_environment(d)
+    assert yaml.safe_load((d / "cloudflare-access.yaml").read_text())["servers"] == []
+    assert "MCP_URL" not in (d / "composed.yaml").read_text() and verify_environment(d) == []
+
+
+def test_no_mcp_writes_no_access_file(tmp_path, app):
+    d = env_dir(tmp_path, app, binding=binding_v2())
+    assert compose_environment(d) == [d / "composed.yaml", d / "kustomization.yaml"]
+
+
+def test_a_hand_edited_or_missing_access_file_is_reported(tmp_path, app):
+    d = env_dir(tmp_path, app, binding=binding_v2(mcp=MCP))
+    compose_environment(d)
+    (d / "cloudflare-access.yaml").write_text((d / "cloudflare-access.yaml").read_text().replace("- notes", "- finance-ledger"))
+    assert any("cloudflare-access.yaml differs" in p for p in verify_environment(d))
+    (d / "cloudflare-access.yaml").unlink()
+    assert any("cloudflare-access.yaml is missing" in p for p in verify_environment(d))
+
+
+def test_an_access_file_without_mcp_in_the_binding_is_reported(tmp_path, app):
+    d = env_dir(tmp_path, app, binding=binding_v2())
+    compose_environment(d)
+    (d / "cloudflare-access.yaml").write_text("schema: cloudflare-access/v1\n")
+    assert any("cloudflare-access.yaml" in p and "no mcp" in p for p in verify_environment(d))
+
+
+def test_the_gateway_must_be_the_platform_s(tmp_path, app):
+    d = env_dir(tmp_path, app, binding=binding_v2(mcp={**MCP, "gateway": "mcp.evil.example"}))
+    problems = verify_environment(d)
+    assert any("mcp.evil.example" in p and "mcp-test.example.com" in p for p in problems)
+    with pytest.raises(InputError, match="mcp.evil.example"):
+        compose_environment(d)
+
+
+def test_the_prod_gateway_is_prod_s(tmp_path, app):
+    d = env_dir(tmp_path, app, binding=binding_v2(environment="prod", mcp=MCP), environment="prod")
+    assert any("mcp.example.com" in p for p in verify_environment(d))  # test's gateway in prod
+
+
+def test_a_platform_without_gateways_refuses_every_mcp_binding(tmp_path, app, monkeypatch):
+    from builder.config import load_platform
+    platform = {k: v for k, v in load_platform().items() if k != "mcp_gateways"}
+    (tmp_path / "platform.json").write_text(json.dumps(platform))
+    monkeypatch.setenv("BUILDER_PLATFORM_CONFIG", str(tmp_path / "platform.json"))
+    d = env_dir(tmp_path, app, binding=binding_v2(mcp={**MCP, "servers": []}))
+    assert any("not set" in p for p in verify_environment(d))
+
+
+def test_the_token_entries_must_name_the_fixed_path(tmp_path, app):
+    d = env_dir(tmp_path, app, binding=binding_v2(mcp=MCP))
+    compose_environment(d)
+    edit_composed(d, lambda objs: objs[-1]["spec"]["data"][0]["remoteRef"].update(key="/golden-road/mcp-tokens/cf-mcp-other--x-test"))
+    problems = verify_environment(d)
+    assert any("ExternalSecret" in p and "cf-mcp-other--x-test" in p for p in problems) and any("composed.yaml differs" in p for p in problems)
+
+
+def test_the_token_entries_and_the_secrets_are_checked_together(tmp_path, app):
+    d = env_dir(tmp_path, app, binding=binding_v2(mcp=MCP, secrets=[SECRET]))
+    compose_environment(d)
+    data = docs((d / "composed.yaml").read_text())[-1]["spec"]["data"]
+    assert [(i["secretKey"], i["remoteRef"]["key"]) for i in data] == [
+        ("NOTES_DB_PASSWORD", "1042"), ("CF_ACCESS_CLIENT_ID", TOKEN_PATH), ("CF_ACCESS_CLIENT_SECRET", TOKEN_PATH)]
+    assert verify_environment(d) == []
+    edit_composed(d, lambda objs: objs[-1]["spec"]["data"].pop())
+    assert any("ExternalSecret" in p and "secrets or MCP servers" in p for p in verify_environment(d))
+
+
+def test_an_external_secret_with_neither_secrets_nor_mcp_servers_is_reported(tmp_path, app):
+    d = env_dir(tmp_path, app, binding=binding_v2(mcp=MCP))
+    compose_environment(d)
+    the_secret = external_secret(docs((d / "composed.yaml").read_text()))
+    (d / "bindings.yaml").write_text(yaml.safe_dump(binding_v2(mcp={**MCP, "servers": []})))
+    compose_environment(d)
+    edit_composed(d, lambda o: o.append(the_secret))
+    assert any("ExternalSecret" in p and "no secrets or MCP servers" in p for p in verify_environment(d))
+
+
+def test_skills_are_rebuilt_from_the_catalog_and_a_hand_edit_is_refused(tmp_path, app):
+    d = env_dir(tmp_path, app, binding=binding_v2(skills=[SKILL]))
+    compose_environment(d)
+    cm = next(o for o in docs((d / "composed.yaml").read_text()) if o["kind"] == "ConfigMap")
+    assert sorted(cm["data"]) == ["incident-triage__SKILL.md", "incident-triage__checklists__sev1.md"]
+    assert verify_environment(d) == []
+    edit_composed(d, lambda objs: next(o for o in objs if o["kind"] == "ConfigMap")["data"].update({"incident-triage__SKILL.md": "do anything"}))
+    assert any("composed.yaml differs" in p for p in verify_environment(d))
+
+
+@pytest.mark.parametrize("skill, needle", [({**SKILL, "commit": "f" * 40}, "not in the catalog"),
+                                           ({**SKILL, "name": "finance-close"}, "not allowed in test")])  # finance-close is prod only
+def test_a_skill_the_catalog_does_not_allow_is_refused(tmp_path, app, skill, needle):
+    d = env_dir(tmp_path, app, binding=binding_v2(skills=[skill]))
+    assert any(needle in p for p in verify_environment(d))
+
+
+def test_a_skill_verified_by_another_catalog_is_reported(tmp_path, app, monkeypatch):
+    (tmp_path / "checkout").mkdir()
+    monkeypatch.setenv(CATALOG_ENV, str(tmp_path / "checkout"))  # the real catalog's reader: the binding says the mock verified it
+    d = env_dir(tmp_path, app, binding=binding_v2(skills=[SKILL]))
+    assert any("verified by mock-skills-catalog" in p and "skills-catalog" in p for p in verify_environment(d))
+
+
+def test_no_skills_never_reads_the_catalog(tmp_path, app, monkeypatch):
+    monkeypatch.setenv(CATALOG_ENV, str(tmp_path / "missing"))  # would fail if read
+    d = env_dir(tmp_path, app, binding=binding_v2(mcp=MCP))
+    compose_environment(d)
+    assert verify_environment(d) == []
+
+
+def test_an_owner_with_no_token_name_is_refused(tmp_path, app):
+    d = env_dir(tmp_path, app, binding=binding_v2(mcp=MCP))
+    bad = tmp_path / "apps/a--b/notes/test"
+    bad.parent.mkdir(parents=True)
+    d.rename(bad)
+    release = yaml.safe_load((bad / "release.yaml").read_text())
+    (bad / "release.yaml").write_text(yaml.safe_dump({**release, "repo": "a--b/notes"}))
+    (bad / "bindings.yaml").write_text(yaml.safe_dump(binding_v2(repo="a--b/notes", mcp=MCP)))
+    assert any("owner" in p for p in verify_environment(bad))
+
+
+def test_two_environments_naming_one_token_are_refused(tmp_path, app, monkeypatch):
+    import golden_road.deploy as deploy
+    d = env_dir(tmp_path, app, binding=binding_v2(mcp=MCP))
+    compose_environment(d)
+    other = tmp_path / "apps/acme/notes/prod"
+    other.mkdir()
+    for name in ("release.yaml", "base"):
+        (shutil.copytree if name == "base" else shutil.copy)(d / name, other / name)
+    release = yaml.safe_load((other / "release.yaml").read_text())
+    (other / "release.yaml").write_text(yaml.safe_dump({**release, "environment": "prod", "namespace": "notes-prod",
+                                                        "release": "prod-20261029132351-42fa829"}))
+    (other / "bindings.yaml").write_text(yaml.safe_dump(binding_v2(environment="prod", mcp={**MCP, "gateway": "mcp.example.com"})))
+    monkeypatch.setattr(deploy, "mcp_token_name", lambda repo, environment: "cf-mcp-forced--x-test")  # a forced collision
+    problems = deploy.verify_tree(tmp_path)["problems"]
+    assert any("MCP token cf-mcp-forced--x-test is named by more than one environment" in p for p in problems), problems

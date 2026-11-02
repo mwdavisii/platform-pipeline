@@ -123,6 +123,7 @@ RESERVED_ENV = {
     "NODE_OPTIONS": "NODE_OPTIONS changes how code loads and can't be set from config",
     "PATH": "PATH decides which programs run and can't be set from config",
     "HOME": "HOME is fixed by the platform image because the container runs as a non-root user with a read-only filesystem",
+    "SKILLS_DIR": "SKILLS_DIR is set by the platform when the app's binding mounts skills (/skills), never from builder-spec.json",
 }
 RESERVED_ENV_PREFIXES = {
     "LD_": "LD_* variables change how libraries load and can't be set from config",
@@ -134,8 +135,11 @@ RESERVED_ENV_PREFIXES = {
     "AZURE_": "AZURE_* variables are set by the platform from the app's binding (its Azure identity, linked in the portal), never from builder-spec.json",
     "DATABRICKS_": "DATABRICKS_* variables are set by the platform from the app's binding (its Databricks connection, linked in the portal), never from builder-spec.json",
     "SECRETSERVER_": "SECRETSERVER_* variables belong to the platform's Secret Server integration (secrets reach the app as the env names its binding chose), never builder-spec.json",
+    "MCP_": "MCP_* variables are set by the platform from the app's binding (its MCP servers, picked in the portal), never from builder-spec.json",
+    "CF_ACCESS_": "CF_ACCESS_* variables carry the app's Cloudflare service token from Secret Server, never builder-spec.json",
 }
-BINDING_ENV_PREFIXES = ("AZURE_", "DATABRICKS_", "SECRETSERVER_")
+BINDING_ENV_PREFIXES = ("AZURE_", "DATABRICKS_", "SECRETSERVER_", "MCP_", "CF_ACCESS_")
+BINDING_ENV_NAMES = ("SKILLS_DIR",)
 
 
 def reserved_reason(name: str) -> str | None:

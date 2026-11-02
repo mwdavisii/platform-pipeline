@@ -47,6 +47,21 @@ configMapGenerator:
   # web and the writer at once; the link is an optional page describing how security shares a secret with golden-road-eso.
   - PORTAL_SECRET_SERVER=
   - PORTAL_SECRET_PROCESS_URL=
+  # MCP servers from the shared Cloudflare MCP gateways, on with the mock (the only Cloudflare there is). The web and the writer read
+  # all three keys, so they can't differ. The gateways: set them to configure.py's --mcp-gateway-test/--mcp-gateway-prod; empty is
+  # mcp-test.example.com and mcp.example.com, the placeholders; deploy-check refuses a binding whose gateway isn't platform.json's.
+  - PORTAL_CLOUDFLARE=mock
+  - PORTAL_MCP_GATEWAY_TEST=
+  - PORTAL_MCP_GATEWAY_PROD=
+  # An optional https page that says how to ask for a server to be added to a gateway (linked on the app page; empty hides it).
+  - PORTAL_MCP_PROCESS_URL=
+  # Skills from the platform's catalog, on with the mock (the fixture deploy-check reads too). The web and the writer read it.
+  - PORTAL_SKILLS_CATALOG=mock
+  # The CMDB record, on with the mock: the collector syncs intake records to it, and the web shows the CMDB card and timeline step.
+  - PORTAL_SERVICENOW=mock
+  # The ownership notice. The organization's name (empty is: the organization) and the grace days (empty is 30; 0 hides the day count).
+  - PORTAL_ORG_NAME=
+  - PORTAL_LIFECYCLE_GRACE_DAYS=
   # The data classification policy the register and approval forms link to (https; empty hides the link). Set it to the same URL as
   # configure.py --classification-policy-url; this is the placeholder until then.
   - PORTAL_CLASSIFICATION_POLICY_URL=https://policies.example.com/data-classification

@@ -221,6 +221,45 @@ def test_a_base_that_is_not_the_releases_fails(tmp_path, release):
     assert errors(result) == ["::error::apps/acme/notes/test/release.yaml: base/manifests.yaml is not the release's manifests.yaml"]
 
 
+MCP_BINDING = {"schema": "binding/v2", "repo": REPO, "environment": "test", "linked_by": "p_" + "a" * 32, "linked_at": "2026-10-31T15:00:00Z",
+               "request": "r_" + "b" * 32,
+               "mcp": {"gateway": "mcp-test.example.com", "servers": [{"server_id": "notes", "name": "Notes", "verified_by": "mock-cloudflare"}]}}
+
+
+def bind_mcp(release):
+    """The pinned environment with an MCP binding, recomposed as the portal's writer would: cloudflare-access.yaml beside composed.yaml."""
+    d = release["deploy"] / "apps/acme/notes/test"
+    (d / "bindings.yaml").write_text(yaml.safe_dump(MCP_BINDING, sort_keys=False))
+    write_pin(release["deploy"], "test", TEST_TAG, release["text"], release["record"])
+    assert (d / "cloudflare-access.yaml").is_file()
+    return d
+
+
+def test_a_pr_that_adds_cloudflare_access_with_its_binding_passes(tmp_path, release):
+    bind_mcp(release)
+    commit_all(release["deploy"])
+    name, result = run(tmp_path)
+    assert result.returncode == 0, (name, result.stdout, result.stderr)
+    changed = (tmp_path / "out/changed.txt").read_text().split()
+    assert "apps/acme/notes/test/cloudflare-access.yaml" in changed and "apps/acme/notes/test/bindings.yaml" in changed
+
+
+def test_an_mcp_binding_without_cloudflare_access_fails_in_deploy_verify(tmp_path, release):
+    (bind_mcp(release) / "cloudflare-access.yaml").unlink()
+    commit_all(release["deploy"])
+    name, result = run(tmp_path)
+    assert name == STEPS[1] and result.returncode == 1
+    assert '"apps/acme/notes/test/cloudflare-access.yaml is missing; run golden-road compose"' in result.stdout
+
+
+def test_an_mcp_binding_on_another_gateway_fails_in_deploy_verify(tmp_path, release):
+    d = bind_mcp(release)
+    (d / "bindings.yaml").write_text(yaml.safe_dump({**MCP_BINDING, "mcp": {**MCP_BINDING["mcp"], "gateway": "mcp.evil.example"}}))
+    commit_all(release["deploy"])
+    name, result = run(tmp_path)
+    assert name == STEPS[1] and result.returncode == 1 and "mcp.evil.example" in result.stdout
+
+
 def test_drift_fails_in_deploy_verify(tmp_path, release):
     d = release["deploy"] / "apps/acme/notes/test"
     (d / "composed.yaml").write_text((d / "composed.yaml").read_text() + "# hand edit\n")

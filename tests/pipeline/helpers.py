@@ -22,7 +22,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_HOST = "github.com"
 DEFAULT_ISSUER = "https://token.actions.githubusercontent.com"
 CONFIGURE_KEYS = ("org", "github_host", "actions_oidc_issuer", "landing_page_url", "approved_models_url", "portal_url", "scorecard_mode",
-                  "scorecard_app_id", "findings_bypass_team")
+                  "scorecard_app_id", "findings_bypass_team", "skills_repo")
 # The committed findings ruleset (hello-app's and the portal's are the same bytes). Central mode pins the check to the App and
 # --findings-bypass-team swaps the actor; the helpers put this text back. A test keeps it equal to the committed files.
 COMMITTED_FINDINGS_RULESET = """\
@@ -109,6 +109,7 @@ def unconfigure_platform(platform_dir):
     doc["edge_ingress"] = {"namespace": "replace-me", "pod_labels": {"app": "replace-me"}}
     doc["identity_header"] = "X-replace-me"
     doc["classification_policy_url"] = "https://policies.example.com/data-classification"  # contracts.classification.POLICY_PLACEHOLDER
+    doc["mcp_gateways"] = {"test": "mcp-test.example.com", "prod": "mcp.example.com"}
     path.write_text(json.dumps(doc, indent=2) + "\n")
 
 

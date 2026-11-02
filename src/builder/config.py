@@ -4,6 +4,7 @@ import fnmatch
 import hashlib
 import json
 import os
+import re
 from importlib import resources
 from pathlib import Path
 
@@ -58,6 +59,30 @@ def scorecard_app_id(platform: dict) -> int | None:
     value = platform.get("scorecard_app_id")
     if type(value) is not int or not 0 < value < 2**31:
         raise ValueError("scorecard_app_id in the platform config must be the scorecard App's id in central mode")
+    return value
+
+
+GATEWAY = re.compile(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+")
+SKILLS_REPO = re.compile(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}")
+
+
+def mcp_gateways(platform: dict) -> dict:
+    """{"test": host, "prod": host}: the two shared Cloudflare MCP gateways (configure.py --mcp-gateway-test/--mcp-gateway-prod), or {}
+    when the platform names none (then no binding may name MCP servers). Each environment has its own gateway, so the two differ."""
+    value = platform.get("mcp_gateways", {})
+    if (not isinstance(value, dict) or set(value) - {"test", "prod"}
+            or not all(isinstance(h, str) and len(h) <= 253 and GATEWAY.fullmatch(h) for h in value.values())):
+        raise ValueError("mcp_gateways in the platform config must map test and prod to host names")
+    if "test" in value and value.get("test") == value.get("prod"):
+        raise ValueError("mcp_gateways in the platform config must name a different host for test and prod")
+    return dict(value)
+
+
+def skills_repo(platform: dict) -> str | None:
+    """OWNER/NAME of the platform's reviewed skills catalog (configure.py --skills-repo), or None when the platform names none."""
+    value = platform.get("skills_repo")
+    if value is not None and not (isinstance(value, str) and SKILLS_REPO.fullmatch(value)):
+        raise ValueError("skills_repo in the platform config must be OWNER/NAME")
     return value
 
 

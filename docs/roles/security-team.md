@@ -28,6 +28,8 @@ On a personal account there are no teams: the setup document puts your login (an
 | Confirmed N/A | `scorecard-factory` `na/<owner>/<repo>.yaml` (`na/v1`) | Read only by the ASVS checklist engine (`review-1`) |
 | The registration floor | `scorecard-factory` `config/registration.yaml` (`registration-rules/v1`) | The portal's collector and the scorecard's T-21 both read it |
 | Binding review | `golden-road-deploy` `apps/**/bindings.yaml` | Shared with `analytics`; CODEOWNERS can't own part of a file |
+| The skills catalog | `golden-road-skills` (`platform.json`'s `skills_repo`): `skills/<name>/SKILL.md`, its files and `skills/<name>/skill.yaml` (`skill/v1`) | CODEOWNERS on `skills/` names security. In the PoC: the fixture `bootstrap/golden-road-portal/portal/mock_skills_catalog.json` |
+| Which MCP servers apps may use | Each server's Cloudflare Access policies on the two shared MCP gateways (test and prod) | With the gateways' admins; the app's token is added to a server's Service Auth policy by the platform's job (not built) |
 | The platform's Secret Server account and identity process | See [secret-server-admin.md](secret-server-admin.md) and [identity-admin.md](identity-admin.md) | The portal calls these "security's process" |
 
 **Not yours, but you ask for changes:** `config/scorecard.yaml` (the model, gateway, budget and Gate 1 list; CODEOWNERS `*` is
@@ -328,7 +330,11 @@ for this app and environment, that the warehouse grant is intended, and that eac
 does not compare a binding with the directory or Secret Server: the portal's writer checked them once, and a hand-edited
 `bindings.yaml` skipped that check entirely.
 
-**Check:** the PR changes exactly `bindings.yaml` and `composed.yaml` for one environment, `deploy-check` passed, and you approved it.
+For MCP servers, check that each server is one this app should reach in that environment; for skills, that each is the catalog's
+at a commit on its `main`. `deploy-check` holds the gateway to `platform.json`'s and rebuilds the skills from the catalog.
+
+**Check:** the PR changes exactly `bindings.yaml` and `composed.yaml` for one environment (and `cloudflare-access.yaml` when its MCP
+servers change), `deploy-check` passed, and you approved it.
 
 ### 16. Tune the re-review signals
 
@@ -343,6 +349,43 @@ does not compare a binding with the directory or Secret Server: the portal's wri
 
 **Check:** the collector starts (a bad value stops it with the setting's name), and the next matching PR's run appears on
 `/admin/rereview`.
+
+### 17. Approve a skill for the catalog
+
+**Goal:** only skills security reviewed can be mounted into an app, in the environments and for the people you chose.
+
+1. A skill arrives as a pull request to the catalog repo, `golden-road-skills`, adding or changing `skills/<name>/`. CODEOWNERS on
+   `skills/` names `<org>/security`, so it needs your review.
+2. Check `skills/<name>/skill.yaml` (`skill/v1`): `name` (lower case letters, digits and `-`, the folder's name), a one-line
+   `description`, `environments` (`[test]`, `[prod]` or both) and `audience` (`everyone`, or a list of identity provider groups).
+   The audience decides who may pick it in the portal; the environments are checked again by `deploy-check`.
+3. Check `SKILL.md` (required) and every file beside it: text the app's model will read as instructions. Read it as you would a
+   prompt change: no secrets, no instructions to fetch or run anything the app shouldn't. `skill.yaml` itself is not mounted.
+4. The limits (compose refuses more): UTF-8 text with no NUL, at most 64 files and 256 KiB per skill, and 512 KiB per environment.
+   A path is segments of letters, digits, `.`, `_` and `-` joined by `/`, with no hidden file, no `..` and no `__` in a segment.
+5. Merge it to `main`. Apps pin a skill by its commit, and `deploy-check` accepts only a commit on `main`: an unmerged branch is
+   "not in the catalog". An app keeps the commit it pinned until its owner presses **Update**.
+
+In the PoC the catalog is the fixture bundled with the portal and the builder; changing it is a platform pull request and a release.
+
+**Check:** the skill is offered on an app's tab for the environments you listed, and only to its audience.
+
+### 18. Let apps use an MCP server on the gateway
+
+**Goal:** a server on a shared MCP gateway can be used by the apps that pick it, and by no other app.
+
+1. A server is added to the test or prod gateway by its admins (in Cloudflare, not in git). Its Access policies decide which people
+   see it in the portal.
+2. For apps, the server needs a Service Auth policy: Cloudflare then admits a service token only if that policy names it. The
+   platform's job (platform-team procedure 12) adds each app's token to the policies of the servers in its `cloudflare-access.yaml`;
+   nobody adds an app's token by hand.
+3. A server that acts as each signed-in person (`on_behalf`, "Require user auth") stays person-only: Cloudflare excludes it from
+   service-token sessions, and the portal greys it ("This server needs each person's own sign-in, so an app can't use it."). Don't
+   try to open it to apps; ask for a server that apps can use instead.
+4. Review the app's binding PR (procedure 15): which servers it adds in which environment.
+
+**Check:** the server is offered on an app's tab to the people its policies allow, and `cloudflare-access.yaml` in the deploy repo
+lists it for the apps that picked it.
 
 ## What you must never do
 
@@ -396,3 +439,8 @@ does not compare a binding with the directory or Secret Server: the portal's wri
 - **`deploy-check` does not verify a binding against its source.** It checks shape and generated files only; the directory and
   Secret Server checks happen once, in the portal's writer.
 - **The scorecard runner's network egress is not restricted** on GitHub-hosted runners.
+- **Who may use which MCP server can't be confirmed in the mock.** The mock's per-user policy stands in for Cloudflare evaluating
+  the person against each server's Access policies, and it is checked once, at submit. No token is issued and no Service Auth
+  policy changes: the reconcile job is not built.
+- **A skill's audience is checked once, at submit,** against the person's sign-in groups. `deploy-check` re-checks the commit, the
+  environments and the size, never the audience.

@@ -153,6 +153,23 @@ record moved after you approved, and `record_conflict` that GitHub refused the w
 
 **Check:** the item leaves the list and the audit log shows `rereview_item.closed` with your note.
 
+### 9. Read the CMDB sync
+
+**Goal:** every registered app has its ServiceNow CMDB record, and a failed sync reaches the person who can fix it.
+
+With `PORTAL_SERVICENOW=mock`, the collector sends each new or changed intake record to ServiceNow. On `/admin/rereview` the
+collector's source line includes "ServiceNow CMDB", and a problem is listed with the repos whose last attempt failed:
+- `cmdb_unreachable`: ServiceNow didn't answer. The collector retries on the next pass; if it lasts, tell the platform team.
+- `cmdb_owner_unknown`: the owner's email (from their sign-in) matches no single ServiceNow user, so the app isn't sent: a CI without
+  its owner would be an orphaned app. Ask the owner to check their email with the identity provider, or the ServiceNow admins to fix
+  the user. It is retried every pass.
+- `cmdb_refused`: ServiceNow refused the CI (its reconciliation rules). Tell the platform team (platform-team procedure 13).
+
+You can't change an app's owner in ServiceNow from the portal: the intake record's owner is the truth, changed by a change of the
+registration (app-developer procedure 11, which you approve with procedure 7).
+
+**Check:** the problem leaves the page after the next pass, and the app's page shows its ServiceNow number.
+
 ## What you must never do
 
 - Never approve your own registration, or one for an app you build, even if the portal would let another admin's link through.
@@ -165,6 +182,7 @@ record moved after you approved, and `record_conflict` that GitHub refused the w
 
 | Symptom | Cause | Fix |
 |---|---|---|
+| The approval says "Ownership acknowledged: Not recorded (submitted before 0.6.0)." | The request was submitted before the notice existed | Nothing to do; a later change or renewal records it |
 | "The platform hasn't computed this repo's evidence yet: approving waits for it." | The collector has not read the repo for this submission | Wait for the collector's next pass |
 | "The platform's evidence for this request names a retired classification level" | Evidence from before builder 0.5.0 | Send it back; resubmitting computes fresh evidence |
 | "This registration changed since you loaded this page" | It was sent back and submitted again meanwhile | Reload and look again |
@@ -181,5 +199,6 @@ record moved after you approved, and `record_conflict` that GitHub refused the w
   usage, orphaned or unregistered apps and owner notifications are not collected.
 - **A signal setting applies from when it changes.** Events already read are not matched again.
 - **The audit page shows 200 entries** with no search or export.
-- **No offboarding flow.** Removing a person's link is manual; nothing reacts to someone leaving.
+- **No offboarding flow.** Removing a person's link is manual; nothing reacts to someone leaving, and nothing retires an app's
+  ServiceNow CI.
 - **The approval rests on the collector's view** of repo admins; if the collector stops, approvals stall with a stale-observation error.

@@ -57,7 +57,7 @@ def test_the_builder_and_the_portal_pin_the_same_pyyaml():
 def test_the_portal_s_vendored_schemas_are_the_contracts():
     names = ("binding.v1.json", "binding.v2.json", "builder-spec.v1.json", "deploy-release.v1.json", "finding.v2.json", "identity-link.v1.json",
              "intake.v1.json", "intake.v2.json", "re-review-event.v1.json", "registration-draft.v1.json", "registration-evidence.v1.json",
-             "registration-rules.v1.json", "scorecard.v1.json", "scorecard.v2.json")
+             "registration-rules.v1.json", "scorecard.v1.json", "scorecard.v2.json", "skill.v1.json")
     for name in names:
         assert (PORTAL / "portal/schemas" / name).read_bytes() == (ROOT / "src/contracts/schemas" / name).read_bytes(), name
     assert sorted(p.name for p in (PORTAL / "portal/schemas").glob("*.json")) == sorted(names)
@@ -80,7 +80,8 @@ def test_ci_runs_the_portal_s_docker_tests():
     for path in ("bootstrap/golden-road-portal/tests/test_portal_store_contract.py", "bootstrap/golden-road-portal/tests/test_portal_postgres_docker.py",
                  "tests/pipeline/test_portal_semgrep_docker.py", "bootstrap/golden-road-portal/tests/test_portal_postgres_flow_docker.py",
                  "bootstrap/golden-road-portal/tests/test_portal_postgres_rereview_docker.py",
-                 "bootstrap/golden-road-portal/tests/test_portal_postgres_evidence_docker.py", "tests/pipeline/test_portal_deploy_kit_docker.py"):
+                 "bootstrap/golden-road-portal/tests/test_portal_postgres_evidence_docker.py", "tests/pipeline/test_portal_deploy_kit_docker.py",
+                 "bootstrap/golden-road-portal/tests/test_portal_postgres_cmdb_docker.py"):
         assert path in run.split("-m docker", 1)[1], path
 
 
@@ -223,3 +224,36 @@ def test_the_portal_readme_describes_changes_and_the_re_review_list():
                    "not_a_file", "`git/ref/heads/main`"):
         assert needle in text, needle
 
+
+def test_the_skills_catalog_fixture_is_the_release_s():
+    """The writer's skills ConfigMap and deploy-check's are built from the same bytes (plan 2026-10-31 MCP, skills and CMDB, item 3)."""
+    assert (PORTAL / "portal/mock_skills_catalog.json").read_bytes() == (ROOT / "src/golden_road/data/mock_skills_catalog.json").read_bytes()
+
+
+def test_the_wheel_carries_the_catalog_fixture():
+    import tomllib
+    doc = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    assert doc["tool"]["setuptools"]["package-data"]["golden_road"] == ["data/*.json"]
+
+
+NEW_0_6_0 = ("PORTAL_CLOUDFLARE", "PORTAL_MCP_GATEWAY_TEST", "PORTAL_MCP_GATEWAY_PROD", "PORTAL_MCP_PROCESS_URL", "PORTAL_SKILLS_CATALOG",
+             "PORTAL_SERVICENOW", "PORTAL_ORG_NAME", "PORTAL_LIFECYCLE_GRACE_DAYS")
+
+
+def test_the_portal_declares_its_0_6_0_settings():
+    env = {e["name"]: e["secret"] for e in json.loads((PORTAL / "builder-spec.json").read_text())["env"]}
+    for name in NEW_0_6_0:
+        assert env[name] is False, name
+    assert "PORTAL_CLOUDFLARE_ACCOUNT_ID" not in env and "PORTAL_SERVICENOW_URL" not in env  # only the mocks exist; the settings refuse them
+    deployment = (PORTAL / "deploy/base/deployment.yaml").read_text()
+    assert all(f"key: {name}" in deployment for name in NEW_0_6_0)
+
+
+def test_the_portal_readme_describes_mcp_servers_skills_and_the_cmdb_record():
+    text = " ".join((PORTAL / "README.md").read_text().split())
+    for name in (*NEW_0_6_0, "PORTAL_CLOUDFLARE_ACCOUNT_ID", "PORTAL_SERVICENOW_URL"):
+        assert f"`{name}`" in text, name
+    for needle in ("## MCP servers, skills and the CMDB record (0.6.0, mock)", "cloudflare-access.yaml", "/access/ai-controls/mcp/portals",
+                   "/api/now/identifyreconcile", "cmdb_unreachable", "cmdb_owner_unknown", "cmdb_refused", "0011",
+                   "per-user policy is the mock's"):
+        assert needle in text, needle

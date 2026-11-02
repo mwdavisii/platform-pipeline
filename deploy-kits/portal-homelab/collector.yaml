@@ -1,5 +1,6 @@
 # The collector: every five minutes records the repo admins, computes the evidence of each waiting registration, observes the
-# factory's intake records and reads the scorecard's re-review events, with the read App. It holds only the read App's key.
+# factory's intake records and reads the scorecard's re-review events, with the read App, and syncs the intake records to ServiceNow
+# CMDB (mock). It holds only the read App's key.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -74,6 +75,12 @@ spec:
             configMapKeyRef:
               name: golden-road-portal-config
               key: PORTAL_ARTIFACT_HOSTS
+              optional: true
+        - name: PORTAL_SERVICENOW  # mock: sync each new or changed intake record to the mock ServiceNow CMDB; unset: no CMDB part
+          valueFrom:
+            configMapKeyRef:
+              name: golden-road-portal-config
+              key: PORTAL_SERVICENOW
               optional: true
         - name: PORTAL_READ_APP_KEY_FILE
           value: /secrets/read-app/read-app.pem

@@ -101,3 +101,18 @@ def test_the_closed_gaps_are_gone_and_the_new_procedures_are_there():
     assert "app-developer procedure 11" in admin
     assert "untrusted_run" in admin and "per-app mode" in security and "tag ruleset" in security
 
+
+
+def test_the_0_6_0_procedures_are_there():
+    """Spec 2026-10-31 MCP, skills and CMDB, Docs."""
+    dev, security, platform, admin = ((ROLES / n).read_text() for n in ("app-developer.md", "security-team.md", "platform-team.md", "portal-admin.md"))
+    assert "### 12. Add an MCP server" in dev and "### 13. Add, update or remove a skill" in dev and "### 14. Know what owning your app means" in dev
+    assert "### 17. Approve a skill for the catalog" in security and "### 18. Let apps use an MCP server on the gateway" in security
+    assert "### 12. Reconcile Cloudflare access from the deploy repo" in platform and "### 13. Set up the ServiceNow integration user" in platform
+    assert "### 9. Read the CMDB sync" in admin and "### 14. Move an MCP gateway" in platform and "--unchanged-binding" in platform
+    for needle in ("cloudflare-access.yaml", "/golden-road/mcp-tokens/cf-mcp-", "Service Auth"):
+        assert needle in platform, needle
+    for needle in ("This server needs each person's own sign-in", "Update", "I understand what owning this app means"):
+        assert needle in dev, needle
+    assert "CODEOWNERS" in security and "skill.yaml" in security and "on_behalf" in security
+    assert "cmdb_owner_unknown" in admin and "cmdb_owner_unknown" in dev

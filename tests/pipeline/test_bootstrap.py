@@ -358,7 +358,7 @@ def test_personal_poc_doc_covers_the_scans_codeql_dependabot_and_the_known_gap()
                    "sp-finance-reports", "AZURE_CLIENT_ID", "bindings/<you>/hello-app.yaml"):
         assert needle in text, needle
     steps = [int(m) for m in re.findall(r"^## (\d+)\.", text, re.M)]
-    assert steps == list(range(0, 25))
+    assert steps == list(range(0, 26))
     # the scans repo is published before hello-app is pushed, and the builder is released again only after both exist
     assert text.index("## 4. Publish `security-scans`") < text.index("## 5. Create `hello-app`") < text.index("## 11.") < text.index("## 12.")
     assert text.index("## 13. Risk scorecard") < text.index("## 14. ") < text.index("## 16. Central AI review") < text.index("## 17. Switch the review to risk routing") < text.index("## 18. High findings hold the merge") < text.index("## 19. App connections (mock)") < text.index("## 20. The deploy repo (mock)") < text.index("## 21. Delinea Secret Server secrets (mock)") < text.index("## 22. Builder 0.5.0: three classification levels, the policy link and the portal reskin") < text.index("## 23. Builder 0.5.1: changing a registration and the re-review list") < text.index("## 24. Builder 0.6.0: MCP servers, skills and the CMDB record (mock)") < text.index("## PoC gaps to record")

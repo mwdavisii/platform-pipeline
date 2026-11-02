@@ -6,11 +6,11 @@
 # see it: rebuild the image (and release a new builder version) whenever Debian ships a git security fix. GIT_VERSION is the
 # upstream version the stage must install; a Debian update to another upstream version fails the build on purpose, so it is
 # a reviewed change to this line.
-ARG GIT_VERSION=2.39.5
-FROM docker.io/library/python:3.12-slim-bookworm@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258 AS git
+ARG GIT_VERSION=2.47.3
+FROM docker.io/library/python:3.12-slim-trixie@sha256:b18b261e1b4974b4f321451ad5251ded85abb22c2b8b262da527dda1d031ab30 AS git
 RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
 
-FROM docker.io/library/python:3.12-slim-bookworm@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258
+FROM docker.io/library/python:3.12-slim-trixie@sha256:b18b261e1b4974b4f321451ad5251ded85abb22c2b8b262da527dda1d031ab30
 ARG GIT_VERSION
 COPY --from=git /usr/bin/git /usr/bin/git
 RUN ldd /usr/bin/git && ! ldd /usr/bin/git | grep -q "not found" && [ "$(git --version)" = "git version ${GIT_VERSION}" ]

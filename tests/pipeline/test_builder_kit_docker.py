@@ -19,7 +19,7 @@ pytestmark = [pytest.mark.docker, pytest.mark.skipif(shutil.which("docker") is N
 
 def base_image():
     """The builder image's own Python base, by digest (images/builder/Dockerfile)."""
-    return re.search(r"(?m)^FROM (docker\.io/library/python:3\.12-slim-bookworm@sha256:[0-9a-f]{64})$", (ROOT / "images/builder/Dockerfile").read_text()).group(1)
+    return re.search(r"(?m)^FROM (docker\.io/library/python:3\.12-slim-trixie@sha256:[0-9a-f]{64})$", (ROOT / "images/builder/Dockerfile").read_text()).group(1)
 
 
 def test_the_kit_builds_reproducibly_and_installs_like_the_skill_installs_it(tmp_path):

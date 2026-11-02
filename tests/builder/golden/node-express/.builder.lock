@@ -6,7 +6,7 @@
   "builder_version": "0.2.0",
   "files": {
     ".dockerignore": "16db3544cb06ccea08c36be035d48d045628f77baf1fc24f23f8472896d68ede",
-    "Dockerfile": "d30071e9479427e50b78bbc506a27112c6249d7dd01d99ce409fbca024035ae0",
+    "Dockerfile": "a3873c560c032751ced5db326d9e0c8c61fbe3328c9cf9a984a6a9ae90fc7ee7",
     "_platform/authz-policy.json": "283420ce0f9e94f6c2384fb0be60151bdfa1b8c384472f8448f0014a709764ba",
     "_platform/authz.js": "fd87721884be196862aa0232244d2771df3a675ad3e8712377fb86fe5bf48770",
     "deploy/base/cilium-egress.yaml": "91d88744115520e3892c3e48c0c19880efc3758e10f913d4c2c59ac112168873",

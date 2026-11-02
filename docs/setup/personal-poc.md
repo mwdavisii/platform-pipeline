@@ -1617,6 +1617,30 @@ The writer fails a change, before it writes anything, with `mcp_owner_invalid` (
 ### 24.5 Roll back
 On the `test` tab press **Remove** beside Notes and beside `incident-triage`, then **Remove** again to confirm. The writer rewrites `bindings.yaml` and `composed.yaml` (no `MCP_*`, `CF_ACCESS_*`, `ConfigMap` or `SKILLS_DIR`; the `ExternalSecret` goes if no secret is left), and `cloudflare-access.yaml` stays with `servers: []`. To turn a section off, empty `PORTAL_CLOUDFLARE`, `PORTAL_SKILLS_CATALOG` or `PORTAL_SERVICENOW` and restart the pods; the CMDB records stay in the database. 0011 is forward-only, as 0010 is: roll the portal image back only with a database restored from before 0011. Nothing in Cloudflare, ServiceNow or a cluster changed. Prefer fixing forward.
 
+## 25. Builder 0.6.1: Debian 13 (trixie) base images
+Builder 0.6.1 changes no behavior. It moves every base image from Debian 12 (bookworm) to Debian 13 (trixie), each pinned by its multi-arch index digest:
+
+| Use | 0.6.0 | 0.6.1 |
+|---|---|---|
+| Python apps (build and runtime), the builder image | `python:3.12-slim-bookworm` | `python:3.12-slim-trixie` |
+| Node and static apps (build) | `node:22-bookworm-slim` | `node:22-trixie-slim` |
+| Node apps (runtime) | `gcr.io/distroless/nodejs22-debian12:nonroot` | `gcr.io/distroless/nodejs22-debian13:nonroot` |
+
+Static apps' runtime (`nginx-unprivileged`, Alpine) is unchanged. The builder image's copied `git` moves from 2.39.5 to Debian 13's 2.47.3 (`GIT_VERSION`, the `git.version` label). Generated Dockerfiles change only their `FROM` lines, so an app picks the new bases up from its regenerate PR.
+
+### 25.1 Roll out (in this order)
+1. **Release builder 0.6.1** (the lead's bump) from a fresh, configured export (as in 13.2), then pin it in every workflow. The pin's check still prints `8   BUILDER_IMAGE: $ref`.
+   **Check:** `docker run --rm --network none "$ref" git --version` prints `git version 2.47.3`, and `docker run --rm --network none --entrypoint cat "$ref" /etc/debian_version` prints `13.` and a point release.
+2. **The deploy repo.** Copy this release's `deploy-check.yml` and `bump.yml` into your clone of the deploy repo, as in 24.1 step 3; only `BUILDER_IMAGE` changes. Open the PR and merge it.
+3. **The factory.** Merge its pin PR.
+4. **The apps.** Merge the regenerate PRs of `hello-app` and the portal (as in 14.6). Each changes its `Dockerfile`'s two `FROM` lines and `.builder.lock`.
+   **Check:** each PR's release run passes Gate 1, Trivy included. The scan now reports Debian 13 packages.
+
+There is no migration, and the portal kit is unchanged: deploy the portal's new build as usual.
+
+### 25.2 Roll back
+Pin 0.6.0 again and revert the apps' regenerate PRs. Nothing else depends on the base image.
+
 ## PoC gaps to record
 - The scans are open-source reference scans (Semgrep CE with a small vendored rule set plus `p/default`, Trivy, CodeQL default setup), not the security team's tools, thresholds, or triage. Until step 11, Gate 1 waits on nothing beyond drift and the authz probe. Gate 1 sees only a CodeQL check run's conclusion, so it proves the analysis ran, not that no alert exists; the alert threshold is enforced at merge time.
 - **Scan results can be forged.** Every check that a GitHub Actions workflow posts comes from the same app (id 15368), so pinning `app_id` cannot tell the `security-scans` workflow's `security-scans / semgrep` from a job of the same name that anyone with write access adds to a workflow in `hello-app` (or by editing `security-scans.yml` to stop calling the real scans). CodeQL's results can likewise be imitated by a workflow with `security-events: write`. What holds today is code-owner review of `.github/` and a deputy who rejects changes there. **The real fix is signed scan results**: the scan workflow signs its result with its own identity and the release verifies that signature instead of a check name. It is out of scope for this PoC.

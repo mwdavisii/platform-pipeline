@@ -35,7 +35,7 @@ concurrency:
 
 env:
   # The platform's builder image, which carries the pinned scorecard code. Pin the digest from the builder release.
-  BUILDER_IMAGE: ghcr.io/mwdavisii/golden-road-builder@sha256:953d29ad44956760e385c4a3be09e21053df1dada371062251640ebc64189c2a
+  BUILDER_IMAGE: ghcr.io/mwdavisii/golden-road-builder@sha256:c28841e393d4b3237e73a258ff9836ef6ee2c09c3ed6b9d8b18301463294f999
   # How the review agent gets its gateway credential: key, the SCORECARD_GATEWAY_KEY secret of the `scorecard` environment, or oidc.
   # With oidc the gateway sees job_workflow_ref .../scorecard-assess.yml@refs/heads/main, event_name workflow_dispatch and the
   # environment `scorecard`.

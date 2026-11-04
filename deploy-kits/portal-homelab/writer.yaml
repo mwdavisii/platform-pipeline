@@ -1,5 +1,5 @@
-# The writer: the only process that writes to git (spec P17). It holds the write App's key and nobody else does. It refuses to
-# start until the factory's rulesets are split the way its bypass check wants (README, "Checks after deploy").
+# The writer: the only process that writes to git (spec P17). It holds the write App's key and nobody else does, and the lifecycle
+# App's key (spec 2026-11-02 L9), which no other pod gets. It refuses to start until the factory's rulesets are split the way its bypass check wants (README, "Checks after deploy").
 # One replica, and Recreate, so two writers never run at once.
 apiVersion: apps/v1
 kind: Deployment
@@ -102,6 +102,17 @@ spec:
               optional: true
         - name: PORTAL_WRITE_APP_KEY_FILE
           value: /secrets/write-app/write-app.pem
+        # The lifecycle App (spec 2026-11-02 L9): optional for the writer, which reads both settings or neither (without them a
+        # decommission is refused; suspend and resume need neither). The kit always sets the key file's path, so fill both keys of the
+        # writer's Secret, or remove these two entries to run without it (README, "Lifecycle (0.7.0)").
+        - name: PORTAL_LIFECYCLE_APP_ID
+          valueFrom:
+            secretKeyRef:
+              name: golden-road-portal-writer
+              key: PORTAL_LIFECYCLE_APP_ID
+              optional: true
+        - name: PORTAL_LIFECYCLE_APP_KEY_FILE
+          value: /secrets/lifecycle-app/lifecycle-app.pem
         - name: PORTAL_DATABASE_URL
           valueFrom:
             secretKeyRef:
@@ -127,6 +138,9 @@ spec:
         - name: write-app-key
           mountPath: /secrets/write-app
           readOnly: true
+        - name: lifecycle-app-key
+          mountPath: /secrets/lifecycle-app
+          readOnly: true
       volumes:
       - name: tmp
         emptyDir:
@@ -138,3 +152,11 @@ spec:
           items:
           - key: write-app.pem
             path: write-app.pem
+      - name: lifecycle-app-key  # optional: an empty directory until the Secret holds lifecycle-app.pem
+        secret:
+          secretName: golden-road-portal-writer
+          optional: true
+          defaultMode: 288  # octal 0440, as the write App's key
+          items:
+          - key: lifecycle-app.pem
+            path: lifecycle-app.pem

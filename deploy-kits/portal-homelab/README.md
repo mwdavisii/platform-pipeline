@@ -58,7 +58,7 @@ The builder's baseline policy admits the web pods' port from the edge named in t
 
 | Variable | Used by | Value |
 |---|---|---|
-| `PORTAL_BASE_URL` | web | `https://viber.mwdavisii.com` |
+| `PORTAL_BASE_URL` | web, collector | `https://viber.mwdavisii.com`. From 0.7.0 the collector needs it too while `PORTAL_SERVICENOW` is set: each ServiceNow work note links the portal's request (it exits 2 without it) |
 | `PORTAL_ORG` | web, writer, collector | `mwdavisii` |
 | `PORTAL_GITHUB_HOST` | web, writer, collector | `github.com` |
 | `PORTAL_ROLE_GROUPS` | web, writer | `{"admin": ["golden-road-admins"], "ops": ["golden-road-ops"]}` |
@@ -95,12 +95,14 @@ The builder's baseline policy admits the web pods' port from the edge named in t
 | | `PORTAL_DATABASE_URL` (as `portal_web`) | same | web |
 | `golden-road-portal-writer` | `PORTAL_DATABASE_URL` (as `portal_writer`) | same | writer |
 | | `write-app.pem` | a file; `PORTAL_WRITE_APP_KEY_FILE=/secrets/write-app/write-app.pem` | writer |
+| | `PORTAL_LIFECYCLE_APP_ID` (0.7.0) | same | writer |
+| | `lifecycle-app.pem` (0.7.0) | a file; `PORTAL_LIFECYCLE_APP_KEY_FILE=/secrets/lifecycle-app/lifecycle-app.pem` | writer |
 | `golden-road-portal-collector` | `PORTAL_DATABASE_URL` (as `portal_collector`) | same | collector |
 | | `read-app.pem` | a file; `PORTAL_READ_APP_KEY_FILE=/secrets/read-app/read-app.pem` | collector |
 | `golden-road-portal-migrate` | `PORTAL_MIGRATE_DATABASE_URL` (as `portal_owner`) | same | migration job |
 | `golden-road-portal-postgres` | `POSTGRES_PASSWORD`, `PORTAL_OWNER_PASSWORD`, `PORTAL_WEB_PASSWORD`, `PORTAL_WRITER_PASSWORD`, `PORTAL_COLLECTOR_PASSWORD` | same | Postgres init |
 
-The database roles are `portal_owner` (owns database `portal`, runs the migrations), `portal_web`, `portal_writer` and `portal_collector`. The init script creates them once, on an empty volume, with the passwords from `golden-road-portal-postgres`; changing a password there later does not change the role (use `ALTER ROLE`). Postgres holds the four role passwords as environment variables of its pod (acceptable for a homelab; a Secret mounted as files would be the stricter choice). The web pod never gets the write key and the writer never gets the OIDC secret.
+The database roles are `portal_owner` (owns database `portal`, runs the migrations), `portal_web`, `portal_writer` and `portal_collector`. The init script creates them once, on an empty volume, with the passwords from `golden-road-portal-postgres`; changing a password there later does not change the role (use `ALTER ROLE`). Postgres holds the four role passwords as environment variables of its pod (acceptable for a homelab; a Secret mounted as files would be the stricter choice). The web pod never gets the write key or the lifecycle App's key, and the writer never gets the OIDC secret.
 
 ## Verify the release
 
@@ -193,3 +195,19 @@ curl -si https://viber.mwdavisii.com/ -H 'X-Platform-Roles: nobody' | head -1   
 - **Collector.** Its log lines `collectors: repo_admins: N rows` and `collectors: evidence: N computed, M waiting` appear every five minutes (`M waiting (rules_missing)` means the factory has no `config/registration.yaml` on its default branch yet; `record_unreadable` and `record_case_mismatch` mean a change's current intake record can't be read, or is in the factory under two spellings). A `failed: 401` or `404` means the read App's id, installation id or key is wrong. From 0.5.1 also `collectors: intake: N records (M unreadable), K opened, J closed` and `collectors: re-review events: N stored, M skipped`. `(actions_unreadable: give the read App actions: read)` means the read App lacks Actions read; a download that never succeeds shows as `(GitHub is busy: will retry)` on every pass: check the egress host below. Runs the collector won't trust (`untrusted_run`: not the factory's own dispatched assessment of that head, or not the app's own pull request run) are counted on the Re-review page, never read. From 0.6.0, with `PORTAL_SERVICENOW=mock`, also `collectors: cmdb: N synced, M unchanged`: on the first pass every intake record is synced, and after that only new or changed ones. `(N owner unknown)` means an owner's email matches no single ServiceNow user (`cmdb_owner_unknown`); `(N refused)` that ServiceNow refused a record (`cmdb_refused`); `(cmdb_unreachable: will retry)` that ServiceNow didn't answer. Each shows on the Re-review page too. A part that fails for any other reason logs `failed: <type>` and the other parts still run.
 - **Writer.** A change fails `record_changed` when the factory's intake record moved after the admin approved it, `record_conflict` when GitHub refuses the write as a conflict, and `record_case_mismatch` when the record is in the factory under two spellings: in each case nothing is written and the person asks again. `not_a_file` means the record's path in the factory is a directory, a symlink or a submodule; `recheck: scorecard_changed` that the approved record dropped the current record's `scorecard:` mark (approve it again).
 - **Network.** From the writer pod nothing but Postgres, DNS, `api.github.com` and `github.com` answers; the collector reaches Postgres, DNS, `api.github.com` and `productionresultssa*.blob.core.windows.net` (where GitHub redirects an artifact download; the collector sends no token there; a host outside `PORTAL_ARTIFACT_HOSTS` shows as `artifact_host_refused` on the Re-review page, one this policy blocks as GitHub busy); the web pod reaches only Postgres, DNS, GitHub and the issuer host. `cilium-dbg` or Hubble shows drops if a host is missing. The three 0.6.0 mocks (Cloudflare, the skills catalog and ServiceNow) run inside the portal's own processes and need no egress: no policy here opens a Cloudflare, ServiceNow or catalog host.
+
+## Lifecycle (0.7.0)
+
+Builder 0.7.0 lets a portal admin suspend, resume and decommission an app for a ServiceNow task (mock ServiceNow; `docs/lifecycle.md`). The kit adds three things.
+
+- **The lifecycle App, in the writer only.** A third GitHub App whose only repository permission is Administration: write, installed on app repos only (never on `platform-pipeline`, `scorecard-factory`, `golden-road-deploy`, `golden-road-portal`, `golden-road-agents` or `security-scans`), with no webhook and no OAuth. The writer uses it for one thing: archiving the repository at the end of a decommission. Put its App id in the writer's Secret as `PORTAL_LIFECYCLE_APP_ID` and its private key as `lifecycle-app.pem`; `writer.yaml` mounts the key read-only at `/secrets/lifecycle-app/` and sets `PORTAL_LIFECYCLE_APP_KEY_FILE=/secrets/lifecycle-app/lifecycle-app.pem`. No other pod gets either. The App id must not be the write App's: the writer refuses to start (exit 2) when `PORTAL_LIFECYCLE_APP_ID` equals `PORTAL_WRITE_APP_ID`.
+- **Both or neither.** The writer reads the two settings together. Suspend and resume need neither; without them every decommission is refused (`recheck: no_lifecycle_app`). The kit always sets the key file's path, so either fill both keys in the Secret, or remove the `PORTAL_LIFECYCLE_APP_ID` and `PORTAL_LIFECYCLE_APP_KEY_FILE` entries from `writer.yaml`. With only one of them the writer exits 2: `PORTAL_LIFECYCLE_APP_ID and PORTAL_LIFECYCLE_APP_KEY_FILE are set together, or neither`.
+- **The collector's `PORTAL_BASE_URL`.** The collector sends the lifecycle work notes to the ServiceNow tasks, each ending with a link to the portal's request page. It reads `PORTAL_BASE_URL` from the same ConfigMap key as the web, and exits 2 without it while `PORTAL_SERVICENOW` is set.
+
+Migration `0012` adds the lifecycle tables; the migration job runs it on the upgrade, as any other (`kubectl -n golden-road-portal logs job/golden-road-portal-migrate` lists `0012`). It is forward-only.
+
+Checks after the upgrade:
+
+- The collector logs `collectors: lifecycle write-back: N sent` after its `cmdb` line on every pass (`0 sent` while nothing waits). `(N failed: will retry; M waiting behind them)` means ServiceNow refused or didn't answer a note; the request page's "What ServiceNow was told" shows the error, and a note waiting over a day shows as `cmdb_writeback_pending` on the Re-review page. `skipped: another collector is sending the notes` means a second collector holds the write-back lock.
+- With 0.7.0 the CMDB part reads each unchanged CI's lifecycle fields once per pass (one more ServiceNow `GET` per CI), so `collectors: cmdb: N synced, M unchanged` may add `(N corrected from ServiceNow edits)`: a person changed a CI's lifecycle fields in ServiceNow and the collector wrote the portal's state back.
+- Network: nothing new. The lifecycle App calls `api.github.com`, which the writer's egress already allows, and the mock ServiceNow runs inside the portal's processes.

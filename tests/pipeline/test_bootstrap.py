@@ -358,10 +358,10 @@ def test_personal_poc_doc_covers_the_scans_codeql_dependabot_and_the_known_gap()
                    "sp-finance-reports", "AZURE_CLIENT_ID", "bindings/<you>/hello-app.yaml"):
         assert needle in text, needle
     steps = [int(m) for m in re.findall(r"^## (\d+)\.", text, re.M)]
-    assert steps == list(range(0, 26))
+    assert steps == list(range(0, 27))
     # the scans repo is published before hello-app is pushed, and the builder is released again only after both exist
     assert text.index("## 4. Publish `security-scans`") < text.index("## 5. Create `hello-app`") < text.index("## 11.") < text.index("## 12.")
-    assert text.index("## 13. Risk scorecard") < text.index("## 14. ") < text.index("## 16. Central AI review") < text.index("## 17. Switch the review to risk routing") < text.index("## 18. High findings hold the merge") < text.index("## 19. App connections (mock)") < text.index("## 20. The deploy repo (mock)") < text.index("## 21. Delinea Secret Server secrets (mock)") < text.index("## 22. Builder 0.5.0: three classification levels, the policy link and the portal reskin") < text.index("## 23. Builder 0.5.1: changing a registration and the re-review list") < text.index("## 24. Builder 0.6.0: MCP servers, skills and the CMDB record (mock)") < text.index("## PoC gaps to record")
+    assert text.index("## 13. Risk scorecard") < text.index("## 14. ") < text.index("## 16. Central AI review") < text.index("## 17. Switch the review to risk routing") < text.index("## 18. High findings hold the merge") < text.index("## 19. App connections (mock)") < text.index("## 20. The deploy repo (mock)") < text.index("## 21. Delinea Secret Server secrets (mock)") < text.index("## 22. Builder 0.5.0: three classification levels, the policy link and the portal reskin") < text.index("## 23. Builder 0.5.1: changing a registration and the re-review list") < text.index("## 24. Builder 0.6.0: MCP servers, skills and the CMDB record (mock)") < text.index("## 25. Builder 0.6.1") < text.index("## 26. Builder 0.7.0: suspend, resume and decommission (mock ServiceNow)") < text.index("## PoC gaps to record")
     twenty = text[text.index("## 20. The deploy repo (mock)"):text.index("## 21. Delinea Secret Server secrets (mock)")]
     for needle in ("golden-road-deploy", "deploy-check", "suspend: true", "composed.yaml", "Mock only", "DEPLOY_APP_ID", "DEPLOY_APP_KEY",
                    "environments/bump", "namespace: hello-app-test", "SINGLE_APPROVER_PROMOTIONS", "mode: warn", "### 20.8 Proof items",
@@ -411,7 +411,20 @@ def test_personal_poc_doc_covers_the_scans_codeql_dependabot_and_the_known_gap()
         < roll_out.index("0010") < roll_out.index("Change or renew the registration")
     for needle in ("Add a secret", "Field and name", "Keep it"):
         assert needle in twenty_one, needle
-    twenty_four = text[text.index("## 24. Builder 0.6.0"):text.index("## PoC gaps to record")]
+    twenty_six = text[text.index("## 26. Builder 0.7.0"):text.index("## PoC gaps to record")]
+    for needle in ("lifecycle App", "Administration: write", "app repos only", "PORTAL_LIFECYCLE_APP_ID", "lifecycle-app.pem", "0012",
+                   "PORTAL_BASE_URL", "SCTASK0010001", "SCTASK0010002", "SCTASK0010006", "lifecycle-demo", "replicas: 0",
+                   "/mock/servicenow/tasks/SCTASK0010001", "Closed Complete", "u_golden_road_state", "operational_status",
+                   "SCTASK0010004", "SCTASK0010005", "Task SCTASK0010004 is closed in ServiceNow.", "nothing to suspend",
+                   "Only a portal admin can suspend, resume or decommission an app.", "deploy-check", "was decommissioned",
+                   "### 26.1", "### 26.2", "### 26.3", "### 26.4 Proof items", "### 26.5 Roll back", "Mock only", "docs/lifecycle.md",
+                   "lifecycle.yaml", "deploy-check.yml", "CODEOWNERS", "/apps/**/lifecycle.yaml @<you>"):
+        assert needle in twenty_six, needle
+    turn_on = twenty_six[twenty_six.index("### 26.1"):twenty_six.index("### 26.2")]
+    assert turn_on.index("lifecycle App") < turn_on.index("deploy-check.yml") < turn_on.index("0012")
+    for needle in ("applied in git", "Administration: write is broader than archive", "u_golden_road_", "first pinned while the app is suspended"):
+        assert needle in gaps, needle
+    twenty_four = text[text.index("## 24. Builder 0.6.0"):text.index("## 25. Builder 0.6.1")]
     for needle in ("PORTAL_CLOUDFLARE=mock", "PORTAL_SKILLS_CATALOG=mock", "PORTAL_SERVICENOW=mock", "--mcp-gateway-test", "--skills-repo",
                    "cloudflare-access.yaml", "notes", "tickets", "incident-triage", "APM0001001", "I understand what owning this app means",
                    "PORTAL_ORG_NAME", "PORTAL_LIFECYCLE_GRACE_DAYS", "0011", "Mock only", "### 24.4 Proof items", "### 24.5 Roll back",

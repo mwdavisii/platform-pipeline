@@ -1536,7 +1536,7 @@ The portal image before 0.5.1 does not read the new tables, but 0010 is forward-
 ## 24. Builder 0.6.0: MCP servers, skills and the CMDB record (mock)
 Builder 0.6.0 adds two things to each environment's tab on an app's page, beside the Azure identity, Databricks and secrets: **MCP servers**, picked from that environment's shared Cloudflare MCP gateway, and **skills**, picked from the platform's reviewed skills catalog and pinned to a catalog commit. Once an app's intake record is in the factory, the collector also registers it in ServiceNow CMDB as a business application, and the portal says what owning the app means: on the register form (with a required checkbox), on the app page and on the request's timeline.
 
-**Mock only.** Nothing calls Cloudflare, ServiceNow or a skills repo. Each client is written against the real API and served by a mock inside the portal image (`portal/mock_cloudflare.json`, `portal/mock_skills_catalog.json`, `portal/mock_servicenow.json`). `cloudflare-access.yaml`, the skills `ConfigMap` and the token's `ExternalSecret` entries are generated and checked, never applied. Nothing suspends access, asks for a validation, opens a ServiceNow task or decommissions an app: the notice says what the real process does.
+**Mock only.** Nothing calls Cloudflare, ServiceNow or a skills repo. Each client is written against the real API and served by a mock inside the portal image (`portal/mock_cloudflare.json`, `portal/mock_skills_catalog.json`, `portal/mock_servicenow.json`). `cloudflare-access.yaml`, the skills `ConfigMap` and the token's `ExternalSecret` entries are generated and checked, never applied. Nothing suspends access, asks for a validation, opens a ServiceNow task or decommissions an app: the notice says what the real process does (from 0.7.0 a portal admin can suspend or decommission an app for a task: 26).
 
 ### 24.0 What changes
 - **MCP servers.** Each environment has one shared gateway, never one per app: `configure.py --mcp-gateway-test HOST --mcp-gateway-prod HOST` records them in `platform/platform.json` (`mcp_gateways`); until then they are the placeholders `mcp-test.example.com` and `mcp.example.com`. A person sees the servers on that gateway that Cloudflare lets them use, and only `ready` ones. A server that acts as each signed-in person is greyed: "This server needs each person's own sign-in, so an app can't use it." At most 20 per environment.
@@ -1641,6 +1641,87 @@ There is no migration, and the portal kit is unchanged: deploy the portal's new 
 ### 25.2 Roll back
 Pin 0.6.0 again and revert the apps' regenerate PRs. Nothing else depends on the base image.
 
+## 26. Builder 0.7.0: suspend, resume and decommission (mock ServiceNow)
+Builder 0.7.0 lets a portal admin apply ServiceNow's lifecycle decision to an app: **Suspend** (every environment scales to zero, nothing is deleted), **Resume** (it comes back as it was reviewed) and **Decommission** (final: the app is removed from the deploy repo, its repository archived and its intake record marked). Each needs an open ServiceNow task naming the app's CI. Every step is a work note on the task, sent by the collector from an outbox, and the task is closed when the action is applied; the CI's lifecycle fields follow the app's state. The rules for readers are `docs/lifecycle.md`.
+
+**Mock only.** Nothing calls a real ServiceNow: the tasks are the mock's six (`portal/mock_servicenow.json`), and the CI's fields live in the mock. The GitHub side is real: real PRs in the deploy repo and the factory, and a real archive. "Applied" means applied in git; nothing reconciles in the PoC (20.6), so no pod stops.
+
+### 26.0 What changes
+- **The Lifecycle panel.** On each app's page, admins see the app's state and the three buttons, each with the reason it is refused, if it is. Everyone sees a banner while the app is suspended or decommissioned. The owner can't press the buttons.
+- **Suspend** adds `lifecycle.yaml` (`lifecycle/v1`) beside each environment's `bindings.yaml` and recomposes `composed.yaml` with the Deployment's `replicas: 0`. The writer merges it itself once `deploy-check` passes, prod included, only within L5 (exactly `lifecycle.yaml` and `composed.yaml` per environment, only the replicas changed). **Resume** deletes `lifecycle.yaml`. Bindings and `bump` keep `lifecycle.yaml` while the app is suspended.
+- **Decommission** is three steps: the deploy repo PR deletes `apps/<owner>/<repo>/` and the adapters (a platform reviewer merges it), the writer archives the repository with the lifecycle App, and a factory PR adds `decommissioned` to the intake record (a security code owner merges it). After it, the portal takes no request for the repo, and `deploy-check` refuses any changed environment under `apps/<owner>/<repo>/`.
+- **The outbox.** The collector sends the notes to the task after its CMDB part, in order, and closes the task as Closed Complete with a summary. A note waiting more than a day shows as `cmdb_writeback_pending` on the Re-review page.
+- **The CI's fields:** `operational_status`, `install_status`, `u_golden_road_state` and `u_golden_road_task` (Active 1, 1, `active`, empty; Suspended 2, 1, `suspended`, the task; Decommissioned 6, 7, `decommissioned`, the task). An edit in ServiceNow is written back on the next pass.
+- **The mock's tasks:** `SCTASK0010001` (suspend hello-app), `SCTASK0010002` (resume hello-app), `SCTASK0010003` (decommission hello-app: kept for a refusal), `SCTASK0010004` (closed), `SCTASK0010005` (names another CI), `SCTASK0010006` (decommission `lifecycle-demo`). Their history shows at `/mock/servicenow/tasks/<number>` (admins).
+- **Migration 0012** adds the lifecycle tables. It is forward-only.
+
+Requirements: section 24 is done (`PORTAL_SERVICENOW=mock`, and `hello-app` has its ServiceNow CI: its app page shows the card), and `hello-app` pins a release in `test` and `prod` (20.2, 20.4).
+
+### 26.1 Turn it on (in this order)
+Step 1 is required for 0.7.0 even if you never decommission an app. The kit's `writer.yaml` always sets `PORTAL_LIFECYCLE_APP_KEY_FILE`, and the writer takes the lifecycle App's two settings together or not at all: without the App's id and key in its Secret (or with the example's `REPLACE_ME`), the writer exits 2 and nothing is written, suspends and registrations included.
+1. **The lifecycle App.** Create a GitHub App on your account, for example `<you>-golden-road-lifecycle`: Repository permissions Administration: write (**Administration: Read and write** in the form), nothing else; webhook off; no callback URL. It must be another App than the write App. Install it on app repos only ("Only select repositories"): `hello-app` and, once 26.2 step 3 creates it, `lifecycle-demo`, never the platform's repos (`platform-pipeline`, `scorecard-factory`, `golden-road-deploy`, `golden-road-portal`, `golden-road-agents`, `security-scans`): the writer refuses to archive while it is installed on one of them. Generate a private key, and put the App's id and the key in the writer's Secret as `PORTAL_LIFECYCLE_APP_ID` and `lifecycle-app.pem` (`deploy-kits/portal-homelab/secrets.example.yaml`), then apply the Secret.
+   **Check:** the App's installation page lists only app repos, and its permissions read "Read and write access to administration".
+2. **Release builder 0.7.0** (the lead's bump) from a fresh, configured export (as in 13.2), then pin it in every workflow. The pin's check still prints `8   BUILDER_IMAGE: $ref`.
+3. **The deploy repo, before any lifecycle request.** Copy this release's `deploy-check.yml` and `bump.yml` from your configured `~/poc/platform-pipeline/bootstrap/golden-road-deploy/.github/workflows/` into your clone of the deploy repo (`~/poc/golden-road-deploy`), as in 24.1 step 3, and give `lifecycle.yaml` its own CODEOWNERS line there, with people for the teams as in 20.1:
+   ```bash
+   cd ~/poc/golden-road-deploy
+   printf '%s\n' '* @<you> @<deputy>' '/apps/**/bindings.yaml @<you> @<deputy>' '/apps/**/lifecycle.yaml @<you> @<deputy>' '/.github/ @<you> @<deputy>' > .github/CODEOWNERS
+   # Single-approver mode: printf '%s\n' '* @<you>' '/apps/**/bindings.yaml @<you>' '/apps/**/lifecycle.yaml @<you>' '/.github/ @<you>' > .github/CODEOWNERS
+   ```
+   Open a PR and merge it. `deploy-check.yml`'s layout now takes `lifecycle.yaml`, and its intake step refuses a changed environment of a decommissioned app, or of an app whose repository is archived; `CODEOWNERS` gives `lifecycle.yaml` to `platform-reviewers`. With the old `deploy-check.yml` the first suspend fails `check_failed: deploy-check` (a path outside the layout).
+   **Check:** `git diff HEAD~1 -- .github/workflows/deploy-check.yml` shows `lifecycle` in the layout and `deploy-intake` in the intake step, and `deploy-check` passes on the PR.
+4. **The apps and the kit.** Merge the regenerate PRs of `hello-app` and the portal (as in 14.6). Take this release's `writer.yaml` (the lifecycle App's key volume and its two settings) and `collector.yaml` (`PORTAL_BASE_URL`, which the collector now needs while `PORTAL_SERVICENOW` is set), and apply as in the kit README's "Upgrade". The migration job runs 0012.
+   **Check:** the migration job's log lists 0012; the writer starts (no `writer: PORTAL_LIFECYCLE_APP_ID ...` line); the collector logs `collectors: lifecycle write-back: 0 sent` after its `cmdb` line.
+
+### 26.2 The demo
+1. **Suspend hello-app.** Open `hello-app`'s page. The Lifecycle panel reads Active. Press **Suspend**, enter `SCTASK0010001` and a reason (for example "Critical vulnerability in a dependency: suspended until patched"), and press **Suspend**. The request's page opens.
+   The writer opens `Suspend <you>/hello-app (ServiceNow SCTASK0010001, portal request ...)`, which adds `lifecycle.yaml` and changes `composed.yaml` in `test` and `prod`; `deploy-check` passes and the writer merges it.
+   ```bash
+   cd ~/poc/golden-road-deploy && git pull
+   cat apps/<you>/hello-app/test/lifecycle.yaml
+   grep -n 'replicas:' apps/<you>/hello-app/test/composed.yaml apps/<you>/hello-app/prod/composed.yaml
+   gh pr diff <number> --repo <you>/golden-road-deploy | grep '^[-+] *replicas'
+   ```
+   **Check:** `lifecycle.yaml` is `schema: lifecycle/v1` with `state: suspended`, `task: SCTASK0010001` and your reason; both environments' `composed.yaml` have `replicas: 0`, and the PR's diff changes only the replicas. The app page's banner says "Suspended by the platform for ServiceNow task SCTASK0010001 on ...". On the request's page, "What ServiceNow was told" lists requested, pr_opened, merged and completed, each "Sent at ..." after the collector's next pass, and `/mock/servicenow/tasks/SCTASK0010001` shows the work notes and "Closed Complete" with the close notes "Applied in git: ...". On that pass the collector logs `collectors: cmdb: 1 synced, ...`: it re-sent the CI with `operational_status` 2 and `u_golden_road_state` suspended (the mock's CI is in the collector's memory; no page shows its fields).
+2. **Resume it.** Press **Resume**, enter `SCTASK0010002` and a reason, and press **Resume**. The writer's `Resume <you>/hello-app (...)` deletes `lifecycle.yaml` in both environments and recomposes; it merges it itself.
+   **Check:** `lifecycle.yaml` is gone, `git diff <the suspend's merge commit>^ -- apps/<you>/hello-app/` prints nothing (`composed.yaml` is as before the suspend, if no pin or binding of `hello-app` merged in between), the banner is gone, and `/mock/servicenow/tasks/SCTASK0010002` is Closed Complete.
+3. **Decommission a throwaway app, end to end.** Never decommission `hello-app`: it can't be undone.
+   1. Create `<you>/lifecycle-demo`, public, as an app repo the agent kit packages (14.9; one rule and no egress is enough), make its package public (as in 20.2), and register it in the portal; another admin (or your deputy) approves it. Wait for its first test release and merge its `bump` pin PR (20.2). Add `lifecycle-demo` to the lifecycle App's installation (26.1 step 1).
+   2. Wait for its CI: its app page shows "Your app is registered in ServiceNow (`APM...`)" (the collector's next pass).
+   3. On its page press **Decommission**, enter `SCTASK0010006` and a reason, type `<you>/lifecycle-demo` to confirm, and press **Decommission**.
+   4. **The deploy repo PR**, `Decommission <you>/lifecycle-demo: remove it from the deploy repo (...)`: it deletes `apps/<you>/lifecycle-demo/` and the two `test` adapters, and nothing else. `deploy-check` passes. Merge it as the platform reviewer (deploy-reviewer procedure 5). Merge it before anything else merges to the deploy repo: if `main` moves first, the writer rebuilds it as a new PR.
+   5. **The archive.** On its next pass the writer archives the repository.
+   6. **The factory PR**, `Decommission <you>/lifecycle-demo: mark its intake record decommissioned (...)`: it adds only `decommissioned` (`at`, `task`, `by`, `request`) to `intake/<you>/lifecycle-demo.yaml`. `factory-check` passes. Merge it as the security code owner.
+   **Check:** `gh repo view <you>/lifecycle-demo --json isArchived --jq .isArchived` prints `true`, and its GitHub page says "This repository has been archived by the owner"; the request's timeline reads Requested, Deploy repo pull request, Repository archived, Factory record pull request (each Done), Applied in git; the banner says "Decommissioned on ... for task SCTASK0010006. The repository is archived."; `/mock/servicenow/tasks/SCTASK0010006` is Closed Complete; and the collector's next pass re-sends the CI retired (`operational_status` 6, `install_status` 7, `u_golden_road_state` decommissioned).
+
+### 26.3 What is refused
+In the portal (a hand-made POST as in 19.3 where the page offers no button; the portal's tests cover each):
+- The owner, signed in without the admin group, opening `/apps/<you>/hello-app/lifecycle/suspend`: "Only a portal admin can suspend, resume or decommission an app."
+- `SCTASK0010004`: "Task SCTASK0010004 is closed in ServiceNow." `SCTASK0010001` again, after the demo: the same (the portal closed it).
+- `SCTASK0010005`: "Task SCTASK0010005 names another CI than <you>/hello-app's."
+- A second request while one is open: "A lifecycle request for <you>/hello-app is already open: wait until it is applied or abandoned."
+- A suspend of an app with no environment in the deploy repo (register one and don't release it): the writer refuses it before changing anything, nothing to suspend (`recheck: nothing_to_suspend`), and notes the task.
+- `SCTASK0010003` on `hello-app`'s Decommission form without typing the repo: "Type the repository's name, <you>/hello-app, to confirm the decommission." (Leave it there.)
+- Any request for `lifecycle-demo` after the decommission (a suspend, a binding, a change of the registration): "<you>/lifecycle-demo was decommissioned on ... for task SCTASK0010006: nothing more can be asked for it."
+
+In the deploy repo (a PR from a branch of your clone; record `deploy-check`'s failure, then close the PR):
+- **The app again:** revert the decommission PR on a branch (`git revert -m 1 <its merge commit>`, or `git revert <it>` for a squash): "apps/<you>/lifecycle-demo/test: <you>/lifecycle-demo was decommissioned (task SCTASK0010006, intake/<you>/lifecycle-demo.yaml in <you>/scorecard-factory); nothing under apps/<you>/lifecycle-demo/ may be added or changed".
+- **A hand `lifecycle.yaml`:** add `apps/<you>/hello-app/test/lifecycle.yaml` by hand: the PR asks `platform-reviewers` for review (CODEOWNERS), and `deploy-check` fails (`composed.yaml` no longer matches what `golden-road compose` writes).
+
+### 26.4 Proof items (record the results)
+1. The merged suspend PR, its `composed.yaml` diff (replicas only) and its `deploy-check` run.
+2. `/mock/servicenow/tasks/SCTASK0010001` with its notes and Closed Complete, and the request page's timeline and "What ServiceNow was told".
+3. The resume PR and the clean `git diff` of 26.2 step 2.
+4. The decommission's two PRs, the archived repository, the request page's timeline and outbox, and `/mock/servicenow/tasks/SCTASK0010006`.
+5. Each refusal of 26.3, with its words.
+
+### 26.5 Roll back
+Resume anything suspended first (a suspend left in git keeps its environments at zero under any builder). A decommission can't be rolled back by a pin: bring the app back as in `docs/roles/platform-team.md` procedure 18. 0012 is forward-only, as 0010 and 0011 are: roll the portal image back only with a database restored from before 0012. Pin 0.6.1 again and revert the apps' regenerate PRs. Two pins must not follow:
+- **The deploy repo's `deploy-check.yml` stays on the 0.7.0 builder digest.** Its intake step runs `golden-road deploy-intake`, which 0.6.1 doesn't have: with `BUILDER_IMAGE` at 0.6.1, every `deploy-check` fails "cannot read ... intake record", and no pin or binding merges. Keep the file and its pin together: either both stay at 0.7.0 (they accept every 0.6.1 tree), or revert the file to 0.6.1's together with its pin. `CODEOWNERS` may stay.
+- **The factory's `factory-check` stays on 0.7.0 or later once any app is decommissioned.** 0.6.1's `intake/v2` schema takes no other key, so it refuses a record holding `decommissioned`: every factory PR would fail, the writer's registrations included. Don't take the factory back past 0.7.0 while a record holds the key.
+
+Prefer fixing forward.
+
 ## PoC gaps to record
 - The scans are open-source reference scans (Semgrep CE with a small vendored rule set plus `p/default`, Trivy, CodeQL default setup), not the security team's tools, thresholds, or triage. Until step 11, Gate 1 waits on nothing beyond drift and the authz probe. Gate 1 sees only a CodeQL check run's conclusion, so it proves the analysis ran, not that no alert exists; the alert threshold is enforced at merge time.
 - **Scan results can be forged.** Every check that a GitHub Actions workflow posts comes from the same app (id 15368), so pinning `app_id` cannot tell the `security-scans` workflow's `security-scans / semgrep` from a job of the same name that anyone with write access adds to a workflow in `hello-app` (or by editing `security-scans.yml` to stop calling the real scans). CodeQL's results can likewise be imitated by a workflow with `security-events: write`. What holds today is code-owner review of `.github/` and a deputy who rejects changes there. **The real fix is signed scan results**: the scan workflow signs its result with its own identity and the release verifies that signature instead of a check name. It is out of scope for this PoC.
@@ -1689,10 +1770,16 @@ Pin 0.6.0 again and revert the apps' regenerate PRs. Nothing else depends on the
 - **The Cloudflare reconcile job is not built.** `cloudflare-access.yaml` is generated and checked, but no token is issued, nothing is stored in Secret Server and no server's Service Auth policy changes. Until it exists, an app's `CF_ACCESS_*` entries name a Secret Server path that holds nothing.
 - **No real Cloudflare, catalog or ServiceNow.** `PORTAL_CLOUDFLARE_ACCOUNT_ID` and `PORTAL_SERVICENOW_URL` are refused. The catalog in the PoC is the bundled fixture, never `--skills-repo`'s repo: `deploy-check.yml` documents how the real catalog would be checked out, and no step does it.
 - **A skill's audience is checked once, at submit,** against the person's sign-in groups. The writer and `deploy-check` re-check the skill's commit, its environments and its size, never who may use it.
-- **Nobody is retiring a CI.** When an app leaves, its CI stays in ServiceNow; offboarding is a gap already. Nothing changes the owner in ServiceNow from the portal either: the intake record's owner is the truth.
+- **A CI is retired only by a decommission** (26). When an app just leaves, nobody is retiring a CI: it stays in ServiceNow; offboarding is a gap already. Nothing changes the owner in ServiceNow from the portal either: the intake record's owner is the truth.
 - **The CMDB fields are placeholders to confirm** against the instance: the `u_tier`, `u_data_classification`, `u_review_by` and `u_repo_url` names, the class's identification rule on `correlation_id`, the `golden_road` data source's reconciliation rule, and the purpose cut at 1000 characters for `short_description`.
 - **The per-person view trusts the identity provider's verified email.** Which MCP servers a person may pick and who owns an app's CI in ServiceNow both follow the sign-in's email, kept only when the ID token says `email_verified: true`. An identity provider that marks an email verified without checking it would let a person act as whoever has that address.
-- **The ownership notice describes a process that doesn't run.** Nothing scans and suspends, asks for a validation, opens a ServiceNow task or decommissions an app.
+- **The ownership notice describes a process that runs only in part.** A portal admin can suspend, resume or decommission an app for a ServiceNow task (26), but nothing scans and suspends by itself, asks for a validation or opens a task.
+- **Lifecycle is applied in git, not on the cluster** (26). A merged suspend or decommission says nothing about the pods: nothing reconciles in the PoC, and the platform can't see the cluster.
+- **The lifecycle App's Administration: write is broader than archive:** it could change settings or delete a repository. One holder (the writer), app repos only, one repository per token, three calls (read, archive, revoke).
+- **The mock's task and `u_golden_road_` fields stand in for a real instance's:** the `sc_task` table, its state values, `u_golden_road_state`, `u_golden_road_task` and the integration user's roles are to confirm with the ServiceNow admins (`docs/roles/servicenow-admin.md`). The web needs read on `sc_task` too, for the task check: not wired.
+- **An environment first pinned while the app is suspended is not suspended** (`bump` has no portal state): resume, then suspend again.
+- **Bringing a decommissioned app back resets the portal's state by hand in the database,** as `portal_owner` (`docs/roles/platform-team.md` procedure 18): there is no button.
+- **Lifecycle notes are sent at least once,** and a note ServiceNow refuses for good holds back the request's later notes until it is resolved (`docs/roles/portal-admin.md` procedure 14).
 
 ## If something fails
 The workflows fail closed, so a failure means no release was published. Keep the failing step's log and the command output.

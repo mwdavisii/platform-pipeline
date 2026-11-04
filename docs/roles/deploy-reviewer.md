@@ -4,8 +4,8 @@
 
 `golden-road-deploy` is the platform's record of what runs where, as whom: each app environment pins one signed release and has
 its own bindings, and the plain Kustomize a GitOps controller would apply is generated from them and checked in CI. Promoting and
-binding are pull requests there. You review and merge them: release pins from the `bump` workflow, and prod bindings from the
-portal's writer, which never merges a prod binding itself.
+binding are pull requests there. You review and merge them: release pins from the `bump` workflow, prod bindings from the
+portal's writer, which never merges a prod binding itself, and the deploy repo PR of a decommission (`docs/lifecycle.md`).
 
 ## Who
 
@@ -22,6 +22,7 @@ The code owners of `golden-road-deploy` (`bootstrap/golden-road-deploy/.github/C
 | `apps/<owner>/<repo>/<env>/base/manifests.yaml` | `bump`, byte for byte from the release | Unchanged by hand (its sha256 is `release.yaml`'s `manifests_sha256`) |
 | `apps/<owner>/<repo>/<env>/bindings.yaml` (`binding/v2`) | The portal's writer | The identity, connection and secrets are the app's own |
 | `apps/<owner>/<repo>/<env>/composed.yaml`, `kustomization.yaml` | `golden-road compose` (bump or the writer) | Generated; `deploy-check` proves it |
+| `apps/<owner>/<repo>/<env>/lifecycle.yaml` (`lifecycle/v1`) | The portal's writer, for a suspend (a resume deletes it) | `platform-reviewers` own it (CODEOWNERS); the writer merges its own within L5 |
 | `clusters/home/flux/<owner>-<repo>-<env>.yaml`, `clusters/office/argo/<owner>-<repo>-<env>.yaml` | `golden-road compose` | Still off: `suspend: true`, no automated sync |
 | `policy/cluster-image-policy.yaml`, `external-secrets/` | The platform | Still `mode: warn`; nothing points at `external-secrets/` |
 
@@ -134,6 +135,54 @@ Changing `suspend`, `automated` or the policy mode in git is refused by `deploy-
 
 **Check:** the operators have the contract, the list above, and the environments they may switch on.
 
+### 5. Review a decommission PR
+
+**Goal:** a decommissioned app is taken out of the deploy repo, completely, and nothing else changes.
+
+A portal admin decommissions an app for a ServiceNow task; the writer opens `Decommission <owner>/<repo>: remove it from the deploy
+repo (ServiceNow SCTASK..., portal request ...)` and waits for you (its log says `<request id>: deploy waiting for review`).
+
+1. List the files:
+   ```bash
+   gh pr diff <number> --repo <org>/golden-road-deploy --name-only
+   ```
+   Every file under `apps/<owner>/<repo>/` (each environment: `release.yaml`, `base/manifests.yaml`, `bindings.yaml`,
+   `composed.yaml`, `kustomization.yaml`, `cloudflare-access.yaml`, `lifecycle.yaml`, whichever exist), and each environment's two
+   adapters, `clusters/home/flux/<owner>-<repo>-<env>.yaml` and `clusters/office/argo/<owner>-<repo>-<env>.yaml`, all deleted, and
+   nothing else: no other app's file, no added or changed file. The writer deletes an adapter only if it reconciles this app's
+   path.
+2. Read the PR body: the ServiceNow task, who asked, and the reason. Check with the ServiceNow task (or the portal admin) that the
+   task asks for this app's decommission and is still open.
+3. `deploy-check` must have passed on the PR's head.
+4. Merge it. Merging can't be undone: once it merges, the portal treats the app as decommissioned, the writer archives its
+   repository and opens the factory PR, and the cluster's reconcile removes the workloads.
+5. Review between pushes. The writer builds the PR on `main`; if anything merges to `main` first (a `bump` pin, a binding), it
+   closes the PR and opens a new one on the new `main` ("rebuilt"), so your approval is lost and the review starts again. Don't use
+   "Update branch" and don't push to the branch.
+
+**Check:** the PR is merged, `apps/<owner>/<repo>/` and its adapters are gone from `main`, and the request's timeline in the portal
+shows Deploy repo pull request (Done).
+
+### 6. Recognize a writer-merged prod suspend
+
+**Goal:** you can tell a suspend or resume the writer merged itself within L5 from a change that needed your review.
+
+The writer merges a lifecycle suspend or resume PR itself, prod included, once `deploy-check` passes. Such a PR:
+- is titled `Suspend <owner>/<repo> (ServiceNow SCTASK..., portal request ...)` or `Resume <owner>/<repo> (...)`, opened and merged by
+  the write App;
+- changes exactly `lifecycle.yaml` and `composed.yaml` in each environment of the app: a suspend adds `lifecycle.yaml`, a resume
+  deletes it;
+- changes nothing in `composed.yaml` but the Deployment's `replicas`: 0 for a suspend, back to `base/manifests.yaml`'s value for a
+  resume. Read it with `gh pr diff <number> --repo <org>/golden-road-deploy`.
+
+That is L5. The writer re-reads the PR before it merges; anything else (a push to the branch, another file) fails the step
+`l5_refused: ...` and closes the PR, and nothing merges. A person's PR that adds or removes a `lifecycle.yaml` needs
+`platform-reviewers` (CODEOWNERS), and `deploy-check` refuses a `lifecycle.yaml` whose `repo`, `environment` or schema don't match
+its directory. A binding or a pin PR for a suspended app keeps `lifecycle.yaml`: its `composed.yaml` keeps `replicas: 0`.
+
+**Check:** a writer-merged prod PR touches only those files, its `lifecycle.yaml` names the ServiceNow task, and the portal's
+request page for it reads Applied in git.
+
 ## What you must never do
 
 - Never merge a PR whose `deploy-check` did not pass on its current head.
@@ -143,6 +192,9 @@ Changing `suspend`, `automated` or the policy mode in git is refused by `deploy-
 - Never update or push to a writer branch.
 - Never merge a prod pin carrying a single-approver warning outside the personal PoC.
 - Never switch an adapter or the image policy on from git.
+- Never merge a decommission PR that deletes anything but the app's directory and its adapters, or whose ServiceNow task you
+  haven't checked.
+- Never add, edit or delete a `lifecycle.yaml` by hand: suspensions come from the portal.
 
 ## Troubleshooting
 
@@ -158,6 +210,8 @@ Changing `suspend`, `automated` or the policy mode in git is refused by `deploy-
 | "... the ExternalSecret's data is not the binding's secrets" | The `ExternalSecret` was edited by hand | Close it |
 | "policy/secret-store.yaml: a SecretStore is refused anywhere" | Someone added a `SecretStore` | Remove it; secrets come only from the platform's `ClusterSecretStore` |
 | "... are one repo under two cases" | A case-only rename of the app's repo | Remove the old-case directory by PR |
+| A decommission PR was closed and a new one opened ("rebuilt") | `main` moved while it waited for review | Review the new PR (procedure 5), between pushes |
+| "... <owner>/<repo> was decommissioned (task SCTASK..., intake/<owner>/<repo>.yaml in ...); nothing under apps/<owner>/<repo>/ may be added or changed" | A PR changes an environment of a decommissioned app | Close it; the app comes back only by platform-team procedure 18 |
 | A binding PR waits forever | It is a prod binding: it waits for a person | Procedure 2 |
 | A bump PR waits for `deploy-check` (workflow-token mode) | The dispatch failed or never ran (`bump` logs "cannot start deploy-check on <branch>" and dispatches again on its next run) | Wait for the next `bump` run (every 15 minutes), or `gh workflow run deploy-check.yml --repo <org>/golden-road-deploy --ref bump/<owner>-<repo>-<env>`. Never push to the branch |
 
@@ -168,6 +222,10 @@ Changing `suspend`, `automated` or the policy mode in git is refused by `deploy-
 - **Ownership is per file.** Security or analytics may approve a whole `bindings.yaml`, the other team's part included.
 - **The write App could merge a prod binding.** The writer never does, but its `main-review` bypass is not limited to `test` paths.
 - **Every waiting prod binding fails when anything merges to `main`** (`base_moved`), so busy repos force repeated re-linking.
+- **A decommission PR's review is lost whenever `main` moves:** the writer rebuilds it on the new `main`, so in a busy repo the
+  review must be quick.
+- **The write App merges prod suspends.** The writer limits itself to L5; GitHub can't limit its bypass to `lifecycle.yaml` and
+  the replicas.
 - **Nothing reconciles,** so a merge proves nothing about deploying. There is no cluster-operator SOP yet.
 - **Private apps need a read credential** for `deploy-check` and `bump`; the PoC works because its repos and packages are public.
 - **The image policy and the Flux source name `github.com`;** another GitHub host needs its own issuer and identity values.

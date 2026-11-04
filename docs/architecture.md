@@ -59,7 +59,7 @@ App repos hold four caller workflows: `ci.yml`, `promote.yml`, `scorecard.yml`, 
                                    │ handoff
                     deploy owners: verification contract → apply → run
                                    │
-             remediation skill [planned] · lifecycle and re-review [planned]
+        remediation skill [planned] · re-review [built] · lifecycle [built: mock ServiceNow]
 ```
 
 ## 4. The builder [built]
@@ -187,10 +187,10 @@ The kit targets command-line agents: Claude Code, OpenAI Codex and Cursor are ce
 
 **Planned:** 5b, PR-driven setup for agents without a shell (a label-triggered workflow posts the questions and commits the output). 5c, a cross-agent evaluation with a fixture app and scripted answers.
 
-## 10. Remediation and lifecycle [planned]
+## 10. Remediation and lifecycle
 
-- **Remediation skill:** reads check runs, annotations and PR comments with `gh`, normalizes them to `finding/v2`, and proposes a fix PR. The fix PR goes through the same pipeline, and a fix that only suppresses a finding raises the scorecard level (T-15). It needs no scanner access or credentials.
-- **Re-review and lifecycle:** an owner of record and a review date for every app. Re-review signals include egress or ingress changes, new dependencies or base images, repeated scan failures or override requests, and changes in gateway usage. An unclaimed app escalates: notify, then scale to zero, then remove (deployment, repo access, images, gateway credentials). Opt-in auto-patch PRs go through the same gates.
+- **Remediation skill [planned]:** reads check runs, annotations and PR comments with `gh`, normalizes them to `finding/v2`, and proposes a fix PR. The fix PR goes through the same pipeline, and a fix that only suppresses a finding raises the scorecard level (T-15). It needs no scanner access or credentials.
+- **Re-review and lifecycle:** [built: re-review in 0.5.1; lifecycle in 0.7.0 with a mock ServiceNow] an owner of record and a review date for every app. Re-review signals include egress or ingress changes, new dependencies or base images, repeated scan failures or override requests, and changes in gateway usage. The lifecycle decision is ServiceNow's (a critical vulnerability, an owner who doesn't confirm, an owner who leaves). A portal admin applies it for a ServiceNow task: suspend (scale to zero), resume, or decommission (remove from the deploy repo, archive the repo, mark the intake record), and every step is written back to the task and the app's CI. Applied means applied in git; see `docs/lifecycle.md`. Images, Delinea values and the Azure and Databricks principals stay (their owners' to delete). Opt-in auto-patch PRs go through the same gates **[planned]**.
 
 ## 11. Contracts
 

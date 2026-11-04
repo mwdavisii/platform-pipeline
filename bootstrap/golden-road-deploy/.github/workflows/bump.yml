@@ -275,6 +275,8 @@ jobs:
               continue
             fi
             # --unchanged-binding: a pin never changes bindings.yaml, so a moved MCP gateway is a warning here, not a refusal
+            # A suspended environment's lifecycle.yaml is read by compose, so a pin keeps replicas: 0 (spec 2026-11-02 rule 5); bump
+            # never writes or removes it.
             if ! gr golden-road compose --root /deploy --expect-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" --unchanged-binding "$env_path" > out/compose.json; then
               skip "$env_path: golden-road compose refused $tag (the error is above)"
               continue

@@ -8,8 +8,9 @@ import shutil
 import pytest
 import yaml
 
-from deploy_fakes import (DEPLOY_BOOTSTRAP, IMAGE, PROD_TAG, REPO, ROOT, TEST_TAG, attest, base_env, calls, commit_all, deploy_repo,
-                          gate_record, git, load, manifests, promotion_record, publish, run_step, step, unregister, write_pin)
+from deploy_fakes import (DEPLOY_BOOTSTRAP, IMAGE, PROD_TAG, REPO, ROOT, TEST_TAG, attest, base_env, calls, commit_all, decommission,
+                          deploy_repo, gate_record, git, load, manifests, promotion_record, publish, register, run_step, step, unregister,
+                          write_pin)
 
 WORKFLOW = DEPLOY_BOOTSTRAP / ".github/workflows/deploy-check.yml"
 pytestmark = pytest.mark.skipif(shutil.which("jq") is None or shutil.which("git") is None, reason="jq and git are needed")
@@ -125,9 +126,9 @@ def test_a_clean_test_pin_passes(tmp_path, release):
     for c in cosign:
         assert c[c.index("--certificate-github-workflow-repository") + 1] == REPO and c[-1] == IMAGE
         assert c[c.index("--certificate-identity") + 1] == "https://github.com/acme/platform-pipeline/.github/workflows/golden-road.yml@refs/heads/main"
-    intake, download = calls(tmp_path, "gh")
+    intake, archived, download = calls(tmp_path, "gh")
     assert intake[1:4] == ["api", "GET", "repos/acme/scorecard-factory/contents/intake/acme/notes.yaml?ref=main"]
-    assert intake[-1]["GH_TOKEN"] == "github-token"
+    assert intake[-1]["GH_TOKEN"] == "github-token" and archived[1:4] == ["api", "GET", "repos/acme/notes"]
     assert download[1:4] == ["release", "download", TEST_TAG] and download[download.index("--repo") + 1] == REPO
 
 
@@ -569,3 +570,50 @@ def test_a_dispatched_run_checks_the_bump_commit_as_a_pull_request_run_would(tmp
     name, result = run(tmp_path, **env)
     assert result.returncode == 0, (name, result.stdout, result.stderr)
     assert f"apps/acme/notes/test: {TEST_TAG} is the platform's signed release of acme/notes" in result.stdout
+
+
+def test_a_decommissioned_app_s_environment_is_refused(tmp_path, release):
+    """Rule 10: once the factory's record says decommissioned, nothing under apps/<owner>/<repo>/ may be added or changed."""
+    decommission(tmp_path)
+    name, result = run(tmp_path)
+    assert name == STEPS[2] and errors(result) == [
+        "::error::apps/acme/notes/test: acme/notes was decommissioned (task SCTASK0010001, intake/acme/notes.yaml in acme/scorecard-factory); "
+        "nothing under apps/acme/notes/ may be added or changed"]
+    assert calls(tmp_path, "cosign") == []
+
+
+def test_a_record_that_can_t_be_read_fails_closed(tmp_path, release):
+    register(tmp_path).write_text("a: [unclosed\n")
+    name, result = run(tmp_path)
+    assert name == STEPS[2] and "cannot read acme/notes's intake record" in result.stdout
+
+
+def test_a_removed_environment_of_a_decommissioned_app_passes_the_intake_step(tmp_path, release):
+    """The decommission PR itself: the environment is gone, so the intake step skips it."""
+    decommission(tmp_path)
+    environ = base_env(tmp_path, doc())
+    (tmp_path / "out").mkdir(exist_ok=True)
+    (tmp_path / "out/changed.txt").write_text("apps/acme/notes/test/release.yaml\n")
+    (tmp_path / "out/pins.json").write_text("{}")
+    result = run_step(tmp_path, step(doc(), STEPS[2])["run"], environ)
+    assert result.returncode == 0 and "0 changed environments have an intake record" in result.stdout
+
+
+def test_the_layout_takes_lifecycle_yaml(tmp_path, release):
+    layout = re.search(r"layout='([^']+)'", step(doc(), STEPS[0])["run"]).group(1)
+    assert re.fullmatch(layout, "apps/acme/notes/prod/lifecycle.yaml")
+    assert not re.fullmatch(layout, "apps/acme/notes/prod/lifecycle.yml")
+
+
+def test_an_archived_app_repo_is_refused_before_its_record_is_marked(tmp_path, release):
+    """M-4: a decommission archives the repo before its factory PR marks the record; from the archive on, a pin is refused."""
+    name, result = run(tmp_path, FAKE_ARCHIVED="acme/notes")
+    assert name == STEPS[2] and errors(result) == [
+        "::error::apps/acme/notes/test: acme/notes is archived (a decommission archives it before it marks the intake record); nothing "
+        "under apps/acme/notes/ may be added or changed"]
+    assert calls(tmp_path, "cosign") == []
+
+
+def test_an_app_repo_that_can_t_be_read_fails_closed(tmp_path, release):
+    name, result = run(tmp_path, FAKE_REPO_ERROR="1")
+    assert name == STEPS[2] and errors(result) == ["::error::apps/acme/notes/test: cannot read acme/notes on GitHub (gh api)"]

@@ -59,7 +59,7 @@ if args[:1] in (["pull"], ["logout"]):
     sys.exit(0)
 if args[:1] != ["run"]:
     sys.exit(f"unexpected docker {args}")
-with_value = {"-v", "--volume", "--user", "--tmpfs", "--pids-limit", "--network", "--cap-drop", "--security-opt", "-e", "--env", "-w"}
+with_value = {"-v", "--volume", "--user", "--tmpfs", "--pids-limit", "--memory", "--network", "--cap-drop", "--security-opt", "-e", "--env", "-w"}
 mounts, passed, i, rest = [], [], 1, None
 while i < len(args):
     a = args[i]
@@ -222,6 +222,11 @@ if args[:1] == ["api"]:
             sys.stderr.write("gh: Server Error (HTTP 500)\n")
             sys.exit(1)
         result = {"ref": "refs/heads/main", "object": {"sha": os.environ["FAKE_MAIN_SHA"]}}
+    elif method == "GET" and tail == "" and path.startswith("repos/"):  # deploy-check's archived check of the app repo
+        if os.environ.get("FAKE_REPO_ERROR"):
+            sys.stderr.write("gh: Server Error (HTTP 500)\n")
+            sys.exit(1)
+        result = {"full_name": repo, "archived": repo in os.environ.get("FAKE_ARCHIVED", "").split()}
     elif method == "GET" and tail.startswith("contents/"):
         if os.environ.get("FAKE_INTAKE_ERROR"):
             sys.stderr.write("gh: Server Error (HTTP 500)\n")
@@ -230,7 +235,9 @@ if args[:1] == ["api"]:
         if not os.path.isfile(local):
             sys.stderr.write("gh: Not Found (HTTP 404)\n")
             sys.exit(1)
-        result = {"type": "file", "path": tail[len("contents/"):], "encoding": "base64", "content": ""}
+        import base64
+        result = {"type": "file", "path": tail[len("contents/"):], "encoding": "base64",
+                  "content": base64.b64encode(open(local, "rb").read()).decode()}
     else:
         sys.exit(f"unexpected gh api {method} {path}")
     save()
@@ -280,7 +287,7 @@ def base_env(tmp_path, workflow_doc, **extra):
 def register(tmp_path, repo=REPO):
     """The app's intake record in the fake <owner>/scorecard-factory (deploy-check reads it with the contents API)."""
     path = tmp_path / "factory" / f"{repo.split('/')[0]}/scorecard-factory/intake/{repo}.yaml"
-    if not (tmp_path / "factory-unregistered").exists():
+    if not path.exists() and not (tmp_path / "factory-unregistered").exists():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f"schema: intake/v2\nrepo: {repo}\n")
     return path
@@ -289,6 +296,13 @@ def register(tmp_path, repo=REPO):
 def unregister(tmp_path):
     (tmp_path / "factory-unregistered").write_text("")
     shutil.rmtree(tmp_path / "factory", ignore_errors=True)
+
+
+def decommission(tmp_path, repo=REPO, task="SCTASK0010001"):
+    """Mark the fake factory's intake record decommissioned (intake/v2's key, spec 2026-11-02)."""
+    path = register(tmp_path, repo)
+    path.write_text(path.read_text() + f"decommissioned: {{at: '2026-11-02T22:30:00Z', task: {task}, by: p_{'b' * 32}, request: r_{'d' * 32}}}\n")
+    return path
 
 
 def run_step(tmp_path, script, env):

@@ -56,7 +56,7 @@ def test_the_builder_and_the_portal_pin_the_same_pyyaml():
 
 def test_the_portal_s_vendored_schemas_are_the_contracts():
     names = ("binding.v1.json", "binding.v2.json", "builder-spec.v1.json", "deploy-release.v1.json", "finding.v2.json", "identity-link.v1.json",
-             "intake.v1.json", "intake.v2.json", "re-review-event.v1.json", "registration-draft.v1.json", "registration-evidence.v1.json",
+             "intake.v1.json", "intake.v2.json", "lifecycle.v1.json", "re-review-event.v1.json", "registration-draft.v1.json", "registration-evidence.v1.json",
              "registration-rules.v1.json", "scorecard.v1.json", "scorecard.v2.json", "skill.v1.json")
     for name in names:
         assert (PORTAL / "portal/schemas" / name).read_bytes() == (ROOT / "src/contracts/schemas" / name).read_bytes(), name
@@ -81,7 +81,8 @@ def test_ci_runs_the_portal_s_docker_tests():
                  "tests/pipeline/test_portal_semgrep_docker.py", "bootstrap/golden-road-portal/tests/test_portal_postgres_flow_docker.py",
                  "bootstrap/golden-road-portal/tests/test_portal_postgres_rereview_docker.py",
                  "bootstrap/golden-road-portal/tests/test_portal_postgres_evidence_docker.py", "tests/pipeline/test_portal_deploy_kit_docker.py",
-                 "bootstrap/golden-road-portal/tests/test_portal_postgres_cmdb_docker.py"):
+                 "bootstrap/golden-road-portal/tests/test_portal_postgres_cmdb_docker.py",
+                 "bootstrap/golden-road-portal/tests/test_portal_postgres_lifecycle_docker.py"):
         assert path in run.split("-m docker", 1)[1], path
 
 
@@ -256,4 +257,15 @@ def test_the_portal_readme_describes_mcp_servers_skills_and_the_cmdb_record():
     for needle in ("## MCP servers, skills and the CMDB record (0.6.0, mock)", "cloudflare-access.yaml", "/access/ai-controls/mcp/portals",
                    "/api/now/identifyreconcile", "cmdb_unreachable", "cmdb_owner_unknown", "cmdb_refused", "0011",
                    "per-user policy is the mock's"):
+        assert needle in text, needle
+
+
+def test_the_portal_readme_describes_the_lifecycle():
+    """Spec 2026-11-02 Docs: the portal README names the lifecycle's settings, calls, tables and pages."""
+    text = " ".join((PORTAL / "README.md").read_text().split())
+    for needle in ("## Lifecycle: suspend, resume and decommission (0.7.0, mock ServiceNow)", "`PORTAL_LIFECYCLE_APP_ID`",
+                   "`PORTAL_LIFECYCLE_APP_KEY_FILE`", "`PORTAL_BASE_URL`", "lifecycle.yaml", "`0012`", "/api/now/table/sc_task", "work_notes",
+                   "close_notes", "u_golden_road_state", "u_golden_road_task", "cmdb_writeback_pending", "/mock/servicenow/tasks/", "L5",
+                   "docs/lifecycle.md", "no attempt cap", "at least once", "one more ServiceNow request per CI per pass", "not_in_org",
+                   "adapter_not_ours", "`DELETE /installation/token`", "`GET /repos/{owner}/{repo}`"):
         assert needle in text, needle

@@ -91,3 +91,15 @@ def test_deploy_verify_in_the_image_reads_the_bundled_skills_catalog(builder_ima
     out = run(builder_image, "python", "-c", script)
     assert out.returncode == 0, out.stderr
     assert out.stdout.split() == ["mock-skills-catalog", "incident-triage", "SKILL.md", "checklists/sev1.md"]
+
+
+def test_deploy_intake_in_the_image_reads_a_record_with_no_network(builder_image, tmp_path):
+    """deploy-check's backstop (spec 2026-11-02 rule 10) runs golden-road deploy-intake in this image with --network none."""
+    (tmp_path / "intake.yaml").write_text("schema: intake/v2\nrepo: acme/notes\n")
+    tmp_path.chmod(0o755)
+    (tmp_path / "intake.yaml").chmod(0o644)
+    out = subprocess.run(["docker", "run", "--rm", "--network", "none", "--read-only", "--tmpfs", "/tmp", "-v", f"{tmp_path}:/in:ro",
+                          builder_image, "golden-road", "deploy-intake", "--intake", "/in/intake.yaml", "--repo", "acme/notes"],
+                         capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    assert json.loads(out.stdout) == {"decommissioned": None, "repo": "acme/notes"}

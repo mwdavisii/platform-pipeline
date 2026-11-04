@@ -247,6 +247,9 @@ COMMITTED_DEPLOY_CODEOWNERS = """\
 # Which identity and data connection an app runs with, per environment, is security's and analytics' call. CODEOWNERS can't
 # own part of a file, so either team may approve a bindings.yaml (the Azure identity and the Databricks connection alike).
 /apps/**/bindings.yaml @ORG_PLACEHOLDER/security @ORG_PLACEHOLDER/analytics
+# A suspension is the platform's (spec 2026-11-02 rule 10): the writer merges its own within L5's limits; a person's PR that adds or
+# removes one needs the platform's review.
+/apps/**/lifecycle.yaml @ORG_PLACEHOLDER/platform-reviewers
 # The workflows, rulesets and owners stay the platform's, whatever matches above.
 /.github/ @ORG_PLACEHOLDER/platform-reviewers
 """

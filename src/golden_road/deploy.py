@@ -1,6 +1,7 @@
 """One environment directory of golden-road-deploy, on disk: apps/<owner>/<repo>/<env>/ holding release.yaml (deploy-release/v1),
-bindings.yaml (binding/v2, optional), base/manifests.yaml (the release's signed manifests, hash-checked) and the two generated
-files, composed.yaml and kustomization.yaml, and a third, cloudflare-access.yaml, exactly when bindings.yaml has an mcp key.
+bindings.yaml (binding/v2, optional), lifecycle.yaml (lifecycle/v1, optional: the platform's suspension, which compose turns into
+replicas: 0), base/manifests.yaml (the release's signed manifests, hash-checked) and the two generated files, composed.yaml and
+kustomization.yaml, and a third, cloudflare-access.yaml, exactly when bindings.yaml has an mcp key.
 compose_environment writes the generated files; verify_environment re-derives them in memory and reports every difference, so
 deploy-check can fail on a stale or hand-edited directory. A binding's MCP gateway must be platform.json's for its environment, and
 its skills are rebuilt from the platform's catalog at each pinned commit (golden_road.skills_catalog). Offline: nothing is fetched
@@ -35,7 +36,14 @@ MAX_BINDING_BYTES = 65_536  # a binding is a few hundred bytes
 ENVIRONMENTS = ("test", "prod")
 GENERATED = ("composed.yaml", "kustomization.yaml")  # always generated
 CLOUDFLARE_ACCESS = "cloudflare-access.yaml"  # generated when bindings.yaml has an mcp key
-ALLOWED = {"release.yaml", "bindings.yaml", "base", "base/manifests.yaml", *GENERATED, CLOUDFLARE_ACCESS}
+LIFECYCLE = "lifecycle.yaml"  # the platform's suspension (lifecycle/v1), written by the portal's writer; resume deletes it
+ALLOWED = {"release.yaml", "bindings.yaml", LIFECYCLE, "base", "base/manifests.yaml", *GENERATED, CLOUDFLARE_ACCESS}
+MAX_INTAKE_BYTES = 65_536  # an intake record is a few hundred bytes (the portal's RECORD_CAP)
+DECOMMISSIONED_KEYS = {"at", "task", "by", "request"}  # intake/v2's decommissioned
+TASK_NUMBER = re.compile(r"SCTASK[0-9]{7}")
+PERSON_ID = re.compile(r"p_[0-9a-f]{32}")
+REQUEST_ID = re.compile(r"r_[0-9a-f]{32}")
+UTC_TIME = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
 NAMESPACE = re.compile(r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$")
 ENVIRONMENT_PATH = re.compile(r"^apps/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(test|prod)$")
 NAME_PART = re.compile(r"^[A-Za-z0-9_.-]+$")
@@ -143,6 +151,56 @@ def load_binding_v2(d, release: dict):
     return doc
 
 
+def load_lifecycle(d, release: dict):
+    """lifecycle.yaml, or None when the environment runs: a valid lifecycle/v1 for exactly the release's repo and environment
+    (rule 10: one whose repo, environment or schema is not its directory's is refused)."""
+    path = Path(d) / LIFECYCLE
+    if path.is_symlink():
+        raise InputError("lifecycle.yaml is a symlink")
+    if not path.exists():
+        return None
+    doc = _read_yaml(path, MAX_BINDING_BYTES, loader=UniqueKeyLoader, label="lifecycle.yaml")
+    errors = validate("lifecycle.v1", doc)
+    if errors:
+        raise InputError(f"lifecycle.yaml is not a valid lifecycle/v1: {errors[0]}"[:300])
+    if doc["repo"] != release["repo"]:
+        raise InputError(f"lifecycle.yaml's repo is {doc['repo']}, not {release['repo']}")
+    if doc["environment"] != release["environment"]:
+        raise InputError(f"lifecycle.yaml's environment is {doc['environment']}, not {release['environment']}")
+    return doc
+
+
+def intake_decommissioned(raw: bytes, repo: str):
+    """The decommissioned key ({at, task, by, request}) of `repo`'s intake record as deploy-check fetched it, or None. Fails closed
+    (InputError) on a record it can't read: not UTF-8, not YAML, not one mapping, another repo's, or a decommissioned that isn't
+    intake/v2's shape. It reads only this key: the factory's own check validates the rest of the record."""
+    if len(raw) > MAX_INTAKE_BYTES:
+        raise InputError("the intake record is too large")
+    try:
+        text = raw.decode("utf-8")
+        for event in yaml.parse(text, Loader=yaml.SafeLoader):
+            if isinstance(event, yaml.AliasEvent) or getattr(event, "anchor", None) is not None:
+                raise InputError("the intake record uses YAML anchors or aliases")
+        docs = [d for d in yaml.load_all(text, Loader=UniqueKeyLoader) if d is not None]
+    except UnicodeDecodeError:
+        raise InputError("the intake record is not UTF-8") from None
+    except (yaml.YAMLError, RecursionError) as exc:
+        raise InputError(f"the intake record is not YAML: {type(exc).__name__}") from None
+    if len(docs) != 1 or not isinstance(docs[0], dict):
+        raise InputError("the intake record is not one mapping")
+    doc = docs[0]
+    if doc.get("repo") != repo:
+        raise InputError(f"the intake record is for {str(doc.get('repo'))[:200]}, not {repo}")
+    if "decommissioned" not in doc:
+        return None
+    found = doc["decommissioned"]  # null or empty is not "not decommissioned": it falls to the shape check and is refused
+    if (doc.get("schema") != "intake/v2" or not isinstance(found, dict) or set(found) != DECOMMISSIONED_KEYS
+            or not all(isinstance(found[k], str) for k in DECOMMISSIONED_KEYS) or not TASK_NUMBER.fullmatch(found["task"])
+            or not PERSON_ID.fullmatch(found["by"]) or not REQUEST_ID.fullmatch(found["request"]) or not UTC_TIME.fullmatch(found["at"])):
+        raise InputError("the intake record's decommissioned is not intake/v2's {at, task, by, request}")
+    return found
+
+
 def _reserved_secret_envs(binding) -> None:
     """A secret's env name is never one the builder reserves (PORT, PATH, NODE_OPTIONS, LD_*, AZURE_*, ...): compose refuses only the
     platform's own prefixes, because the portal holds compose byte for byte and can't import the builder; this catches the rest,
@@ -209,10 +267,12 @@ def _skills_for(binding, environment: str, catalog) -> dict | None:
 
 def _generated(d: Path, catalog=None, *, strict_gateway: bool = True, warnings: list | None = None) -> tuple[dict, dict | None]:
     """({name: text} for the generated files, the binding they were composed from), from the files on disk. Raises InputError on
-    anything refused. The skills catalog is read only when the binding pins skills (default: skills_catalog.default_catalog())."""
+    anything refused. The skills catalog is read only when the binding pins skills (default: skills_catalog.default_catalog()).
+    Compose reads the binding, and lifecycle.yaml (a suspension) when there is one."""
     release = load_release(d)
     binding = load_binding_v2(d, release)
     _reserved_secret_envs(binding)
+    lifecycle = load_lifecycle(d, release)
     gateway_warnings = []
     _mcp_problems(binding, strict=strict_gateway, warnings=gateway_warnings)
     if warnings is not None:
@@ -231,7 +291,8 @@ def _generated(d: Path, catalog=None, *, strict_gateway: bool = True, warnings: 
             raise InputError(str(exc)[:300]) from None
     try:
         text = raw.decode("utf-8")
-        texts = {"composed.yaml": compose(text, release["image"], binding, namespace=release["namespace"], skills=skills),
+        texts = {"composed.yaml": compose(text, release["image"], binding, namespace=release["namespace"], skills=skills,
+                                         lifecycle=lifecycle),
                  "kustomization.yaml": kustomization(release["namespace"])}
         access = cloudflare_access(binding)
     except UnicodeDecodeError:

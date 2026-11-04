@@ -22,7 +22,8 @@ platform repos. In the personal PoC, the account owner (and a deputy, if there i
 | Cloudflare and ServiceNow | The job that reconciles `cloudflare-access.yaml` into Cloudflare (not built); the ServiceNow integration user the collector signs in as |
 | App repos | `/.github/` and the scanner ignore files (CODEOWNERS); the caller workflows and generated files come from the builder |
 | The portal | Its deploy kit (`deploy-kits/portal-homelab/`), its settings, its database roles and migrations |
-| GitHub Apps | The kit App, the scorecard App (central mode), the deploy App, the portal's read and write Apps |
+| GitHub Apps | The kit App, the scorecard App (central mode), the deploy App, the portal's read and write Apps, and the lifecycle App (archives a decommissioned app's repository) |
+| Lifecycle | The lifecycle App, migration 0012, failed archive steps, and bringing an app back after decommission (`docs/lifecycle.md`) |
 
 ## Before you start
 
@@ -41,6 +42,7 @@ platform repos. In the personal PoC, the account owner (and a deputy, if there i
 | Deploy repo | `bump` and `deploy-check` run; nothing reconciles | The same until cluster operators switch reconciling on |
 | Directory and Secret Server | Mocks inside the portal image | Real integrations (not built) |
 | Cloudflare, the skills catalog and ServiceNow | Mocks inside the portal image (`PORTAL_CLOUDFLARE`, `PORTAL_SKILLS_CATALOG`, `PORTAL_SERVICENOW` set to `mock`); the catalog bundled in the builder image | Real integrations, and the reconcile job (not built) |
+| Lifecycle | The lifecycle App and its archive are real; the ServiceNow tasks (SCTASK0010001 to SCTASK0010006) and the CI's fields are the mock's | A real ServiceNow (`sc_task` read and write for the integration user, and read for the portal's web: not built) |
 
 ## Procedures
 
@@ -268,6 +270,109 @@ Documented for the first real instance; the PoC uses the mock (`PORTAL_SERVICENO
 
 **Check:** `deploy-check` on `main` prints no `kept because this binding is unchanged` warning.
 
+### 15. Create and install the lifecycle App
+
+**Goal:** the writer can archive a decommissioned app's repository, and the key that can do it reaches nothing else.
+
+1. Create a GitHub App (on the organization, or on the personal account in the PoC), for example `golden-road-lifecycle`.
+   Repository permissions: Administration: write, nothing else (Metadata: read is added by GitHub). No organization permission, no
+   webhook (turn it off), no OAuth, no callback URL. It must be another App than the write App: the writer refuses to start when
+   `PORTAL_LIFECYCLE_APP_ID` equals `PORTAL_WRITE_APP_ID`.
+2. Install it on app repos only ("Only select repositories"): never on `platform-pipeline`, `scorecard-factory`,
+   `golden-road-deploy`, `golden-road-portal`, `golden-road-agents` or `security-scans`. Before every archive the writer asks for the
+   App's installation on each of those six and fails the step (`lifecycle_app_on_platform_repo: <org>/<repo>`) if one exists. Add an
+   app repo to the installation before you decommission it (or install it on every app repo).
+3. Generate a private key. Put the App's id in the writer's Secret as `PORTAL_LIFECYCLE_APP_ID` and the key as `lifecycle-app.pem`
+   (`deploy-kits/portal-homelab/secrets.example.yaml`); the kit's `writer.yaml` mounts it at
+   `/secrets/lifecycle-app/lifecycle-app.pem` (`PORTAL_LIFECYCLE_APP_KEY_FILE`). The writer reads both or neither; no other pod gets
+   them. Restart the writer.
+4. To rotate the key: generate a new key in the App's settings, replace `lifecycle-app.pem` in the writer's Secret, restart the writer
+   (`kubectl -n golden-road-portal delete pod -l app.kubernetes.io/name=golden-road-portal-writer`), then delete the old key in the App's settings.
+   Do the same at once if the key may have leaked.
+
+The writer's calls with it: as the App, `GET /repos/<org>/<platform repo>/installation` for each of the six (each must be a 404) and
+`GET /repos/<owner>/<repo>/installation`, then `POST /app/installations/<id>/access_tokens` for the one repository with only
+`administration: write` (a token GitHub grants wider or narrower is revoked unused). The token makes exactly three calls:
+`GET /repos/<owner>/<repo>` (already archived: the step is done), `PATCH /repos/<owner>/<repo>` with `{"archived": true}`, and
+`DELETE /installation/token`. It never archives a platform repository or a repository outside `PORTAL_ORG` (`not_in_org`).
+
+**Check:** the writer starts (no `writer: PORTAL_LIFECYCLE_APP_ID ...` line in its log), and the App's installation page lists app
+repos only.
+
+### 16. Apply migration 0012
+
+**Goal:** the portal's database has the lifecycle tables and guards before 0.7.0's pods use them.
+
+Upgrade as in the kit README's "Upgrade" (`deploy-kits/portal-homelab/README.md`): delete the finished migration Job, apply, and
+wait for it. The job runs `python -m portal.migrate` as `portal_owner`, which applies `0012_lifecycle` once. It is forward-only, like
+0010 and 0011: roll the image back only with a database restored from before it.
+
+**Check:** `kubectl -n golden-road-portal logs job/golden-road-portal-migrate` lists `0012_lifecycle`, and connected as
+`portal_owner` (procedure 18, step 3), `\dt lifecycle_*` lists `lifecycle_command`, `lifecycle_events`, `lifecycle_state` and
+`lifecycle_step`.
+
+### 17. Fix a failed archive step
+
+**Goal:** a decommission whose archive failed archives on Retry, and its factory PR follows.
+
+The deploy step stays done (the app is decommissioned in the portal); the factory PR waits for the archive. The request page and a
+task note give the reason:
+- `archive: github: 404 GET /repos/<owner>/<repo>/installation`: the lifecycle App isn't installed on the app's repository. Add the
+  repository to the App's installation (procedure 15, step 2).
+- `lifecycle_app_on_platform_repo: <org>/<repo>`: the App is installed on a platform repository. Remove that repository from the
+  installation (or uninstall and reinstall on app repos only), and check nothing was changed in it.
+- `no_lifecycle_app`: the writer has no lifecycle App (procedure 15, step 3).
+- `archive: github: 403 ...` or `archive: github: unexpected response`: the App lacks Administration: write, or GitHub answered
+  something the writer doesn't read. Check the App's permissions and that its installation accepted them.
+- GitHub not answering (no status, a 5xx, a rate limit) doesn't fail the step: the writer tries again on its next pass.
+- `archive: github: 404 GET /repos/<owner>/<repo>` (or the installation's 404 after you added it): the repository was deleted or
+  transferred. A Retry can't archive it. Ask a portal admin to press **Stop** (portal-admin procedure 13).
+- `not_decommissioned_by_this_request`: the app was brought back (procedure 18) while the request was open. Ask a portal admin to
+  press **Stop**; a Retry fails the same way.
+
+Then ask a portal admin to press **Retry** on the request (portal-admin procedure 13). A repository someone already archived by
+hand is fine: the writer reads it first and marks the step done.
+
+**Check:** the request's timeline shows Repository archived (Done), the repository is archived on GitHub, and the factory PR opens.
+
+### 18. Bring an app back after decommission
+
+**Goal:** a decommissioned app can be registered and released again, with every change reviewed and recorded.
+
+There is no button. Decommissioned is for good for every portal process; only the schema owner can set it back.
+
+First, the decommission request must be over. Open it from the app's requests: its timeline must end **Applied in git** or
+**Stopped**. While it is still open (a step failed or waits), a Retry could archive the repository or mark the record again, so ask a
+portal admin to Stop it first (portal-admin procedure 13). 0012 refuses the change below while the request is open ("an app is brought
+back only once its decommission is applied in git or stopped").
+1. A GitHub admin unarchives the repository (the repository's Settings, "Unarchive this repository", or
+   `gh api -X PATCH repos/<owner>/<repo> -F archived=false`). Don't use the lifecycle App for it.
+2. A reviewed factory PR removes the `decommissioned` key from `intake/<owner>/<repo>.yaml` (a security code owner approves it).
+   Until it merges, `deploy-check` refuses any change under `apps/<owner>/<repo>/`. A stopped request may never have marked the
+   record: then there is no key to remove. Until step 1, `deploy-check` refuses the app too (the repository reads archived).
+3. Connect to the portal's database as `portal_owner`. On the homelab kit:
+   ```bash
+   kubectl -n golden-road-portal exec -it golden-road-portal-postgres-0 -- sh -c 'PGPASSWORD="$PORTAL_OWNER_PASSWORD" psql -h 127.0.0.1 -U portal_owner -d portal'
+   ```
+   Then, in one transaction (0012 allows this one change of a decommissioned state, to `portal_owner` only: the state `active`, no
+   task, the same request):
+   ```sql
+   BEGIN;
+   SELECT repo, state, task, since, request FROM lifecycle_state WHERE lower(repo) = lower('<owner>/<repo>');
+   UPDATE lifecycle_state SET state = 'active', task = NULL WHERE lower(repo) = lower('<owner>/<repo>') AND state = 'decommissioned';
+   INSERT INTO audit_log (at, actor_kind, actor_id, action, subject_kind, subject_id, before, after, reason)
+     VALUES (now(), 'person', '<your person id>', 'lifecycle.brought_back', 'app', '<owner>/<repo>', '{"state": "decommissioned"}',
+             '{"state": "active"}', 'Brought back by hand for ServiceNow task <SCTASK...>: <why>; unarchived, factory PR <url>');
+   COMMIT;
+   ```
+   The `UPDATE` must say `UPDATE 1`. Your person id is on `/admin/people` (`p_` and 32 hex digits).
+4. The owner registers the app again on the portal's register form. The intake record is still there, so the form is "Change or
+   renew the registration" (app-developer procedure 11), and a portal admin approves it.
+5. The owner makes a new release; `bump` pins it in the deploy repo again, with new adapters.
+
+**Check:** the app page shows no banner and its Lifecycle panel reads Active, the register form takes the repo, and `/admin/audit`
+shows your `lifecycle.brought_back` entry.
+
 ## What you must never do
 
 - Never release the builder before configuring the tree, and never move or reuse a `builder-v*` tag.
@@ -275,6 +380,10 @@ Documented for the first real instance; the PoC uses the mock (`PORTAL_SERVICENO
 - Never publish from the source repo's history: export first.
 - Never use `--single-approver` or `--bump-workflow-token` on an organization.
 - Never add the write App, the deploy App or anyone to a `main` ruleset's bypass list.
+- Never install the lifecycle App on a platform repository, give it any permission but Administration: write, or give its key to
+  any process but the writer. Never use the write App's id for it.
+- Never change `lifecycle_state`, `lifecycle_step` or `lifecycle_events` by hand except as procedure 18 and portal-admin
+  procedure 14 say, with an audit entry.
 - Never switch on a Flux adapter, an Argo CD automated sync or the image policy's `enforce` mode from git: `deploy-check` and the
   export refuse it, and reconciling belongs to cluster operators.
 - Never edit `config/routing.toml`, `intake/`, `suppressions/` or `na/` without security's review.
@@ -291,6 +400,13 @@ Documented for the first real instance; the PoC uses the mock (`PORTAL_SERVICENO
 | The `kit` job fails at the token step | The kit App or its key is missing | Create it and re-run the job (within 30 days) |
 | The `kit` job fails with "already has a release or draft" | A stale draft | Delete the draft, re-run |
 | The writer logs "refusing to start" and exits 3 | The write App's install or a bypass is wrong (its problems are listed) | Procedure 9 |
+| The writer logs `writer: PORTAL_LIFECYCLE_APP_ID and PORTAL_LIFECYCLE_APP_KEY_FILE are set together, or neither` and exits 2 | Only one of the two settings reached the writer (the kit always sets the key file's path) | Fill both in the writer's Secret, or remove both from `writer.yaml` (procedure 15) |
+| The writer logs `writer: PORTAL_LIFECYCLE_APP_ID must be another App than PORTAL_WRITE_APP_ID: the write App never archives` | The lifecycle App's id is the write App's | Create the lifecycle App (procedure 15) |
+| A decommission ends Refused with `recheck: no_lifecycle_app` | The writer runs without the lifecycle App | Procedure 15; the admin asks again |
+| The archive step failed | The lifecycle App's installation or permission | Procedure 17 |
+| The collector logs `collectors: PORTAL_BASE_URL is not set: the ServiceNow notes link the portal's request` and exits 2 | `PORTAL_SERVICENOW` is set and the collector has no `PORTAL_BASE_URL` | Take the 0.7.0 kit's `collector.yaml` |
+| A lifecycle step failed `merged_with_other_commits` | A person merged the writer's PR with commits the writer didn't write, so the writer can't say what the merge applied | Check the merge commit by hand (`gh pr view <n> --repo <org>/<repo> --json mergeCommit,commits`) and revert what shouldn't be there. Then the admin presses Retry: the writer recognizes a merged PR it already judged by its own `failed` note (only the writer can write those notes), so the Retry plans the step again at `main` (a new PR for what is missing, or done if `main` holds it) instead of failing it again for the same merge. `merged_file_differs` and `merged_file_missing` work the same way |
+| After the write App was renamed, the writer refuses its own new PRs (`pr_not_ours`) | The writer reads the write App's bot login (`<app slug>[bot]`) at startup | Restart the writer, then Retry |
 | The poller stopped without failing | GitHub disabled the schedule after 60 days without activity (`disabled_inactivity`) | `gh workflow enable scorecard-poll.yml --repo <org>/scorecard-factory` (and `bump.yml` in the deploy repo) |
 | "the App is not installed on `<owner>/<repo>`" in the poll summary | The scorecard App misses that repo | Add the repo to the install |
 
@@ -310,5 +426,12 @@ Documented for the first real instance; the PoC uses the mock (`PORTAL_SERVICENO
 - **The Cloudflare reconcile job is not built** (procedure 12): no app has a token, and no server's policy names one.
 - **The skills catalog is the bundled fixture.** `deploy-check.yml` documents how the real catalog would be checked out and read
   (`GOLDEN_ROAD_SKILLS_CATALOG`); no step does it.
-- **Nothing retires a CI** when an app leaves, and the ServiceNow fields are placeholders to confirm (procedure 13).
+- **The ServiceNow fields are placeholders to confirm** (procedure 13, and `u_golden_road_state` and `u_golden_road_task` on the
+  CI for the lifecycle). A CI is retired only by a decommission (`docs/lifecycle.md`).
+- **The lifecycle App's Administration: write is broader than archive:** it could change settings or delete a repository. The
+  writer holds the only key, mints one-repository tokens and calls only the read, the archive and the revoke; you keep it off the
+  platform repos.
+- **Lifecycle applied stops at git:** the platform can't see that the cluster pruned or scaled. An environment first pinned while
+  the app is suspended is not suspended; bringing an app back resets the portal's state by hand (procedure 18).
+- **The writer reads the write App's bot login at startup:** a renamed App needs a writer restart.
 - **Scheduled workflows silently stop** after 60 days without activity on a public repo.

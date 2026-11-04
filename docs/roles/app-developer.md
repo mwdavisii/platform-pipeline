@@ -37,7 +37,7 @@ your own repos, the repo's admin "as the portal last saw it" (from the collector
 | Secrets | Picked from a mock Secret Server; no value exists anywhere | Not built: the writer works only with the mock (anything else fails as `no_secret_server`), and the External Secrets Operator files are applied by hand |
 | MCP servers | Picked from a mock Cloudflare gateway; no service token is issued | The platform's shared Cloudflare gateways; a platform job issues the app's token (not built) |
 | Skills | Picked from the catalog fixture bundled with the portal | The platform's `golden-road-skills` catalog repo |
-| The CMDB record | A mock ServiceNow; nothing suspends, asks, tasks or decommissions | ServiceNow CMDB and the real lifecycle process |
+| The CMDB record and the lifecycle | A mock ServiceNow: its tasks and CI fields are fixtures. A suspend or decommission is real in git (the deploy repo, the archive) | ServiceNow CMDB and its real tasks |
 | Deployment | Nothing runs: the deploy repo's files are generated and checked, never applied | Cluster operators switch reconciling on |
 
 ## Procedures
@@ -253,6 +253,29 @@ The app finds its skills at `SKILLS_DIR` (`/skills`), one folder per skill (`/sk
 
 **Check:** the app page shows the card with the number; the request's timeline shows "Registered in ServiceNow".
 
+### 15. Know what a suspended or decommissioned app looks like
+
+**Goal:** you know why your app is down, who to ask, and how it comes back.
+
+The lifecycle decision is made in ServiceNow, and a portal admin applies it (`docs/lifecycle.md`). The reasons are the ones you agreed
+to (procedure 14): a critical vulnerability, an owner who didn't confirm the app is still in use, an owner who left.
+1. **Suspended.** Everyone who can see the app page reads the banner "Suspended by the platform for ServiceNow task SCTASK... on
+   .... It comes back when the platform resumes it." Every environment is scaled to zero; nothing is deleted. Bindings still work
+   while it is suspended: you may change an identity, a connection, a secret, a server or a skill, and the environment stays at zero.
+   A release bump keeps it at zero too.
+2. **Lifting a suspension.** Fix the cause (for example, patch the vulnerability and release), then ask through the ServiceNow
+   task: its assignee is your contact. A portal admin resumes the app for that task (or a new one). A suspension is lifted that way,
+   not by a PR: a PR that removes `lifecycle.yaml` needs the platform's review and is not how it is done.
+3. **Decommissioned.** The banner reads "Decommissioned on ... for task SCTASK.... The repository is archived." The app is gone
+   from the deploy repo, its repository is read-only, and the portal takes no request for it ("<owner>/<repo> was decommissioned on
+   ... for task ...: nothing more can be asked for it."). Your images in ghcr, your Delinea secret values, and the Azure identity and
+   Databricks principal stay: deleting the last two is yours, with their admins. Bringing it back is a platform procedure (ask the
+   task's assignee), followed by a change of the registration and a new release.
+4. **You can't press the buttons.** Only a portal admin can suspend, resume or decommission an app; your app page shows the
+   state, not the Lifecycle panel.
+
+**Check:** you know the task's number (it is in the banner) and its assignee in ServiceNow.
+
 ## What you must never do
 
 - Never make the repo public, never force-push, never change rulesets or repo settings.
@@ -261,6 +284,7 @@ The app finds its skills at `SKILLS_DIR` (`/skills`), one folder per skill (`/sk
 - Never approve your own registration or your own promotion (single-approver mode, PoC only, records a self-approved promotion
   as `self_approved`).
 - Never paste a secret value into the portal, the repo, an issue or a chat with your agent.
+- Never try to lift a suspension with a PR, or unarchive a decommissioned repository yourself: ask through the ServiceNow task.
 - Never hand-edit `bindings.yaml` in the deploy repo: the next change from the portal overwrites it, and it skips the portal's checks.
 
 ## Troubleshooting
@@ -288,6 +312,8 @@ The app finds its skills at `SKILLS_DIR` (`/skills`), one folder per skill (`/sk
 | "... could not be recorded: recheck: skill_gone" or `skill_environment` | The pinned skill isn't in the catalog at that commit, or no longer allows this environment | Update or remove the skill |
 | "That skill is not approved for prod." | Its `skill.yaml` lists only `test` | Ask security to approve it for prod (a catalog PR) |
 | The app page says "ServiceNow has no user with the owner's email" | `cmdb_owner_unknown`: the owner's email matches no single ServiceNow user | Ask a portal admin (procedure 14) |
+| The app page has a banner "Suspended by the platform for ServiceNow task ..." | A portal admin suspended it for that task | Procedure 15: fix the cause, ask through the task |
+| "<owner>/<repo> was decommissioned on ... for task ...: nothing more can be asked for it." | The app was decommissioned | Procedure 15; ask the task's assignee |
 | `scorecard / assessed` failed with "not assessed" | A draft, a fork PR, a red Gate 1, or a review that couldn't run | Mark it ready, fix Gate 1, or push again |
 
 ## Gaps
@@ -301,5 +327,7 @@ The app finds its skills at `SKILLS_DIR` (`/skills`), one folder per skill (`/sk
 - **Which MCP servers you may use is the mock's policy data.** The real version asks Cloudflare per person; it is checked once, at
   submit. A skill's audience is checked once, at submit, too.
 - **No service token exists.** The job that would issue the app's Cloudflare token and set each server's policy is not built.
-- **The ownership notice describes a process that doesn't run yet:** nothing suspends, asks, tasks or decommissions, and nothing
-  retires the CI when an app leaves.
+- **The ownership notice describes a process that runs only in part:** a portal admin can suspend, resume or decommission an app
+  for a ServiceNow task (procedure 15), but nothing asks you for validation or opens a task by itself, and the tasks are the mock's.
+- **A suspension stops at git:** the platform can't see the cluster scale the app to zero. An environment first pinned while the
+  app is suspended (a first prod pin) is not suspended.

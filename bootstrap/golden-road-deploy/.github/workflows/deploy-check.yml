@@ -87,7 +87,7 @@ jobs:
           # Renames are listed as a removal and an addition, so both paths are checked. A path with unusual characters is quoted
           # by git and so matches nothing below.
           git -C deploy diff --name-only --no-renames HEAD^1 HEAD -- > out/changed.txt
-          layout='^(apps/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(test|prod)/(release\.yaml|bindings\.yaml|composed\.yaml|kustomization\.yaml|cloudflare-access\.yaml|base/manifests\.yaml)|apps/\.gitkeep|clusters/(home/flux|office/argo)/[a-z0-9-]+\.yaml|clusters/(home/flux|office/argo)/README\.md|README\.md|\.github/.+|policy/.+|external-secrets/(README\.md|cluster-secret-store\.yaml|cilium-egress\.yaml))$'
+          layout='^(apps/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(test|prod)/(release\.yaml|bindings\.yaml|lifecycle\.yaml|composed\.yaml|kustomization\.yaml|cloudflare-access\.yaml|base/manifests\.yaml)|apps/\.gitkeep|clusters/(home/flux|office/argo)/[a-z0-9-]+\.yaml|clusters/(home/flux|office/argo)/README\.md|README\.md|\.github/.+|policy/.+|external-secrets/(README\.md|cluster-secret-store\.yaml|cilium-egress\.yaml))$'
           grep -vE "$layout" out/changed.txt > out/outside.txt || [ $? -eq 1 ]
           if [ -s out/outside.txt ]; then
             echo "Paths outside the deploy layout:"
@@ -138,7 +138,11 @@ jobs:
           echo "$(jq .environments out/verify.json) environments verified"
           gr golden-road deploy-pins --root /deploy --output /out/pins.json
 
-      # The spec's intake check: an app is pinned only once the platform knows it (its intake record in the scorecard factory).
+      # The spec's intake check: an app is pinned only once the platform knows it (its intake record in the scorecard factory),
+      # and is not decommissioned (spec 2026-11-02 rule 10): the record's decommissioned key, read by the builder image (golden-road
+      # deploy-intake), refuses every changed environment that is still there; a removed one (the decommission PR) passes. An
+      # archived app repo is refused too: a decommission archives it before its factory PR marks the record, so a hand-dispatched
+      # bump of an old release is refused from the archive on, not only once the record is marked.
       # The bindings' directory checks (tagged principal, granted warehouse) are the portal writer's: the directory is the portal's.
       - name: Every changed environment's app has an intake record
         env:
@@ -146,6 +150,7 @@ jobs:
         run: |
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
+          gr() { docker run --rm --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --memory 512m --network none --read-only --tmpfs /tmp --user "$(id -u):$(id -g)" -v "$PWD/out:/out:ro" "$BUILDER_IMAGE" "$@"; }
           grep -oE '^apps/[^/]+/[^/]+/(test|prod)/' out/changed.txt | sort -u > out/changed-environments.txt || [ $? -eq 1 ]
           mapfile -t environments < out/changed-environments.txt
           factory="$GITHUB_REPOSITORY_OWNER/scorecard-factory"
@@ -158,15 +163,29 @@ jobs:
             case "/$repo/" in */./*|*/../*) fail "$env_path: unexpected repo";; esac
             owner="${repo%%/*}"
             [ "${owner,,}" = "${GITHUB_REPOSITORY_OWNER,,}" ] || fail "$env_path: $repo is not in $GITHUB_REPOSITORY_OWNER"
+            n=$((n + 1))
             rc=0
-            gh api "repos/$factory/contents/intake/$repo.yaml?ref=main" --silent 2> out/intake.err || rc=$?
+            gh api "repos/$factory/contents/intake/$repo.yaml?ref=main" --jq .content > "out/intake-$n.b64" 2> out/intake.err || rc=$?
             if [ "$rc" -ne 0 ]; then
               if grep -q 'HTTP 404' out/intake.err; then
                 fail "$env_path: $repo has no intake record (intake/$repo.yaml on main in $factory); register the app before pinning it"
               fi
               fail "$env_path: cannot read $repo's intake record in $factory (gh api exit $rc)"
             fi
-            n=$((n + 1))
+            base64 -d "out/intake-$n.b64" > "out/intake-$n.yaml" 2> /dev/null || fail "$env_path: cannot read $repo's intake record in $factory (not base64)"
+            gr golden-road deploy-intake --intake "/out/intake-$n.yaml" --repo "$repo" > "out/intake-$n.json" 2> out/intake.err \
+              || fail "$env_path: cannot read $repo's intake record in $factory ($(jq -r '.error // empty' out/intake.err 2> /dev/null | tr -cd '[:alnum:] ._/,()-' | head -c 200))"
+            if ! jq -e '.decommissioned == null' "out/intake-$n.json" > /dev/null; then
+              task=$(jq -r '.decommissioned.task' "out/intake-$n.json")
+              [[ "$task" =~ ^SCTASK[0-9]{7}$ ]] || task="unknown"
+              fail "$env_path: $repo was decommissioned (task $task, intake/$repo.yaml in $factory); nothing under apps/$repo/ may be added or changed"
+            fi
+            archived=$(gh api "repos/$repo" --jq .archived 2> /dev/null) || fail "$env_path: cannot read $repo on GitHub (gh api)"
+            case "$archived" in
+              false) ;;
+              true) fail "$env_path: $repo is archived (a decommission archives it before it marks the intake record); nothing under apps/$repo/ may be added or changed";;
+              *) fail "$env_path: cannot read whether $repo is archived";;
+            esac
           done
           echo "$n changed environments have an intake record"
 

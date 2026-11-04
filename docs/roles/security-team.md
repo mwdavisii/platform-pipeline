@@ -28,6 +28,7 @@ On a personal account there are no teams: the setup document puts your login (an
 | Confirmed N/A | `scorecard-factory` `na/<owner>/<repo>.yaml` (`na/v1`) | Read only by the ASVS checklist engine (`review-1`) |
 | The registration floor | `scorecard-factory` `config/registration.yaml` (`registration-rules/v1`) | The portal's collector and the scorecard's T-21 both read it |
 | Binding review | `golden-road-deploy` `apps/**/bindings.yaml` | Shared with `analytics`; CODEOWNERS can't own part of a file |
+| A decommission's factory PR | `scorecard-factory` `intake/<owner>/<repo>.yaml`: the `decommissioned` key the writer adds | You merge it (`/intake/` is yours); it adds only that key |
 | The skills catalog | `golden-road-skills` (`platform.json`'s `skills_repo`): `skills/<name>/SKILL.md`, its files and `skills/<name>/skill.yaml` (`skill/v1`) | CODEOWNERS on `skills/` names security. In the PoC: the fixture `bootstrap/golden-road-portal/portal/mock_skills_catalog.json` |
 | Which MCP servers apps may use | Each server's Cloudflare Access policies on the two shared MCP gateways (test and prod) | With the gateways' admins; the app's token is added to a server's Service Auth policy by the platform's job (not built) |
 | The platform's Secret Server account and identity process | See [secret-server-admin.md](secret-server-admin.md) and [identity-admin.md](identity-admin.md) | The portal calls these "security's process" |
@@ -387,6 +388,23 @@ In the PoC the catalog is the fixture bundled with the portal and the builder; c
 **Check:** the server is offered on an app's tab to the people its policies allow, and `cloudflare-access.yaml` in the deploy repo
 lists it for the apps that picked it.
 
+### 19. Ask for a suspension for a critical vulnerability
+
+**Goal:** an app with a critical vulnerability stops running in every environment until it is patched, and ServiceNow records it.
+
+1. Open a ServiceNow task for the platform team that names the app's CI (its `cmdb_ci` is the app's business application; the app
+   page shows its ServiceNow number) and says in its description: suspend, the CVE, and why. The ServiceNow admin provides the task
+   type (`docs/roles/servicenow-admin.md`, procedure 3).
+2. A portal admin applies it (portal-admin procedure 10, `docs/lifecycle.md`): every environment scales to zero, prod included, with
+   no reviewer to wait for; nothing is deleted. You can't press the button yourself unless you are a portal admin.
+3. Follow the task's work notes: the request, the PR opened, the merge ("every environment scales to zero when the cluster's
+   reconcile applies it"), and the close (Closed Complete). "Applied" means applied in git: the platform can't see the cluster.
+4. Once the owner has patched and released, ask for the resume through the same task's assignee or a new task; a portal admin
+   resumes it (portal-admin procedure 11).
+
+**Check:** the task is Closed Complete with "Applied in git: <owner>/<repo> is suspended for SCTASK...", and the app page shows the
+suspended banner.
+
 ## What you must never do
 
 - Never suppress a finding inside an app (`nosemgrep`, `# nosec`, `.trivyignore`, dismissing a CodeQL alert). Fix the rule.
@@ -438,6 +456,8 @@ lists it for the apps that picked it.
   owner) can edit or delete.
 - **`deploy-check` does not verify a binding against its source.** It checks shape and generated files only; the directory and
   Secret Server checks happen once, in the portal's writer.
+- **A suspension is applied in git only** (`docs/lifecycle.md`): the platform can't confirm the pods stopped, and a ServiceNow task
+  is needed for it (no task, no suspension).
 - **The scorecard runner's network egress is not restricted** on GitHub-hosted runners.
 - **Who may use which MCP server can't be confirmed in the mock.** The mock's per-user policy stands in for Cloudflare evaluating
   the person against each server's Access policies, and it is checked once, at submit. No token is issued and no Service Auth

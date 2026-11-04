@@ -40,9 +40,10 @@ def test_code_owners_give_bindings_to_security_and_analytics_and_everything_else
     assert rules[0] == ("*", [platform]), "everything defaults to the platform"
     assert ("/apps/**/bindings.yaml", [security, analytics]) in rules
     assert ("/.github/", [platform]) in rules
-    # The last matching rule wins: nothing after the bindings rule may take bindings.yaml back.
+    # The last matching rule wins: nothing after the bindings rule may take bindings.yaml back (lifecycle.yaml's rule names only
+    # lifecycle.yaml, spec 2026-11-02 rule 10).
     after = rules[rules.index(("/apps/**/bindings.yaml", [security, analytics])) + 1:]
-    assert all(not p.startswith("/apps") and p != "*" for p, _ in after)
+    assert all(p == "/apps/**/lifecycle.yaml" or (not p.startswith("/apps") and p != "*") for p, _ in after)
 
 
 def ruleset(name):
@@ -214,3 +215,16 @@ def test_deploy_check_holds_only_changed_bindings_to_the_gateway_and_bump_never_
     assert "golden-road deploy-verify --root /deploy" in check and "--changed /out/changed.txt" in check
     assert "'.warnings[]? | \"::warning::\" + .'" in check
     assert "golden-road compose --root /deploy" in bump and "--unchanged-binding" in bump
+
+
+def test_lifecycle_yaml_needs_the_platform_s_review():
+    """Rule 10: a person's PR that adds lifecycle.yaml needs platform-reviewers (the writer's own suspend bypasses the review rule)."""
+    lines = [l for l in (ROOT / "bootstrap/golden-road-deploy/.github/CODEOWNERS").read_text().splitlines() if l and not l.startswith("#")]
+    o = org()  # the placeholder, or the org a configured tree names
+    if o != "ORG_PLACEHOLDER" and not any(f"@{o}/" in l for l in lines):
+        assert any(l.split()[0] == "/apps/**/lifecycle.yaml" for l in lines)  # personal logins (single-approver PoC)
+        return
+    assert f"/apps/**/lifecycle.yaml @{o}/platform-reviewers" in lines
+    assert lines.index(f"/apps/**/lifecycle.yaml @{o}/platform-reviewers") > lines.index(
+        f"/apps/**/bindings.yaml @{o}/security @{o}/analytics")
+    assert lines[-1] == f"/.github/ @{o}/platform-reviewers"

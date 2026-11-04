@@ -144,6 +144,13 @@ def _parser() -> argparse.ArgumentParser:
     dp.set_defaults(handler=_cmd_deploy_pins)
     dp.add_argument("--root", type=Path, default=Path("."), help="the golden-road-deploy checkout (default: .)")
     dp.add_argument("--output", required=True, type=Path)
+    di = sub.add_parser("deploy-intake", help="Print an intake record's decommissioned key as JSON. Reads only.",
+                        description='Print {"repo": ..., "decommissioned": {at, task, by, request} or null} for the intake record at --intake, '
+                                    "as deploy-check fetched it from the factory. Exit 2 (a JSON error on stderr): a record that is not one "
+                                    "YAML mapping for --repo, or whose decommissioned is not intake/v2's.")
+    di.set_defaults(handler=_cmd_deploy_intake)
+    di.add_argument("--intake", required=True, type=Path)
+    di.add_argument("--repo", required=True)
     rc = sub.add_parser("record")
     rc.set_defaults(handler=_cmd_record)
     for flag in ("--repo", "--commit", "--image", "--builder-image", "--release"):
@@ -338,6 +345,12 @@ def _cmd_deploy_pin(args) -> int:
 
 def _cmd_deploy_pins(args) -> int:
     write_json(args.output, deploy.pins(args.root))
+    return EXIT_PASS
+
+
+def _cmd_deploy_intake(args) -> int:
+    raw = args.intake.read_bytes()
+    print(json.dumps({"repo": args.repo, "decommissioned": deploy.intake_decommissioned(raw, args.repo)}, sort_keys=True))
     return EXIT_PASS
 
 

@@ -116,3 +116,37 @@ def test_the_0_6_0_procedures_are_there():
         assert needle in dev, needle
     assert "CODEOWNERS" in security and "skill.yaml" in security and "on_behalf" in security
     assert "cmdb_owner_unknown" in admin and "cmdb_owner_unknown" in dev
+
+
+def test_the_0_7_0_procedures_are_there():
+    """Spec 2026-11-02 Docs: the lifecycle in every SOP it touches, and the ServiceNow admin's SOP."""
+    read = lambda n: (ROLES / n).read_text()  # noqa: E731
+    admin, platform, reviewer, dev, security, snow = (read(n) for n in ("portal-admin.md", "platform-team.md", "deploy-reviewer.md",
+                                                                         "app-developer.md", "security-team.md", "servicenow-admin.md"))
+    for heading in ("### 10. Suspend an app", "### 11. Resume an app", "### 12. Decommission an app", "### 13. Retry or abandon a lifecycle step",
+                    "### 14. Read the outbox"):
+        assert heading in admin, heading
+    for heading in ("### 15. Create and install the lifecycle App", "### 16. Apply migration 0012", "### 17. Fix a failed archive step",
+                    "### 18. Bring an app back after decommission"):
+        assert heading in platform, heading
+    assert "### 5. Review a decommission PR" in reviewer and "### 6. Recognize a writer-merged prod suspend" in reviewer
+    assert "### 15. Know what a suspended or decommissioned app looks like" in dev
+    assert "### 19. Ask for a suspension for a critical vulnerability" in security
+    for needle in ("docs/lifecycle.md", "SCTASK"):
+        for text in (admin, platform, reviewer, dev, security, snow):
+            assert needle in text, needle
+    for needle in ("cmdb_writeback_pending", "Retry", "Abandon", "/mock/servicenow/tasks/", "nothing to suspend",
+                   "UPDATE lifecycle_events SET sent_at = now()", "at least once"):
+        assert needle in admin, needle
+    for needle in ("Administration: write", "app repos only", "rotate", "PORTAL_LIFECYCLE_APP_ID", "lifecycle_app_on_platform_repo",
+                   "unarchive", "decommissioned", "UPDATE lifecycle_state SET state = 'active', task = NULL", "portal_owner",
+                   "its own `failed` note"):
+        assert needle in platform, needle
+    for needle in ("apps/<owner>/<repo>/", "adapters", "nothing else", "L5", "lifecycle.yaml", "your approval is lost"):
+        assert needle in reviewer, needle
+    for needle in ("not by a PR", "ServiceNow task", "banner"):
+        assert needle in dev, needle
+    for needle in ("sc_task", "u_golden_road_state", "u_golden_road_task", "work_notes", "close_notes", "integration user", "IRE"):
+        assert needle in snow, needle
+    index = (ROLES / "README.md").read_text()
+    assert "[servicenow-admin.md](servicenow-admin.md)" in index and "ServiceNow admin" in index.split("## Who to ask")[1]

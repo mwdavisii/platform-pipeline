@@ -3,6 +3,7 @@ cluster. The builder forbids overlays inside the app repo, so the kit lives outs
 manifests.yaml rendered from the portal's own deploy/base (kustomize if it is installed, else they skip the build ones)."""
 
 import copy
+import json
 import re
 import shutil
 import subprocess
@@ -178,14 +179,17 @@ def test_postgres_creates_the_four_roles_the_migrations_expect(built):
         assert env[name]["valueFrom"]["secretKeyRef"]["name"] == "golden-road-portal-postgres", name
 
 
-def required_env(path, patterns):
+def required_env(path, patterns, optional=None):
+    """The settings a process's source reads as required, less those it first reads as optional (`optional`: a pattern for a read with
+    an empty default, such as the writer's lifecycle App, which is both settings or neither)."""
     text = (PORTAL / path).read_text()
-    return {n for p in patterns for n in re.findall(p, text)}
+    return {n for p in patterns for n in re.findall(p, text)} - (set(re.findall(optional, text)) if optional else set())
 
 
 REQUIRED = {
     "web": lambda: required_env("portal/settings.py", [r'need\("(PORTAL_\w+)"[,)]']),
-    "writer": lambda: required_env("portal/writer/__main__.py", [r'_need\(env, "(PORTAL_\w+)"\)', r'_int\(env, "(PORTAL_\w+)"\)']),
+    "writer": lambda: required_env("portal/writer/__main__.py", [r'_need\(env, "(PORTAL_\w+)"\)', r'_int\(env, "(PORTAL_\w+)"\)'],
+                                   optional=r'env\.get\("(PORTAL_\w+)", ""\)'),
     "collector": lambda: required_env("portal/collectors/__main__.py", [r'= env\.get\("(PORTAL_GITHUB_HOST)", ""\)\.lower', r'_missing\("(PORTAL_\w+)"\)']),
     "migrate": lambda: required_env("portal/migrate.py", [r'environ\.get\("(PORTAL_\w+)"']),
 }
@@ -198,8 +202,10 @@ OPTIONAL_PASSED = {"web": {"PORTAL_DIRECTORY", "PORTAL_IDENTITY_PROCESS_URL", "P
                            "PORTAL_MCP_PROCESS_URL", "PORTAL_SKILLS_CATALOG", "PORTAL_SERVICENOW", "PORTAL_ORG_NAME",
                            "PORTAL_LIFECYCLE_GRACE_DAYS"},
                    "writer": {"PORTAL_DIRECTORY", "PORTAL_REPO_ADMINS_STALE_AFTER", "PORTAL_SECRET_SERVER", "PORTAL_CLOUDFLARE",
-                              "PORTAL_MCP_GATEWAY_TEST", "PORTAL_MCP_GATEWAY_PROD", "PORTAL_SKILLS_CATALOG"},
-                   "collector": {"PORTAL_REVIEW_DUE_SOON_DAYS", "PORTAL_REREVIEW_SIGNALS", "PORTAL_ARTIFACT_HOSTS", "PORTAL_SERVICENOW"}}
+                              "PORTAL_MCP_GATEWAY_TEST", "PORTAL_MCP_GATEWAY_PROD", "PORTAL_SKILLS_CATALOG", "PORTAL_LIFECYCLE_APP_ID",
+                              "PORTAL_LIFECYCLE_APP_KEY_FILE"},
+                   "collector": {"PORTAL_REVIEW_DUE_SOON_DAYS", "PORTAL_REREVIEW_SIGNALS", "PORTAL_ARTIFACT_HOSTS", "PORTAL_SERVICENOW",
+                                 "PORTAL_BASE_URL"}}
 
 
 def provided(built, o):
@@ -516,4 +522,36 @@ def test_the_kit_s_readme_names_the_0_6_0_settings_and_that_the_mocks_need_no_eg
     for name in WEB_NEW:
         assert f"`{name}`" in text, name
     for needle in ("the mock is on", "no egress", "collectors: cmdb: N synced, M unchanged"):
+        assert needle in text, needle
+
+
+@needs_kustomize
+def test_the_lifecycle_app_is_the_writer_s_alone(built):
+    """Spec 2026-11-02 "Settings": PORTAL_LIFECYCLE_APP_ID and the key are in the writer's Secret only; the web pods never get them."""
+    writer_deployment = built[("Deployment", "golden-road-portal-writer")]
+    writer = provided(built, writer_deployment)
+    assert writer["PORTAL_LIFECYCLE_APP_ID"] == ("secret", "golden-road-portal-writer", "PORTAL_LIFECYCLE_APP_ID")
+    assert writer["PORTAL_LIFECYCLE_APP_KEY_FILE"] == ("literal", "/secrets/lifecycle-app/lifecycle-app.pem")
+    volume = next(v for v in pod(writer_deployment)["volumes"] if v["name"] == "lifecycle-app-key")
+    assert volume["secret"]["secretName"] == "golden-road-portal-writer" and volume["secret"]["optional"] is True
+    assert volume["secret"]["items"] == [{"key": "lifecycle-app.pem", "path": "lifecycle-app.pem"}]
+    mounts = {m["mountPath"]: m for m in containers(writer_deployment)[0]["volumeMounts"]}
+    assert mounts["/secrets/lifecycle-app"]["readOnly"] is True and mounts["/secrets/lifecycle-app"]["name"] == "lifecycle-app-key"
+    for name in ("golden-road-portal", "golden-road-portal-collector"):
+        env = provided(built, built[("Deployment", name)])
+        assert "PORTAL_LIFECYCLE_APP_ID" not in env and "PORTAL_LIFECYCLE_APP_KEY_FILE" not in env, name
+        assert "lifecycle-app" not in json.dumps(built[("Deployment", name)]), name
+    assert "PORTAL_LIFECYCLE_APP_ID" not in built[("ConfigMap", "golden-road-portal-config")]["data"]
+
+
+@needs_kustomize
+def test_the_collector_links_its_notes_to_the_portal(built):
+    collector = provided(built, built[("Deployment", "golden-road-portal-collector")])
+    assert collector["PORTAL_BASE_URL"] == ("config", "PORTAL_BASE_URL")
+
+
+def test_the_kit_s_readme_names_the_lifecycle_settings():
+    text = " ".join((KIT / "README.md").read_text().split())
+    for needle in ("## Lifecycle (0.7.0)", "`PORTAL_LIFECYCLE_APP_ID`", "`PORTAL_LIFECYCLE_APP_KEY_FILE`", "lifecycle-app.pem",
+                   "Administration: write", "app repos only", "`PORTAL_BASE_URL`", "collectors: lifecycle write-back: N sent", "0012"):
         assert needle in text, needle

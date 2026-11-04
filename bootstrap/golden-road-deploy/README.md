@@ -14,6 +14,7 @@ switches each one on by hand, outside this repo's automation.
 |---|---|---|
 | `apps/<owner>/<repo>/<env>/release.yaml` | `deploy-release/v1`: the release tag, image digest, the hashes of its `manifests.yaml` and `gate-record.json`, and the namespace (`<repo>-<env>`, one per environment) | the `bump` workflow's PR; the platform reviews |
 | `apps/<owner>/<repo>/<env>/bindings.yaml` | `binding/v2`: the Azure identity, Databricks connection, Delinea Secret Server references (never a value), MCP servers and pinned skills that environment runs with | the portal's writer; security or analytics reviews |
+| `apps/<owner>/<repo>/<env>/lifecycle.yaml` | `lifecycle/v1`, only while the platform has the environment suspended: the ServiceNow task, the reason, who asked and when; compose scales the Deployment to zero and changes nothing else (resume deletes the file) | only the portal's writer; a person's PR that adds or removes one needs the platform's review |
 | `apps/<owner>/<repo>/<env>/base/manifests.yaml` | the release's signed manifests, byte for byte (its sha256 is `release.yaml`'s `manifests_sha256`) | `bump`, generated |
 | `apps/<owner>/<repo>/<env>/composed.yaml`, `kustomization.yaml` | the signed objects with the bindings applied (then, when the binding pins skills, their `ConfigMap`, and when it has secrets or MCP servers, one `ExternalSecret` last), and the Kustomize entry point that sets the namespace | `golden-road compose`, generated |
 | `apps/<owner>/<repo>/<env>/cloudflare-access.yaml` | `cloudflare-access/v1`, only when `bindings.yaml` has `mcp`: the app's Cloudflare service token and the MCP servers whose policies must name it (see below) | `golden-road compose`, generated |
@@ -26,6 +27,11 @@ switches each one on by hand, outside this repo's automation.
 
 Nobody hand-edits a generated file: the `deploy-check` workflow re-runs `golden-road deploy-verify` on every pull request and
 fails on any difference, on a file outside this layout, and on two environments sharing a namespace.
+
+Every changed environment's app must have an intake record in the scorecard factory, and that record must not say the app was
+decommissioned: once the record has `decommissioned`, `deploy-check` refuses any added or changed environment under
+`apps/<owner>/<repo>/`. A removed environment passes, so the decommission PR that deletes the app's directory and its adapters
+merges. Only a reviewed factory PR that removes `decommissioned` lets the app back in.
 
 ## MCP servers and skills
 

@@ -44,10 +44,11 @@ def world():
     return store, people
 
 
-def written(store, people, environment, databricks=True, identity=True, secrets=(), mcp=(), skills=()):
+def written(store, people, environment, databricks=True, identity=True, secrets=(), mcp=(), skills=(), lifecycle=None):
     """The writer's first pass on one binding for `environment`: {path: bytes} of what it PUT, and the release.yaml it read. With
     `secrets` the writer re-checks them against the mock Secret Server, as the platform account; with `mcp` (server ids) and
-    `skills` ((name, commit)) against the mock Cloudflare and the portal's skills catalog."""
+    `skills` ((name, commit)) against the mock Cloudflare and the portal's skills catalog. With `lifecycle` (bytes) the environment
+    is suspended (spec 2026-11-02 rule 5)."""
     req = binding_request(store, people, T0, environment=environment, databricks=databricks, identity=identity, secrets=secrets,
                           mcp=mcp, skills=skills)
     d = f"apps/acme/notes/{environment}"
@@ -57,7 +58,8 @@ def written(store, people, environment, databricks=True, identity=True, secrets=
     gh = bgh_for_write(release=file_answer(release))
     D = "/repos/acme/golden-road-deploy/contents"
     for name, answer in (("release.yaml", file_answer(release)), ("base/manifests.yaml", file_answer(MANIFESTS)),
-                         ("bindings.yaml", NOT_FOUND), ("composed.yaml", NOT_FOUND), ("cloudflare-access.yaml", NOT_FOUND)):
+                         ("bindings.yaml", NOT_FOUND), ("composed.yaml", NOT_FOUND), ("cloudflare-access.yaml", NOT_FOUND),
+                         ("lifecycle.yaml", NOT_FOUND if lifecycle is None else file_answer(lifecycle))):
         gh.routes[("GET", "api.github.com", f"{D}/{d}/{name}")] = [answer]
     # the pull request fixture's head is "2" * 40: the last file written
     for name, sha in (("bindings.yaml", "4"), ("composed.yaml", "6" if mcp else "2"), ("cloudflare-access.yaml", "2")):
@@ -69,10 +71,12 @@ def written(store, people, environment, databricks=True, identity=True, secrets=
     return {path.removeprefix(f"{D}/"): base64.b64decode(body["content"]) for path, body in puts(gh)}, release
 
 
-def lay_out(root, environment, files, release):
+def lay_out(root, environment, files, release, lifecycle=None):
     d = root / f"apps/acme/notes/{environment}"
     (d / "base").mkdir(parents=True)
     (d / "release.yaml").write_bytes(release)
+    if lifecycle is not None:
+        (d / "lifecycle.yaml").write_bytes(lifecycle)
     (d / "base/manifests.yaml").write_bytes(MANIFESTS)
     (d / "kustomization.yaml").write_text(kustomization(f"notes-{environment}"))  # bump.yml's, unchanged by a binding
     for path, data in files.items():
@@ -210,3 +214,23 @@ def test_a_bindings_yaml_the_writer_wrote_with_mcp_is_refused_on_a_platform_with
     d = lay_out(tmp_path, "test", files, release)
     monkeypatch.setattr(deploy, "_platform_gateways", lambda: {"test": "mcp-other.example.com", "prod": "mcp.example.com"})
     assert any("gateway" in p for p in deploy.verify_environment(d))
+
+
+@pytest.mark.parametrize("environment", ["test", "prod"])
+def test_a_binding_the_writer_writes_while_suspended_passes_deploy_verify_at_zero(world, tmp_path, environment):
+    """Spec 2026-11-02 rule 5: the writer composes the binding with the environment's lifecycle.yaml, as deploy-verify does, so a
+    suspended app's binding PR passes deploy-check and keeps the Deployment at zero replicas."""
+    store, people = world
+    life = yaml.safe_dump({"schema": "lifecycle/v1", "repo": "acme/notes", "environment": environment, "state": "suspended",
+                           "task": "SCTASK0010001", "reason": "Critical vulnerability; suspended until patched",
+                           "requested_by": "p_" + "a" * 32, "requested_at": "2026-11-02T22:00:00Z", "request": "r_" + "d" * 32},
+                          sort_keys=False).encode()
+    files, release = written(store, people, environment, lifecycle=life)
+    assert sorted(files) == [f"apps/acme/notes/{environment}/bindings.yaml", f"apps/acme/notes/{environment}/composed.yaml"]
+    d = lay_out(tmp_path, environment, files, release, lifecycle=life)
+    assert deploy.verify_environment(d) == []
+    objects = list(yaml.safe_load_all((d / "composed.yaml").read_bytes()))
+    assert next(o for o in objects if o["kind"] == "Deployment")["spec"]["replicas"] == 0
+    before = (d / "composed.yaml").read_bytes()
+    deploy.compose_environment(d)
+    assert (d / "composed.yaml").read_bytes() == before, "golden-road compose writes the same bytes"

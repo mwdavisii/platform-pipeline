@@ -7,10 +7,10 @@
 # upstream version the stage must install; a Debian update to another upstream version fails the build on purpose, so it is
 # a reviewed change to this line.
 ARG GIT_VERSION=2.47.3
-FROM docker.io/library/python:3.12-slim-trixie@sha256:b18b261e1b4974b4f321451ad5251ded85abb22c2b8b262da527dda1d031ab30 AS git
+FROM docker.io/library/python:3.12-slim-trixie@sha256:4840d514c583a4d3d8cad3940e68dee6f0f6f3635c12fcd0a3d74c21a5b93a54 AS git
 RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
 
-FROM docker.io/library/python:3.12-slim-trixie@sha256:b18b261e1b4974b4f321451ad5251ded85abb22c2b8b262da527dda1d031ab30
+FROM docker.io/library/python:3.12-slim-trixie@sha256:4840d514c583a4d3d8cad3940e68dee6f0f6f3635c12fcd0a3d74c21a5b93a54
 ARG GIT_VERSION
 COPY --from=git /usr/bin/git /usr/bin/git
 RUN ldd /usr/bin/git && ! ldd /usr/bin/git | grep -q "not found" && [ "$(git --version)" = "git version ${GIT_VERSION}" ]

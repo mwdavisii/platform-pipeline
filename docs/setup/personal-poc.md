@@ -1722,6 +1722,25 @@ Resume anything suspended first (a suspend left in git keeps its environments at
 
 Prefer fixing forward.
 
+## 27. Builder 0.7.1: the Python base with apt 3.0.4, and the portal survives a database restart
+Builder 0.7.1 changes no behavior. Two fixes:
+
+- **Base image.** The Python base `python:3.12-slim-trixie@sha256:b18b261e…` carried `apt` and `libapt-pkg7.0` 3.0.3, a HIGH Trivy finding (CVE-2026-109518, fixed in 3.0.4). It failed `security-scans / trivy` on every Python app, and with it Gate 1, so no release ran. Python apps (build and runtime) and the builder image move to `python:3.12-slim-trixie@sha256:4840d514c583a4d3d8cad3940e68dee6f0f6f3635c12fcd0a3d74c21a5b93a54` (Debian 13.7, Python 3.12.16). The builder image's `git` stays 2.47.3. Node and static apps are unchanged.
+- **Portal.** The store's connection pool now checks a connection before it hands it out (`check=ConnectionPool.check_connection`). Before, a Postgres restart (an image update, a node drain) left every pooled connection dead: the next request on each failed with `AdminShutdown` (a 500 on `/login`) and the writer crashed and restarted.
+
+### 27.1 Roll out (in this order)
+1. **Release builder 0.7.1** (the lead's bump) from a fresh, configured export (as in 13.2), then pin it in every workflow. The pin's check still prints `8   BUILDER_IMAGE: $ref`.
+   **Check:** `docker run --rm --network none --entrypoint dpkg-query "$ref" -W apt` prints `apt` and `3.0.4`.
+2. **The deploy repo.** Copy this release's `deploy-check.yml` and `bump.yml` into your clone of the deploy repo, as in 24.1 step 3; only `BUILDER_IMAGE` changes. Open the PR and merge it.
+3. **The factory.** Merge its pin PR.
+4. **The apps.** Merge the regenerate PRs of `hello-app` and the portal (as in 14.6). Each changes its `Dockerfile`'s two `FROM` lines and `.builder.lock`; the portal's also carries the pool check. Then ask Dependabot to rebase its open PRs (`@dependabot rebase`): they failed the same Trivy finding.
+   **Check:** each PR's release run passes Gate 1, Trivy included.
+5. **Deploy the portal's new build** as usual. There is no migration and no kit change.
+   **Check:** restart the database (`kubectl -n golden-road-portal delete pod golden-road-portal-postgres-0`; its StatefulSet starts it again), wait for it to be ready, and sign in: no 500, and the writer does not restart.
+
+### 27.2 Roll back
+Pin 0.7.0 again and revert the apps' regenerate PRs. The 0.7.0 base fails Trivy, so a rollback release needs a dated exception for CVE-2026-109518.
+
 ## PoC gaps to record
 - The scans are open-source reference scans (Semgrep CE with a small vendored rule set plus `p/default`, Trivy, CodeQL default setup), not the security team's tools, thresholds, or triage. Until step 11, Gate 1 waits on nothing beyond drift and the authz probe. Gate 1 sees only a CodeQL check run's conclusion, so it proves the analysis ran, not that no alert exists; the alert threshold is enforced at merge time.
 - **Scan results can be forged.** Every check that a GitHub Actions workflow posts comes from the same app (id 15368), so pinning `app_id` cannot tell the `security-scans` workflow's `security-scans / semgrep` from a job of the same name that anyone with write access adds to a workflow in `hello-app` (or by editing `security-scans.yml` to stop calling the real scans). CodeQL's results can likewise be imitated by a workflow with `security-events: write`. What holds today is code-owner review of `.github/` and a deputy who rejects changes there. **The real fix is signed scan results**: the scan workflow signs its result with its own identity and the release verifies that signature instead of a check name. It is out of scope for this PoC.

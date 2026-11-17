@@ -1741,6 +1741,48 @@ Builder 0.7.1 changes no behavior. Two fixes:
 ### 27.2 Roll back
 Pin 0.7.0 again and revert the apps' regenerate PRs. The 0.7.0 base fails Trivy, so a rollback release needs a dated exception for CVE-2026-109518.
 
+## 28. Builder 0.7.2: create a service principal (mock)
+Builder 0.7.2 lets an app's admin create a service principal from the app page. With only pre-approved Microsoft Graph application permissions (`Calendars.Read`, `Contacts.Read`, `Presence.Read.All`), it is created on the collector's next pass. With any permission that needs approval (`Calendars.ReadWrite`, `Mail.Send`, `Files.Read.All`), the portal opens a ServiceNow task, and creates the principal once the task is closed as approved. Either way it then appears in the Azure identity card's Service principal list and links to test or prod as before.
+
+**Mock only.** Nothing calls a real Microsoft Graph or a real ServiceNow: a created principal is a row in the portal's store, and the task lives in the mock. The catalog is `portal/mock_graph_scopes.json`. The rules are in the portal README's "Service principals" section.
+
+### 28.0 What changes
+- **The card** has a **Create a service principal** link (the repo's admin and portal admins), the principals created in the portal (name, client ID, scopes) and the other requests with their state.
+- **The collector** has a new last part: `collectors: service principals: N created, N tasks opened, N approved, N rejected, N waiting`. It retries every failure on the next pass, with no cap. Before it creates a principal it checks the scopes against the catalog again.
+- **The mock task page** (`/mock/servicenow/tasks/<number>`, admins) shows a portal-opened task with **Approve** and **Reject** under "Mock: acting as the ServiceNow approver". The requester can't decide their own task: another admin does.
+- **The Approvals page** lists registrations only: a service principal request is decided in ServiceNow.
+- **Migration 0013** adds the request kind, its states and the `service_principal` and `mock_task_decision` tables. It is forward-only.
+
+Requirements: section 19 is done (`PORTAL_DIRECTORY=mock`), and for requests that need approval section 24 (`PORTAL_SERVICENOW=mock`, on the web and the collector). The demo needs two admins: the requester (you) and a second Authentik user in the admin group to approve.
+
+### 28.1 Roll out (in this order)
+1. **Release builder 0.7.2** (the lead's bump) from a fresh, configured export (as in 13.2), then pin it in every workflow.
+2. **The deploy repo.** Copy this release's `deploy-check.yml` and `bump.yml` into your clone of the deploy repo, as in 24.1 step 3; only `BUILDER_IMAGE` changes. Open the PR and merge it.
+3. **The factory.** Merge its pin PR.
+4. **The apps.** Merge the regenerate PRs of `hello-app` and the portal (as in 14.6).
+5. **Deploy the portal's new build** as usual: the migration job runs `0013`. There is no kit change: the collector reads the mock directory and the catalog from its image.
+   **Check:** the collector logs `collectors: service principals: 0 created, 0 tasks opened, 0 approved, 0 rejected, 0 waiting`.
+
+### 28.2 The demo
+1. **Pre-approved.** On `hello-app`'s page press **Create a service principal**. Keep the name `sp-hello-app-` and add `calendar` (`sp-hello-app-calendar`), tick **Calendars.Read** (the button says Create), and press it. The request page says "Creating…". After the collector's next pass it says Created with a client ID, and the card lists `sp-hello-app-calendar`. Pick it in the Service principal list and press **Associate** for test: the binding flow is as in 19.
+2. **Needs approval.** Create `sp-hello-app-rooms` with **Calendars.Read** and **Calendars.ReadWrite** (the button says Request) and a justification. After the next pass the request says "Waiting for approval in SCTASK0010007" (the mock numbers a new task after the highest it holds). Sign in as the second admin, open `/mock/servicenow/tasks/SCTASK0010007` (the request page links it for admins), read the description (the scopes, the justification, your email and the request's link) and press **Approve**. After the next pass the request is Created (one pass reads the close, creates the principal and sends the note), and the task's history has a work note with the client ID.
+3. **Rejected.** Create `sp-hello-app-mail` with **Mail.Send** and a justification. After the next pass it waits in `SCTASK0010008`; the second admin presses **Reject** there with "Use a shared mailbox instead." After the next pass the card says "Rejected: Use a shared mailbox instead."
+
+### 28.3 What is refused
+- A scope that needs approval with no justification: "Say why this app needs Calendars.ReadWrite."
+- With `PORTAL_SERVICENOW` unset, a scope that needs approval: "Requests for higher-risk scopes need ServiceNow, which isn't set up here." Pre-approved ones still work.
+- A name used before: "sp-hello-app-calendar is already used: choose another name." A name that doesn't start `sp-hello-app-`: the form names the rule.
+- You approving your own request on the mock task page: the page says another admin decides it, and the POST is a 403.
+- Someone who isn't the app's admin: the form is a 404.
+
+### 28.4 Proof items
+The request pages of the three demos, the task page of `SCTASK0010007` with its description and work note, the card with `sp-hello-app-calendar` and the rejected request, and the collector's log lines.
+
+### 28.5 Roll back
+0013 is forward-only (as 0010 to 0012): roll the portal image back only with a database restored from before 0013. Pin 0.7.1 again and revert the apps' regenerate PRs. A binding to a created principal already merged stays in the deploy repo (its recheck ran when it was written), but the 0.7.1 portal doesn't know the principal: any later change to that environment's binding fails `recheck: not_in_directory` while the binding names it. Before you roll back, link those environments to a principal from the mock directory.
+
+Prefer fixing forward.
+
 ## PoC gaps to record
 - The scans are open-source reference scans (Semgrep CE with a small vendored rule set plus `p/default`, Trivy, CodeQL default setup), not the security team's tools, thresholds, or triage. Until step 11, Gate 1 waits on nothing beyond drift and the authz probe. Gate 1 sees only a CodeQL check run's conclusion, so it proves the analysis ran, not that no alert exists; the alert threshold is enforced at merge time.
 - **Scan results can be forged.** Every check that a GitHub Actions workflow posts comes from the same app (id 15368), so pinning `app_id` cannot tell the `security-scans` workflow's `security-scans / semgrep` from a job of the same name that anyone with write access adds to a workflow in `hello-app` (or by editing `security-scans.yml` to stop calling the real scans). CodeQL's results can likewise be imitated by a workflow with `security-events: write`. What holds today is code-owner review of `.github/` and a deputy who rejects changes there. **The real fix is signed scan results**: the scan workflow signs its result with its own identity and the release verifies that signature instead of a check name. It is out of scope for this PoC.
@@ -1799,6 +1841,16 @@ Pin 0.7.0 again and revert the apps' regenerate PRs. The 0.7.0 base fails Trivy,
 - **An environment first pinned while the app is suspended is not suspended** (`bump` has no portal state): resume, then suspend again.
 - **Bringing a decommissioned app back resets the portal's state by hand in the database,** as `portal_owner` (`docs/roles/platform-team.md` procedure 18): there is no button.
 - **Lifecycle notes are sent at least once,** and a note ServiceNow refuses for good holds back the request's later notes until it is resolved (`docs/roles/portal-admin.md` procedure 14).
+- **Created service principals are not Entra objects.** They are rows in the portal's store: no app registration, no app role assignments and no admin consent. There is no Graph client yet: a real one (an app registration, then a service principal, then app role assignments), with an approver who grants admin consent, is a later step. In a real tenant the admin consent is the real approval; the task records the decision.
+- **The mock's approval is the task's close.** A real instance would more likely approve through an approval record (`sysapproval_approver`) or a catalog item's flow, and its tasks usually hang under a requested item (`sc_req_item`); confirm with the ServiceNow admins before a real integration.
+- **The creation note goes to a closed task.** The collector adds the client ID as a work note after the task is closed. An instance whose business rule protects a closed task refuses it, and the collector retries it on every pass with no cap; the request page shows the attempts. Confirm on the instance whether a closed task takes a work note; if not, the client ID needs another way to the approver later.
+- **A found task is the portal's only if the integration user opened it.** The collector compares the task's `sys_created_by` with the integration user's name in any case (case-insensitive), which assumes basic auth: with OAuth, `sys_created_by` is the token's user. Confirm on the instance which user the portal's calls run as.
+- **A request that can never finish retries forever.** A scope the catalog later makes requestable (or drops) on an approved request with no task, a task deleted in ServiceNow, a task number taken by a lifecycle request, or the app is decommissioned after the request (no principal is created for it) fails on every pass with no cap and no way to cancel it yet; an admin's abandon is future work.
+- **Only who closed the task is checked against the requester.** A task closed complete approves only when its `closed_by` is someone other than the requester's own ServiceNow user (found by email); closed by no one or by the requester, it is a failure, retried. Anyone else who can close the task still approves it: ServiceNow's ACLs, or an approval record (`sysapproval_approver`), must keep out people who mustn't approve. A requester whose email matches no ServiceNow user can't be told apart from the closer.
+- **A name can read like another app's.** The prefix is the repo's name, so repo `hello` may create `sp-hello-app-mail`, which reads like `hello-app`'s; the overlay never lists it for `hello-app` (it is tagged for `hello`), but a person reading names in Entra could be misled.
+- **The requester's admin rights aren't checked again when the principal is created.** A repo admin who loses the role after asking still gets the principal on a later pass; linking it to an environment still needs the repo's admin, and the binding is checked again when it is written.
+- **The replay into the mock task page skips a request whose task clashes with a task the mock holds** (a fixture task's number or `sys_id`), and logs it: its task page shows the fixture task without the request's decision or note. Likewise a created principal whose id or client ID the mock directory already lists is in the card's "Created in the portal" list but not in the link list (logged). `/admin/directory` shows the mock JSON only, never the created principals.
+- **In the web, only the mock task page replays the service principal tasks.** The lifecycle form's ServiceNow check never sees a service principal's task (it asks the fixture's tasks, as a real instance holds them); the store refuses such a task for lifecycle anyway.
 
 ## If something fails
 The workflows fail closed, so a failure means no release was published. Keep the failing step's log and the command output.

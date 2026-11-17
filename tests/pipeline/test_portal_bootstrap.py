@@ -82,7 +82,8 @@ def test_ci_runs_the_portal_s_docker_tests():
                  "bootstrap/golden-road-portal/tests/test_portal_postgres_rereview_docker.py",
                  "bootstrap/golden-road-portal/tests/test_portal_postgres_evidence_docker.py", "tests/pipeline/test_portal_deploy_kit_docker.py",
                  "bootstrap/golden-road-portal/tests/test_portal_postgres_cmdb_docker.py",
-                 "bootstrap/golden-road-portal/tests/test_portal_postgres_lifecycle_docker.py"):
+                 "bootstrap/golden-road-portal/tests/test_portal_postgres_lifecycle_docker.py",
+                 "bootstrap/golden-road-portal/tests/test_portal_postgres_service_principal_docker.py"):
         assert path in run.split("-m docker", 1)[1], path
 
 
@@ -269,3 +270,34 @@ def test_the_portal_readme_describes_the_lifecycle():
                    "docs/lifecycle.md", "no attempt cap", "at least once", "one more ServiceNow request per CI per pass", "not_in_org",
                    "adapter_not_ours", "`DELETE /installation/token`", "`GET /repos/{owner}/{repo}`"):
         assert needle in text, needle
+
+
+def test_the_portal_readme_describes_creating_a_service_principal():
+    """Spec 2026-11-16: the portal README names the catalog, the request's states, the calls, the tables and the pages."""
+    text = " ".join((PORTAL / "README.md").read_text().split())
+    for needle in ("## Service principals (0.7.2, mock directory and ServiceNow)", "portal/mock_graph_scopes.json", "mock-graph-scopes/v1",
+                   "service-principal-request/v1", "`approved`", "`pending`", "`created`", "`rejected`", "`0013`",
+                   "POST /api/now/table/sc_task", "201", "correlation_id", "Closed Complete", "Closed Incomplete", "Closed Skipped",
+                   "close_notes", "/apps/<owner>/<repo>/service-principals/new", "/mock/servicenow/tasks/<number>/approve",
+                   "service_principal_request", "mock_task_decision", "no attempt cap", "collectors: service principals:",
+                   "the writer's recheck", "creating a service principal",
+                   # as built (plan 2026-11-16, Rounds 3 to 5)
+                   "sys_created_by", "correlation_display", "at least once", "only on the mock task page", "skips (and logs)",
+                   "`/admin/directory`", "task_taken", "an unknown scope", "a requestable scope on a request with no task",
+                   # the final review's fixes
+                   "closed_by", "the requester's own ServiceNow user", "names no one who closed it", "decommissioned after its request",
+                   "correlation_id=<id>^correlation_display=golden-road-portal^sys_created_by=<user>",
+                   "control or invisible formatting characters", "sysapproval_approver"):
+        assert needle in text, needle
+    section = text[text.index("## Service principals (0.7.2"):text.index("## Development")]
+    assert "the collector's and the web's mocks are rebuilt each time" not in section
+
+
+def test_the_enforcement_doc_has_the_service_principal_row():
+    """Spec 2026-11-16 (S1, S5): where "higher-risk Graph scopes need a ServiceNow approval" is enforced, as built."""
+    text = " ".join((ROOT / "docs/enforcement.md").read_text().split())
+    row = text[text.index("| Higher-risk Graph scopes need a ServiceNow approval"):]
+    row = row[:row.index(" |", row.index("| ", 2) + 2) + 2]
+    for needle in ("portal/mock_graph_scopes.json", "creation_problem", "0013", "sys_created_by", "correlation_display", "403", "mock",
+                   "closed_by", "the requester's own ServiceNow user", "ACLs", "sysapproval_approver", "decommissioned"):
+        assert needle in row, needle

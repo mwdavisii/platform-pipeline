@@ -358,10 +358,10 @@ def test_personal_poc_doc_covers_the_scans_codeql_dependabot_and_the_known_gap()
                    "sp-finance-reports", "AZURE_CLIENT_ID", "bindings/<you>/hello-app.yaml"):
         assert needle in text, needle
     steps = [int(m) for m in re.findall(r"^## (\d+)\.", text, re.M)]
-    assert steps == list(range(0, 28))
+    assert steps == list(range(0, 29))
     # the scans repo is published before hello-app is pushed, and the builder is released again only after both exist
     assert text.index("## 4. Publish `security-scans`") < text.index("## 5. Create `hello-app`") < text.index("## 11.") < text.index("## 12.")
-    assert text.index("## 13. Risk scorecard") < text.index("## 14. ") < text.index("## 16. Central AI review") < text.index("## 17. Switch the review to risk routing") < text.index("## 18. High findings hold the merge") < text.index("## 19. App connections (mock)") < text.index("## 20. The deploy repo (mock)") < text.index("## 21. Delinea Secret Server secrets (mock)") < text.index("## 22. Builder 0.5.0: three classification levels, the policy link and the portal reskin") < text.index("## 23. Builder 0.5.1: changing a registration and the re-review list") < text.index("## 24. Builder 0.6.0: MCP servers, skills and the CMDB record (mock)") < text.index("## 25. Builder 0.6.1") < text.index("## 26. Builder 0.7.0: suspend, resume and decommission (mock ServiceNow)") < text.index("## 27. Builder 0.7.1") < text.index("## PoC gaps to record")
+    assert text.index("## 13. Risk scorecard") < text.index("## 14. ") < text.index("## 16. Central AI review") < text.index("## 17. Switch the review to risk routing") < text.index("## 18. High findings hold the merge") < text.index("## 19. App connections (mock)") < text.index("## 20. The deploy repo (mock)") < text.index("## 21. Delinea Secret Server secrets (mock)") < text.index("## 22. Builder 0.5.0: three classification levels, the policy link and the portal reskin") < text.index("## 23. Builder 0.5.1: changing a registration and the re-review list") < text.index("## 24. Builder 0.6.0: MCP servers, skills and the CMDB record (mock)") < text.index("## 25. Builder 0.6.1") < text.index("## 26. Builder 0.7.0: suspend, resume and decommission (mock ServiceNow)") < text.index("## 27. Builder 0.7.1") < text.index("## 28. Builder 0.7.2: create a service principal (mock)") < text.index("## PoC gaps to record")
     twenty = text[text.index("## 20. The deploy repo (mock)"):text.index("## 21. Delinea Secret Server secrets (mock)")]
     for needle in ("golden-road-deploy", "deploy-check", "suspend: true", "composed.yaml", "Mock only", "DEPLOY_APP_ID", "DEPLOY_APP_KEY",
                    "environments/bump", "namespace: hello-app-test", "SINGLE_APPROVER_PROMOTIONS", "mode: warn", "### 20.8 Proof items",
@@ -423,6 +423,25 @@ def test_personal_poc_doc_covers_the_scans_codeql_dependabot_and_the_known_gap()
     turn_on = twenty_six[twenty_six.index("### 26.1"):twenty_six.index("### 26.2")]
     assert turn_on.index("lifecycle App") < turn_on.index("deploy-check.yml") < turn_on.index("0012")
     for needle in ("applied in git", "Administration: write is broader than archive", "u_golden_road_", "first pinned while the app is suspended"):
+        assert needle in gaps, needle
+    twenty_eight = text[text.index("## 28. Builder 0.7.2"):text.index("## PoC gaps to record")]
+    for needle in ("Mock only", "### 28.1", "### 28.2", "### 28.3", "### 28.4 Proof items", "### 28.5 Roll back", "0013",
+                   "no kit change", "collectors: service principals:", "Create a service principal", "Calendars.Read",
+                   "Calendars.ReadWrite", "SCTASK0010007", "/mock/servicenow/tasks/SCTASK0010007", "Mock: acting as the ServiceNow approver",
+                   "another admin", "Say why this app needs Calendars.ReadWrite.",
+                   "Requests for higher-risk scopes need ServiceNow, which isn't set up here.", "is already used: choose another name.",
+                   "Rejected:", "sp-hello-app-calendar", "SCTASK0010008"):
+        assert needle in twenty_eight, needle
+    turn_on = twenty_eight[twenty_eight.index("### 28.1"):twenty_eight.index("### 28.2")]
+    assert turn_on.index("Release builder 0.7.2") < turn_on.index("0013")
+    for needle in ("not Entra objects", "admin consent", "sysapproval_approver", "requested item", "protects a closed task",
+                   "another way to the approver", "can never finish retries forever", "an admin's abandon is future work",
+                   "assumes basic auth", "the token's user", "in any case", "taken by a lifecycle request", "deleted in ServiceNow",
+                   "clashes with a task the mock holds", "/admin/directory", "only the mock task page replays",
+                   "never sees a service principal's task", "no Graph client yet",
+                   # the final review's fixes
+                   "the app is decommissioned", "who closed the task is checked against the requester", "ACLs",
+                   "read like another app's", "admin rights aren't checked again"):
         assert needle in gaps, needle
     twenty_four = text[text.index("## 24. Builder 0.6.0"):text.index("## 25. Builder 0.6.1")]
     for needle in ("PORTAL_CLOUDFLARE=mock", "PORTAL_SKILLS_CATALOG=mock", "PORTAL_SERVICENOW=mock", "--mcp-gateway-test", "--skills-repo",

@@ -82,7 +82,7 @@
   ],
   "images": {
     "agent": {
-      "runtime": "ghcr.io/example/golden-road-agent-runtime@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      "runtime": "ghcr.io/mwdavisii/golden-road-agent-runtime@sha256:bf72190fce2acbecc9b57ba4dea4e92919d14d99baf1b94a3339bb2a5810246a"
     }
   },
   "org": "mwdavisii",

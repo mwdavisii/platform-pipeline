@@ -6,7 +6,7 @@
   "builder_version": "0.8.0",
   "files": {
     ".dockerignore": "87ad57476030d2747d0564cac96abf8ab3a30f325998e7cd99ce54d595aed9f2",
-    "Dockerfile": "81e9ee9fad7eec204c9896692896f8a64af9f7b3071e5394e841ff05c4fdf0ea",
+    "Dockerfile": "ecf0b2f162dc305e21df4969c1187a4414bafb1aab17ec328b4b3c29a1c3a983",
     "deploy/base/cilium-egress.yaml": "5cccfcf0e98440a0033a16e227328d233aeeb979532549c1d00f0531d1ae6f3a",
     "deploy/base/deployment.yaml": "a62e94a7564ac1249cc57942055bf10b63fbec852ffbfe2f088631753d1546a7",
     "deploy/base/kustomization.yaml": "02631caa8e959121188c9e01c8b927f4f126a5e4503ef34ed3a2fe790325938f",
@@ -14,6 +14,6 @@
     "deploy/base/service.yaml": "8d417c62fd7c7344bd7b92fdee95588dfa1b2d56f79b54e9ad2abfd5bb62298b",
     "deploy/base/serviceaccount.yaml": "0bbef7a433fef386a9195fe4c08b138094ac483665168a3ee4ba960e01c10ed0"
   },
-  "platform_config_sha256": "44f1e0f1719dfcba97f890b80eb102f7bf2d4855674d370ef033d20678cb5713",
+  "platform_config_sha256": "6d4952d05ad3d67fbca0c741e8116dec076a10b5e0c54bdc3f36e61304365678",
   "spec_sha256": "59db247df441f3b3d12541308147d34e054d1301aca63e1979b99f5f1a6e97c3"
 }

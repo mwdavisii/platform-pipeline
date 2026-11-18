@@ -97,12 +97,14 @@ The builder's baseline policy admits the web pods' port from the edge named in t
 | | `write-app.pem` | a file; `PORTAL_WRITE_APP_KEY_FILE=/secrets/write-app/write-app.pem` | writer |
 | | `PORTAL_LIFECYCLE_APP_ID` (0.7.0) | same | writer |
 | | `lifecycle-app.pem` (0.7.0) | a file; `PORTAL_LIFECYCLE_APP_KEY_FILE=/secrets/lifecycle-app/lifecycle-app.pem` | writer |
+| | `PORTAL_AGENT_APP_ID` (0.8.0) | same | writer |
+| | `agent-app.pem` (0.8.0) | a file; `PORTAL_AGENT_APP_KEY_FILE=/secrets/agent-app/agent-app.pem` | writer |
 | `golden-road-portal-collector` | `PORTAL_DATABASE_URL` (as `portal_collector`) | same | collector |
 | | `read-app.pem` | a file; `PORTAL_READ_APP_KEY_FILE=/secrets/read-app/read-app.pem` | collector |
 | `golden-road-portal-migrate` | `PORTAL_MIGRATE_DATABASE_URL` (as `portal_owner`) | same | migration job |
 | `golden-road-portal-postgres` | `POSTGRES_PASSWORD`, `PORTAL_OWNER_PASSWORD`, `PORTAL_WEB_PASSWORD`, `PORTAL_WRITER_PASSWORD`, `PORTAL_COLLECTOR_PASSWORD` | same | Postgres init |
 
-The database roles are `portal_owner` (owns database `portal`, runs the migrations), `portal_web`, `portal_writer` and `portal_collector`. The init script creates them once, on an empty volume, with the passwords from `golden-road-portal-postgres`; changing a password there later does not change the role (use `ALTER ROLE`). Postgres holds the four role passwords as environment variables of its pod (acceptable for a homelab; a Secret mounted as files would be the stricter choice). The web pod never gets the write key or the lifecycle App's key, and the writer never gets the OIDC secret.
+The database roles are `portal_owner` (owns database `portal`, runs the migrations), `portal_web`, `portal_writer` and `portal_collector`. The init script creates them once, on an empty volume, with the passwords from `golden-road-portal-postgres`; changing a password there later does not change the role (use `ALTER ROLE`). Postgres holds the four role passwords as environment variables of its pod (acceptable for a homelab; a Secret mounted as files would be the stricter choice). The web pod never gets the write key, the lifecycle App's key or the agent App's key, and the writer never gets the OIDC secret.
 
 ## Verify the release
 
@@ -200,7 +202,7 @@ curl -si https://viber.mwdavisii.com/ -H 'X-Platform-Roles: nobody' | head -1   
 
 Builder 0.7.0 lets a portal admin suspend, resume and decommission an app for a ServiceNow task (mock ServiceNow; `docs/lifecycle.md`). The kit adds three things.
 
-- **The lifecycle App, in the writer only.** A third GitHub App whose only repository permission is Administration: write, installed on app repos only (never on `platform-pipeline`, `scorecard-factory`, `golden-road-deploy`, `golden-road-portal`, `golden-road-agents` or `security-scans`), with no webhook and no OAuth. The writer uses it for one thing: archiving the repository at the end of a decommission. Put its App id in the writer's Secret as `PORTAL_LIFECYCLE_APP_ID` and its private key as `lifecycle-app.pem`; `writer.yaml` mounts the key read-only at `/secrets/lifecycle-app/` and sets `PORTAL_LIFECYCLE_APP_KEY_FILE=/secrets/lifecycle-app/lifecycle-app.pem`. No other pod gets either. The App id must not be the write App's: the writer refuses to start (exit 2) when `PORTAL_LIFECYCLE_APP_ID` equals `PORTAL_WRITE_APP_ID`.
+- **The lifecycle App, in the writer only.** A third GitHub App whose only repository permission is Administration: write, installed on app repos only (never on `platform-pipeline`, `scorecard-factory`, `golden-road-deploy`, `golden-road-portal`, `golden-road-agents`, `security-scans` or `golden-road-agent-template`), with no webhook and no OAuth. The writer uses it for one thing: archiving the repository at the end of a decommission. Put its App id in the writer's Secret as `PORTAL_LIFECYCLE_APP_ID` and its private key as `lifecycle-app.pem`; `writer.yaml` mounts the key read-only at `/secrets/lifecycle-app/` and sets `PORTAL_LIFECYCLE_APP_KEY_FILE=/secrets/lifecycle-app/lifecycle-app.pem`. No other pod gets either. The App id must not be the write App's: the writer refuses to start (exit 2) when `PORTAL_LIFECYCLE_APP_ID` equals `PORTAL_WRITE_APP_ID`.
 - **Both or neither.** The writer reads the two settings together. Suspend and resume need neither; without them every decommission is refused (`recheck: no_lifecycle_app`). The kit always sets the key file's path, so either fill both keys in the Secret, or remove the `PORTAL_LIFECYCLE_APP_ID` and `PORTAL_LIFECYCLE_APP_KEY_FILE` entries from `writer.yaml`. With only one of them the writer exits 2: `PORTAL_LIFECYCLE_APP_ID and PORTAL_LIFECYCLE_APP_KEY_FILE are set together, or neither`.
 - **The collector's `PORTAL_BASE_URL`.** The collector sends the lifecycle work notes to the ServiceNow tasks, each ending with a link to the portal's request page. It reads `PORTAL_BASE_URL` from the same ConfigMap key as the web, and exits 2 without it while `PORTAL_SERVICENOW` is set.
 
@@ -211,3 +213,22 @@ Checks after the upgrade:
 - The collector logs `collectors: lifecycle write-back: N sent` after its `cmdb` line on every pass (`0 sent` while nothing waits). `(N failed: will retry; M waiting behind them)` means ServiceNow refused or didn't answer a note; the request page's "What ServiceNow was told" shows the error, and a note waiting over a day shows as `cmdb_writeback_pending` on the Re-review page. `skipped: another collector is sending the notes` means a second collector holds the write-back lock.
 - With 0.7.0 the CMDB part reads each unchanged CI's lifecycle fields once per pass (one more ServiceNow `GET` per CI), so `collectors: cmdb: N synced, M unchanged` may add `(N corrected from ServiceNow edits)`: a person changed a CI's lifecycle fields in ServiceNow and the collector wrote the portal's state back.
 - Network: nothing new. The lifecycle App calls `api.github.com`, which the writer's egress already allows, and the mock ServiceNow runs inside the portal's processes.
+
+## Build an agent (0.8.0)
+
+Builder 0.8.0 lets a person build an agent without code: a repo from `golden-road-agent-template`, its instructions written on the app's Agent page in the portal, its skills, MCP servers and data picked per environment as for any app. The kit adds three things.
+
+**Before you apply this kit,** fill both agent App keys in the writer's Secret (`PORTAL_AGENT_APP_ID` and `agent-app.pem`), or remove the two agent App entries from `writer.yaml` (`PORTAL_AGENT_APP_ID` and `PORTAL_AGENT_APP_KEY_FILE`) until the App exists. The kit always sets `PORTAL_AGENT_APP_KEY_FILE`, so applied with an unchanged 0.7.x writer Secret the writer exits 2 and restarts in a loop, as with the lifecycle App in 0.7.0.
+
+- **The agent App, in the writer only.** A fourth GitHub App with Contents: write and Pull requests: write (and Metadata: read), installed on agent repos only (never on `platform-pipeline`, `scorecard-factory`, `golden-road-deploy`, `golden-road-portal`, `golden-road-agents`, `security-scans` or `golden-road-agent-template`), with no webhook and no OAuth. The writer opens and updates each agent's `agent.yaml` pull request with it, on branch `portal/agent-definition`; a person merges it. Put its App id in the writer's Secret as `PORTAL_AGENT_APP_ID` and its private key as `agent-app.pem`; `writer.yaml` mounts the key read-only at `/secrets/agent-app/` and sets `PORTAL_AGENT_APP_KEY_FILE=/secrets/agent-app/agent-app.pem`. No other pod gets either. The writer refuses to start (exit 2) when `PORTAL_AGENT_APP_ID` is the write App's or the lifecycle App's id. The agent App must be another App than the read App too; the writer never holds the read App's id, so it can't check this. Install it with "Only select repositories", on agent repos only: while its installation covers a platform repo or all repositories, the writer makes each agent definition wait (`agent_app_on_platform_repo` or `agent_app_on_all_repositories`), retried each pass, and the Agent page shows the error.
+- **Both or neither.** The writer reads the two settings together, as the lifecycle App's. Without them every agent definition waits with `no_agent_app`, retried each pass with no cap, and the Agent page shows the error. The kit always sets the key file's path, so either fill both keys in the Secret, or remove the `PORTAL_AGENT_APP_ID` and `PORTAL_AGENT_APP_KEY_FILE` entries from `writer.yaml`. With only one of them the writer exits 2.
+- **Each new agent repo** must be added to the read App's installation (the collector's `collectors: agents:` line counts the agent repos it sees) and to the agent App's.
+
+`AGENT_*` is reserved now, as `MCP_` and `AZURE_` are: the web refuses a secret with an `AGENT_*` name, and the writer and compose refuse one already in a binding. An app using one must rename it before 0.8.0 (personal-poc 29.1).
+
+Migration `0014` adds the `agent_definition` request kind and `agent_observed`; the migration job runs it on the upgrade, as any other (`kubectl -n golden-road-portal logs job/golden-road-portal-migrate` lists `0014`). It is forward-only.
+
+Checks after the upgrade:
+
+- The collector logs `collectors: agents: N agent repos (M with a problem)` on every pass; a problem is an agent repo whose default branch has no valid `agent.yaml` yet (the registration waits for one).
+- Network: nothing new. The agent App calls `api.github.com`, which the writer's egress already allows.

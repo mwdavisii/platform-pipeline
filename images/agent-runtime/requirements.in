@@ -1,0 +1,8 @@
+# The agent runtime's direct dependencies (spec 2026-11-17; decided while planning: item 1). requirements.txt is the portal's
+# hash-pinned blocks for exactly their closure, copied, never re-resolved (tests/test_agent_runtime_lock.py). To move a version,
+# move it in bootstrap/golden-road-portal/requirements.txt first, then copy the blocks again.
+fastapi
+uvicorn
+httpx
+pyyaml
+jsonschema

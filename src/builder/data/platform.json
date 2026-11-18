@@ -30,6 +30,8 @@
   "identity_header": "X-Platform-Roles",
   "classification_policy_url": "https://policies.example.com/data-classification",
   "mcp_gateways": {"test": "mcp-test.example.com", "prod": "mcp.example.com"},
+  "agent_models": [{"id": "chat-default", "label": "Default chat model"}],
+  "images": {"agent": {"runtime": "ghcr.io/example/golden-road-agent-runtime@sha256:1111111111111111111111111111111111111111111111111111111111111111"}},
   "resources_tiers": {
     "default": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"cpu": "250m", "memory": "256Mi"}},
     "medium": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "500m", "memory": "512Mi"}}

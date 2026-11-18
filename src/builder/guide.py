@@ -22,16 +22,18 @@ USER, AGENT = "user", "agent"
 # is the host of each egress entry). `user` fields are always the user's call; `agent` fields are ones detect infers.
 FIELDS = {
     "app_name": (AGENT, []),
-    "app_type": (AGENT, []),
+    "app_type": (AGENT, ["agent: the platform's agent runtime runs agent.yaml (agent/v1): entrypoint agent.yaml, port 8080, "
+                         "health_path /healthz, no egress, env, server or authz"]),
     "entrypoint": (AGENT, [
         "python: module:attr (needs server) or a .py file (no server, no authz)",
         "node: the JS file that starts the server",
         "static: the directory to serve, or the build output directory when package.json has a build script",
         "must be inside the app directory",
+        "agent: agent.yaml",
     ]),
     "server": (AGENT, ["python module:attr entrypoints only"]),
-    "port": (AGENT, [f"static sites must use {STATIC_PORT}", "node apps must listen on process.env.PORT"]),
-    "health_path": (AGENT, ["without it the health probe is TCP only"]),
+    "port": (AGENT, [f"static sites must use {STATIC_PORT}", "node apps must listen on process.env.PORT", "agents use 8080"]),
+    "health_path": (AGENT, ["without it the health probe is TCP only", "agents use /healthz"]),
     "data_classification": (USER, ["ask the user; never infer it",
                                    "show the user data_classification.levels and data_classification.policy_url from this guide; "
                                    "the user picks the level"]),

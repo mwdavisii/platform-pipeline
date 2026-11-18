@@ -60,7 +60,7 @@ def test_postgres_starts_restricted_creates_the_roles_and_takes_the_migrations(t
                                                          "0005_approval_respects_the_floor", "0006_binding_requests", "0007_binding_environment",
                                                          "0008_three_classification_levels", "0009_audit_log_subject_index",
                                                          "0010_registration_changes_and_rereview", "0011_mcp_skills_and_cmdb", "0012_lifecycle",
-                                                         "0013_service_principals"]
+                                                         "0013_service_principals", "0014_agent_definitions"]
         assert apply(dsn("portal_owner", "t-owner")) == []
         for role, pw, table in [("portal_web", "t-web", "session"), ("portal_writer", "t-writer", "request"), ("portal_collector", "t-collector", "repo_admin")]:
             with psycopg.connect(dsn(role, pw)) as conn:

@@ -11,7 +11,7 @@ from .errors import EXIT_DRIFT, EXIT_INVALID, EXIT_OK, BuilderError
 from .generate import generate
 from .guide import guide
 from .lock import SPEC_PATH
-from .verify import Reader, verify
+from .verify import Reader, verify, verify_warnings
 
 
 def _emit(result: dict, code: int) -> int:
@@ -98,7 +98,7 @@ def main(argv: list[str] | None = None) -> int:
             return _emit({**base, "status": "ok", **generate(root, spec)}, EXIT_OK)
         findings = verify(root)
         status, code = ("drift", EXIT_DRIFT) if findings else ("ok", EXIT_OK)
-        return _emit({**base, "status": status, "findings": findings}, code)
+        return _emit({**base, "status": status, "findings": findings, "warnings": verify_warnings(root)}, code)
     except BuilderError as exc:
         status = "invalid" if exc.exit_code == EXIT_INVALID else "needs_input"
         return _emit({**base, "status": status, "errors": exc.errors, "questions": exc.questions, "warnings": exc.warnings}, exc.exit_code)

@@ -16,7 +16,7 @@ from pathlib import Path
 from contracts.findings import make_finding
 
 from . import VERSION
-from .config import load_base_images, load_platform, platform_sha256
+from .config import agent_runtime_image, images_for, load_platform, platform_sha256
 from .errors import BuilderError
 from .generate import render_all
 from .lock import GENERATED_DIRS, LOCK_PATH, SPEC_PATH, build_lock, canonical_json, is_safe_rel, sha256_text
@@ -285,6 +285,11 @@ def _tree_digest(reader: Reader, root: Path, rel: str) -> str:
     return _digest("\n".join(parts) or "empty directory")
 
 
+def _is_build_override(name: str) -> bool:
+    """A root file that can change how the image is built or run (builder.build-override)."""
+    return name == "dockerfile" or any(fnmatch.fnmatchcase(name.lower(), pattern) for pattern in BUILD_OVERRIDES)
+
+
 def _override_findings(root: Path, reader: Reader) -> list[dict]:
     found = []
     try:
@@ -294,7 +299,7 @@ def _override_findings(root: Path, reader: Reader) -> list[dict]:
     for name in names:
         if len(found) > MAX_UNLISTED:
             break
-        if name == "dockerfile" or any(fnmatch.fnmatchcase(name.lower(), pattern) for pattern in BUILD_OVERRIDES):
+        if _is_build_override(name):
             file = name if is_safe_rel(name) else SAFE_UNKNOWN
             found.append(_drift("builder.build-override", "high", file, 1, "<build override file>", "File can change how the image is built",
                                 f"{file} changes how the app is built or deployed and isn't part of the generated, checked set.", kind="file",
@@ -328,6 +333,39 @@ def _gitattributes_findings(reader: Reader) -> list[dict]:
             found.append(_drift("builder.build-override", "high", ".gitattributes", number, line, ".gitattributes changes exported or checked-out content",
                                 "export-ignore, export-subst, filter and eol attributes can make the built tree differ from the reviewed one."))
     return found[:MAX_UNLISTED]
+
+
+# An agent repo holds agent.yaml and the generated files (decided while planning: item 13); a repo's own README, licence and git files
+# are allowed, and .github/ (the golden-road workflows) and deploy/ (checked above) too.
+AGENT_ROOT_FILES = frozenset({"agent.yaml", "builder-spec.json", ".builder.lock", "Dockerfile", ".dockerignore", "AGENTS.md", "CLAUDE.md",
+                              "README.md", "LICENSE", ".gitignore", ".gitattributes"})
+AGENT_ROOT_DIRS = frozenset({".git", ".github", "deploy"})
+
+
+def _agent_findings(root: Path, reader: Reader) -> list[dict]:
+    """Every root entry an agent repo may not hold, one finding each: the runtime runs agent.yaml and nothing else. A build override is
+    left to builder.build-override, so a file is reported once."""
+    found = []
+    try:
+        entries = sorted(os.scandir(root), key=lambda e: e.name)
+    except OSError:
+        return found
+    for entry in entries:
+        name = entry.name
+        if (name in AGENT_ROOT_FILES and entry.is_file(follow_symlinks=False)) or (name in AGENT_ROOT_DIRS and entry.is_dir(follow_symlinks=False)):
+            continue
+        if _is_build_override(name):
+            continue
+        if len(found) >= MAX_UNLISTED:
+            found.append(_drift("builder.agent-extra-file", "high", SAFE_UNKNOWN, 1, "<more files>", "Many files an agent repo may not hold",
+                                f"More than {MAX_UNLISTED} entries are not part of an agent repo. The rest are not listed.", kind="file"))
+            break
+        file = name if is_safe_rel(name) else SAFE_UNKNOWN
+        found.append(_drift("builder.agent-extra-file", "high", file, 1, "<not part of an agent repo>",
+                            "An agent repo holds only agent.yaml and the generated files",
+                            f"{file} is not part of an agent repo: the platform's runtime runs agent.yaml and nothing else. Remove it.",
+                            kind="file", digest=_tree_digest(reader, root, name)))
+    return found
 
 
 def _unlisted(root: Path, reader: Reader, directory: str, expected: set) -> list[dict]:
@@ -369,6 +407,24 @@ def verify(root: Path) -> list[dict]:
         findings.append(_drift("builder.read-budget-exceeded", "high", SPEC_PATH, 1, "<read budget exceeded>", "Too much generated content to check",
                                f"The files to check are larger than the {MAX_TREE_BYTES // 1_000_000} MB read budget.", kind="file"))
     return findings
+
+
+PLACEHOLDER_DIGEST = "@sha256:" + "0" * 64  # platform/platform.json's committed images.agent.runtime (decided while planning: item 4)
+
+
+def verify_warnings(root: Path) -> list[str]:
+    """What verify reports without calling it drift: an agent repo checked against a platform config whose agent runtime is still the
+    committed placeholder (the release refuses that digest; this only says so early)."""
+    text, _ = Reader(root).read(SPEC_PATH)
+    try:
+        spec = json.loads(text) if text is not None else None
+        runtime = agent_runtime_image(load_platform()) if isinstance(spec, dict) and spec.get("app_type") == "agent" else None
+    except (ValueError, RecursionError, OSError):
+        return []  # verify's findings already say what is wrong
+    if runtime is not None and runtime.endswith(PLACEHOLDER_DIGEST):
+        return ["images.agent.runtime in the platform config is the placeholder (an all-zero digest): this agent's image can't be "
+                "built until the platform team records the released runtime (configure.py --agent-runtime-image)"]
+    return []
 
 
 def _verify(root: Path, reader: Reader, findings: list[dict]) -> None:
@@ -421,7 +477,7 @@ def _verify(root: Path, reader: Reader, findings: list[dict]) -> None:
     try:
         errors, questions, _ = check_spec(spec, root, platform)
         if not errors:
-            rendered = render_all(spec, root, platform, load_base_images())
+            rendered = render_all(spec, root, platform, images_for(platform))
     except (BuilderError, ValueError, KeyError, TypeError, OSError, RecursionError) as exc:
         errors = [f"The spec can't be processed ({type(exc).__name__})."]
     # The trust anchor is a fresh render by this builder. The lock never decides what gets checked.
@@ -456,6 +512,8 @@ def _verify(root: Path, reader: Reader, findings: list[dict]) -> None:
     findings.extend(_block_findings(reader, render_blocks(spec, platform) if rendered else None, locked_blocks))
     findings.extend(_override_findings(root, reader))
     findings.extend(_gitattributes_findings(reader))
+    if spec.get("app_type") == "agent":
+        findings.extend(_agent_findings(root, reader))
 
     if errors:
         findings.append(_drift("builder.spec-invalid", "high", SPEC_PATH, 1, spec_snippet,

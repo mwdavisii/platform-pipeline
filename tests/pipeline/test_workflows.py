@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -12,6 +13,7 @@ from helpers import scorecard_integration_id
 ROOT = Path(__file__).resolve().parents[2]
 SCANS = ROOT / "reference/security-scans"
 DIRS = [ROOT / ".github/workflows", ROOT / "bootstrap/hello-app/.github/workflows", ROOT / "bootstrap/golden-road-portal/.github/workflows",
+        ROOT / "bootstrap/golden-road-agent-template/.github/workflows",
         ROOT / "bootstrap/scorecard-factory/.github/workflows",
         ROOT / "bootstrap/golden-road-agents/.github/workflows", ROOT / "bootstrap/golden-road-deploy/.github/workflows", SCANS / ".github/workflows"]
 WORKFLOWS = sorted(p for d in DIRS if d.is_dir() for p in d.glob("*.yml"))
@@ -37,7 +39,7 @@ def uses(doc):
 
 
 def test_expected_workflows_exist():
-    expected = {"golden-road.yml", "golden-road-promote.yml", "release-builder.yml", "test.yml", "ci.yml", "promote.yml", "security-scans.yml", "factory-check.yml", "scorecard.yml", "release-skill.yml", "scorecard-poll.yml", "scorecard-assess.yml", "deploy-check.yml", "bump.yml"}
+    expected = {"golden-road.yml", "golden-road-promote.yml", "release-builder.yml", "release-agent-runtime.yml", "test.yml", "ci.yml", "promote.yml", "security-scans.yml", "factory-check.yml", "scorecard.yml", "release-skill.yml", "scorecard-poll.yml", "scorecard-assess.yml", "deploy-check.yml", "bump.yml"}
     assert expected | ({"scan.yml"} if SCANS.is_dir() else set()) <= {p.name for p in WORKFLOWS}
 
 
@@ -77,7 +79,7 @@ def test_promote_requires_environment():
 
 def test_only_release_and_promote_sign():
     for path in WORKFLOWS:
-        if path.name not in {"golden-road.yml", "golden-road-promote.yml", "release-builder.yml"}:
+        if path.name not in {"golden-road.yml", "golden-road-promote.yml", "release-builder.yml", "release-agent-runtime.yml"}:
             assert "cosign sign" not in path.read_text() and "cosign attest" not in path.read_text(), path
 
 
@@ -537,7 +539,7 @@ def probe_commands(job):
 def test_preview_probe_runs_exactly_like_release_with_no_network():
     (rel_start, rel_probe), (pre_start, pre_probe) = probe_commands(gr_doc()["jobs"]["release"]), probe_commands(preview_job())
     assert rel_start.endswith(' "$REF"') and pre_start.endswith(" golden-road-preview:pr")
-    expected = "docker run -d --network none --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges"
+    expected = 'docker run -d --network none --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges "${probe_env[@]}"'
     assert rel_start.removesuffix(' "$REF"') == pre_start.removesuffix(" golden-road-preview:pr") == expected
     assert rel_probe == pre_probe
     assert rel_probe == ('docker run --rm --network "container:$cid" --read-only --tmpfs /tmp --user "$(id -u):$(id -g)" '
@@ -1016,3 +1018,203 @@ def test_the_prod_release_attaches_exactly_the_manifests_and_the_records(tmp_pat
     gh = (tmp_path / "gh.log").read_text().splitlines()
     assert release_assets(gh) == ["out/manifests.yaml", "out/gate-record.json", "out/promotion-record.json"]
     assert "Binding" not in "\n".join(release_notes(gh)) and "Binding" not in (tmp_path / "summary.md").read_text()
+
+
+def test_the_agent_runtime_release_is_tag_driven_pinned_and_signed():
+    path = ROOT / ".github/workflows/release-agent-runtime.yml"
+    text, doc = path.read_text(), load(path)
+    assert doc["on"] == {"push": {"tags": ["agent-runtime-v*"]}} and doc["permissions"] == {}
+    assert list(doc["jobs"]) == ["release"] and doc["jobs"]["release"]["permissions"] == {"contents": "read", "packages": "write", "id-token": "write"}
+    assert 'agent-runtime-v$version' in text and "merge-base --is-ancestor" in text
+    assert "golden-road-agent-runtime" in text and 'cosign sign --yes "$image@$digest"' in text
+    assert "-f images/agent-runtime/Dockerfile" in text and "--metadata-file build.json images/agent-runtime" in text
+    order = [text.index(k) for k in ("merge-base --is-ancestor", "agent-runtime-v$version", "buildx build", "cosign sign")]
+    assert order == sorted(order)
+
+
+def test_the_agent_runtime_release_uses_the_builder_release_s_actions():
+    """The same pinned actions as release-builder.yml (decided while planning: item 3): one set of pins to review and bump."""
+    builder = set(uses(load(ROOT / ".github/workflows/release-builder.yml")))
+    assert set(uses(load(ROOT / ".github/workflows/release-agent-runtime.yml"))) <= builder
+
+
+def test_the_builder_release_refuses_an_unpinned_agent_runtime():
+    """(decided while planning: item 4) The builder image bakes platform/platform.json, so the runtime's digest must be in it first."""
+    text = (ROOT / ".github/workflows/release-builder.yml").read_text()
+    step = text[text.index("- name: Refuse an unpinned agent runtime"):text.index("- uses: docker/setup-buildx-action")]
+    assert "jq -r '.images.agent.runtime // \"\"' platform/platform.json" in step and "@sha256:0000000000000000000000000000000000000000000000000000000000000000" in step
+    assert "${{" not in step, "no expression is interpolated into the script"
+    assert text.index("Refuse unconfigured platform values") < text.index("Refuse an unpinned agent runtime")
+
+
+def _steps(workflow, name, job=None):
+    """The steps named `name` in the workflow (in one job, when given)."""
+    jobs = yaml.safe_load((ROOT / ".github/workflows" / workflow).read_text())["jobs"]
+    return [s for key, j in jobs.items() if job in (None, key) for s in j.get("steps", []) if s.get("name") == name]
+
+
+def _step_run(workflow, name):
+    """The run script of the one step named `name` in the workflow."""
+    [step] = _steps(workflow, name)
+    return step["run"]
+
+
+@pytest.mark.parametrize("runtime, ok", [
+    ("ghcr.io/example-org/golden-road-agent-runtime@sha256:" + "2" * 64, True),
+    ("ghcr.io/example/golden-road-agent-runtime@sha256:" + "0" * 64, False),
+    ("ghcr.io/example-org/golden-road-agent-runtime:latest", False),
+    ("", False),
+    (None, False),
+])
+def test_the_runtime_guard_runs(tmp_path, runtime, ok):
+    if shutil.which("jq") is None:
+        pytest.skip("jq not installed")
+    (tmp_path / "platform").mkdir()
+    doc = {} if runtime is None else {"images": {"agent": {"runtime": runtime}}}
+    (tmp_path / "platform/platform.json").write_text(json.dumps(doc))
+    out = subprocess.run(["bash", "-c", _step_run("release-builder.yml", "Refuse an unpinned agent runtime")], cwd=tmp_path,
+                         capture_output=True, text=True)
+    assert (out.returncode == 0) is ok, out.stdout + out.stderr
+    if not ok:
+        assert "images.agent.runtime is not pinned" in out.stdout
+
+
+BUILD_STEP = ("- name: Build and push by digest", "- name: Container authz probe")
+
+
+def test_an_agent_s_image_is_named_after_its_repository():
+    """(decided while planning: item 38) Every agent repo keeps the template's app_name; two repos can't push one GHCR package."""
+    text = (ROOT / ".github/workflows/golden-road.yml").read_text()
+    start = text.index(BUILD_STEP[0])
+    step = text[start:text.index(BUILD_STEP[1], start)]
+    assert 'if [ "$(jq -r .app_type src/builder-spec.json)" = "agent" ]; then' in step
+    assert 'name="${GITHUB_REPOSITORY#*/}"' in step and 'image="ghcr.io/${owner}/${name}"' in step
+    assert "${name,,}" not in step, "the name is checked as GitHub spells it: an upper-case letter is refused, never lower-cased"
+    assert "${{" not in _step_run("golden-road.yml", "Build and push by digest"), "the repository and the app name reach the script as environment variables only"
+
+
+NAME_CASES = [
+    ("python", "Example-Org/notes", "ghcr.io/example-org/hello-app"),
+    ("node", "example-org/Agent-Calendar", "ghcr.io/example-org/hello-app"),
+    ("python", "example-org/golden-road-notes", "ghcr.io/example-org/hello-app"),
+    ("agent", "Example-Org/agent-calendar", "ghcr.io/example-org/agent-calendar"),
+    ("agent", "example-org/Agent-Calendar", "lower-case letters, digits and -"),
+    ("agent", "example-org/agent-calendaR", "lower-case letters, digits and -"),
+    ("agent", "example-org/calendar2", "ghcr.io/example-org/calendar2"),
+    ("agent", "example-org/golden-road-agent-template", "ghcr.io/example-org/golden-road-agent-template"),
+    ("agent", "example-org/agent_calendar", "lower-case letters, digits and -"),
+    ("agent", "example-org/agent.calendar", "lower-case letters, digits and -"),
+    ("agent", "example-org/-agent", "lower-case letters, digits and -"),
+    ("agent", "example-org/agent$(id)", "lower-case letters, digits and -"),
+    ("agent", "example-org/golden-road-builder", "golden-road-"),
+    ("agent", "example-org/Golden-Road-Portal", "lower-case letters, digits and -"),
+]
+# The agent repo name rule, held in both places: the drift job's app-name check (the first PR) and the release's build (the backstop).
+NAME_RULE = [
+    'if [ "$(jq -r .app_type src/builder-spec.json)" = "agent" ]; then',
+    'name="${GITHUB_REPOSITORY#*/}"',
+    '[[ "$name" =~ ^[a-z0-9]([a-z0-9-]{0,98}[a-z0-9])?$ ]] || { echo "::error::an agent repo\'s name must be lower-case letters, digits and - (it names the image)"; exit 1; }',
+    '[[ "$name" != golden-road-* || "$name" == golden-road-agent-template ]] || { echo "::error::an agent repo\'s name must not start with golden-road- (the platform\'s own packages are named so)"; exit 1; }',
+    'fi',
+]
+
+
+def _name_rule_env(tmp_path, app_type, repository):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/builder-spec.json").write_text(json.dumps({"app_name": "hello-app", "app_type": app_type}))
+    return {"PATH": os.environ["PATH"], "APP": "hello-app", "GITHUB_REPOSITORY": repository, "GITHUB_REPOSITORY_OWNER": repository.split("/")[0]}
+
+
+def _assert_named(out, expect, image=None):
+    if expect.startswith("ghcr.io/"):
+        assert out.returncode == 0, out.stdout + out.stderr
+        if image is not None:
+            assert out.stdout.strip() == expect
+    else:
+        assert out.returncode != 0 and expect in out.stdout and "::error::" in out.stdout, out.stdout + out.stderr
+
+
+@pytest.mark.parametrize("app_type, repository, expect", NAME_CASES)
+def test_the_image_name_rule_runs(tmp_path, app_type, repository, expect):
+    """The release's naming lines, run with bash up to the build: a non-agent keeps app_name, an agent takes its repo's name or stops."""
+    if shutil.which("jq") is None:
+        pytest.skip("jq not installed")
+    script = _step_run("golden-road.yml", "Build and push by digest")
+    head = script[:script.index('image="ghcr.io/${owner}/${name}"') + len('image="ghcr.io/${owner}/${name}"')] + '\necho "$image"\n'
+    out = subprocess.run(["bash", "-c", head], cwd=tmp_path, capture_output=True, text=True, env=_name_rule_env(tmp_path, app_type, repository))
+    _assert_named(out, expect, image=True)
+
+
+@pytest.mark.parametrize("app_type, repository, expect", NAME_CASES)
+def test_the_first_pr_already_checks_an_agent_repo_s_name(tmp_path, app_type, repository, expect):
+    """The drift job's app-name check refuses the names the release's image rule refuses, so the first pull request fails, not the
+    release after the merge (and its Gate 1 wait). The release keeps its own copy as the backstop."""
+    if shutil.which("jq") is None:
+        pytest.skip("jq not installed")
+    [step] = _steps("golden-road.yml", "Check app name", job="drift")
+    assert "${{" not in step["run"]
+    out = subprocess.run(["bash", "-c", step["run"]], cwd=tmp_path, capture_output=True, text=True, env=_name_rule_env(tmp_path, app_type, repository))
+    _assert_named(out, expect)
+
+
+def test_the_two_name_rules_are_the_same_lines():
+    [drift] = _steps("golden-road.yml", "Check app name", job="drift")
+    for script in (drift["run"], _step_run("golden-road.yml", "Build and push by digest")):
+        lines = [l.split("  # ")[0].strip() for l in script.splitlines()]
+        first = lines.index(NAME_RULE[0])
+        assert lines[first:first + len(NAME_RULE)] == NAME_RULE
+
+
+def test_the_builder_release_verifies_the_runtime_s_signature_before_building():
+    """A1: the runtime is signed and pinned. The release checks that the pinned digest's signature is release-agent-runtime.yml's, from an
+    agent-runtime-v tag of this repository, before it builds the builder that bakes the pin."""
+    steps = yaml.safe_load((ROOT / ".github/workflows/release-builder.yml").read_text())["jobs"]["release"]["steps"]
+    names = [s.get("name") or s.get("uses") for s in steps]
+    verify = names.index("Verify the agent runtime's signature")
+    cosign = next(i for i, s in enumerate(steps) if s.get("uses", "").startswith("sigstore/cosign-installer@"))
+    assert names.index("Refuse an unpinned agent runtime") < cosign < verify < names.index("Build, push, and sign the builder image")
+    assert SHA_PIN.match(steps[cosign]["uses"]) and steps[cosign]["with"]["cosign-release"] == "v3.1.3"
+    run = steps[verify]["run"]
+    assert "${{" not in run and "jq -r '.images.agent.runtime' platform/platform.json" in run and 'cosign verify' in run and '"$runtime"' in run
+    assert ('--certificate-identity-regexp "^${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/\\.github/workflows/release-agent-runtime\\.yml'
+            '@refs/tags/agent-runtime-v[0-9]+\\.[0-9]+\\.[0-9]+$"') in run
+    assert "--certificate-oidc-issuer https://token.actions.githubusercontent.com" in run
+    agent = (ROOT / ".github/workflows/release-agent-runtime.yml").read_text()
+    assert 'tags: ["agent-runtime-v*"]' in agent and 'cosign sign --yes "$image@$digest"' in agent
+
+
+
+# An agent's runtime stops at start (exit 2) without its gateway settings, so both probe steps give an agent placeholder ones; the
+# container has no network, so nothing is ever sent to them.
+PROBE_ENV = [
+    "probe_env=()",
+    'if [ "$(jq -r .app_type src/builder-spec.json)" = "agent" ]; then probe_env=(-e AGENT_GATEWAY_URL=http://127.0.0.1:9/v1 -e AGENT_GATEWAY_KEY=probe); fi',
+]
+
+
+def probe_env_lines(job):
+    run = step_named(job, "Container authz probe")["run"]
+    lines = [l.split("  # ")[0].strip() for l in run.splitlines()]
+    start = lines.index(PROBE_ENV[0])
+    return run, lines[start:start + len(PROBE_ENV)]
+
+
+@pytest.mark.parametrize("job", ["preview", "release"])
+def test_both_probe_steps_start_an_agent_with_placeholder_gateway_settings(job):
+    run, lines = probe_env_lines(preview_job() if job == "preview" else gr_doc()["jobs"]["release"])
+    assert lines == PROBE_ENV
+    assert "${{" not in run, "the step reads the spec itself: no expression in run"
+    assert run.index("probe_env=()") < run.index("docker run -d")
+
+
+@pytest.mark.parametrize("app_type, expect", [("agent", "-e|AGENT_GATEWAY_URL=http://127.0.0.1:9/v1|-e|AGENT_GATEWAY_KEY=probe"),
+                                              ("python", ""), (None, "")])
+def test_the_probe_env_lines_run(tmp_path, app_type, expect):
+    if shutil.which("jq") is None:
+        pytest.skip("jq not installed")
+    (tmp_path / "src").mkdir()
+    spec = {"port": 8080} if app_type is None else {"port": 8080, "app_type": app_type}
+    (tmp_path / "src/builder-spec.json").write_text(json.dumps(spec))
+    script = "set -euo pipefail\n" + "\n".join(PROBE_ENV) + '\n(IFS="|"; echo "${probe_env[*]}")\n'
+    out = subprocess.run(["bash", "-c", script], cwd=tmp_path, capture_output=True, text=True)
+    assert out.returncode == 0 and out.stdout.strip() == expect, out.stdout + out.stderr

@@ -19,10 +19,10 @@ from contracts.schema import validate
 
 HERE = Path(__file__).parent
 SPEC_PY = HERE.parents[1] / "src/builder/spec.py"
-# Keys spec.py reads that aren't spec fields: route results from find_routes, the platform config, package.json.
-NOT_SPEC_KEYS = {"method", "model_gateway_hosts", "scripts"}
+# Keys spec.py reads that aren't spec fields: route results from find_routes, the platform config (agent_models' ids), package.json.
+NOT_SPEC_KEYS = {"method", "model_gateway_hosts", "id", "scripts"}
 # Fields spec.py checks beyond the schema. The guide must say how.
-CHECKED_BEYOND_SCHEMA = {"entrypoint", "server", "port", "egress[].host", "env", "env[].name", "authz", "authz.roles",
+CHECKED_BEYOND_SCHEMA = {"app_type", "entrypoint", "server", "port", "health_path", "egress[].host", "env", "env[].name", "authz", "authz.roles",
                          "authz.roles[].access", "authz.rules[].roles", "authz.rules[].justification"}
 USER_FIELDS = {"data_classification", "egress", "egress[].host", "egress[].port", "egress[].reason", "authz", "authz.roles",
                "authz.roles[].name", "authz.roles[].access", "authz.rules", "authz.rules[].methods", "authz.rules[].path",

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Fill in the org-specific values (org, model gateway host, optional edge selector) and regenerate hello-app and golden-road-portal.
+"""Fill in the org-specific values (org, model gateway host, optional edge selector) and regenerate hello-app, golden-road-portal and
+golden-road-agent-template.
 
 Usage: scripts/configure.py --org <org> --gateway-host <host> --edge-namespace NS --edge-label KEY=VALUE [...]
                             --identity-header NAME [--scorecard-gateway-url URL] [--single-approver]
@@ -7,6 +8,7 @@ Usage: scripts/configure.py --org <org> --gateway-host <host> --edge-namespace N
                             [--landing-page-url URL] [--approved-models-url URL] [--portal-url URL] [--classification-policy-url URL]
                             [--scorecard-mode {per-app,central} [--scorecard-app-id ID]] [--findings-bypass-team SLUG]
                             [--bump-workflow-token] [--mcp-gateway-test HOST] [--mcp-gateway-prod HOST] [--skills-repo OWNER/NAME]
+                            [--agent-runtime-image REF@sha256:DIGEST]
 
 --scorecard-gateway-url is the chat-completions URL the scorecard's review agent calls from the CI runners. It
 defaults to https://<gateway host>/v1/chat/completions; pass it when the runners reach the gateway at another
@@ -29,7 +31,7 @@ detect give it to the agent, which shows it to the user. Until it is given, the 
 stays. Like the links, a later run may change it.
 
 --single-approver is for the personal PoC only, for an owner with no second GitHub account. It records
-gate2_single_approver in platform/platform.json and relaxes the approval settings of hello-app, the portal, the scorecard factory, golden-road-agents and golden-road-deploy (no PR approvals
+gate2_single_approver in platform/platform.json and relaxes the approval settings of hello-app, the portal, the agent template, the scorecard factory, golden-road-agents and golden-road-deploy (no PR approvals
 required; the person who triggers a promotion may approve it). Never use it for a real organization.
 
 --bump-workflow-token is for the personal PoC only, with no deploy App. It sets golden-road-deploy's bump.yml to BUMP_TOKEN workflow
@@ -38,8 +40,9 @@ contents, pull-requests and actions write (and checks read). The default, app, m
 for a real organization; going back needs a restore of bootstrap and platform.
 
 --scorecard-mode central (central AI review) needs --scorecard-app-id, the scorecard GitHub App's App ID. It records scorecard_mode and
-scorecard_app_id in platform/platform.json, re-pins `scorecard / assessed` and `scorecard / findings` in the rulesets of hello-app and the portal to the App, and
-removes the scorecard caller workflows (hello-app, the portal and the kit template): the factory's poller assesses instead. The default,
+scorecard_app_id in platform/platform.json, re-pins `scorecard / assessed` and `scorecard / findings` in the rulesets of hello-app, the portal and
+the agent template to the App, and removes the scorecard caller workflows (hello-app, the portal, the agent template and the kit template): the
+factory's poller assesses instead. The default,
 per-app, records nothing and changes nothing. A later run may change the App ID; going back to per-app needs a restore of bootstrap and platform.
 
 --findings-bypass-team (an org only; refused with --single-approver) names the team that may merge a PR past a high scorecard finding. It
@@ -50,6 +53,11 @@ role by default) with a Team whose actor_id is 0: the apply step looks the team'
 --skills-repo is the platform's reviewed skills catalog (OWNER/NAME). They are recorded in platform/platform.json; deploy-check holds a
 binding's MCP gateway to them. Until given, the gateways are the placeholders mcp-test.example.com and mcp.example.com and the catalog is
 <org>/golden-road-skills. Like the links, a later run may change them.
+
+--agent-runtime-image is the agent runtime's image as release-agent-runtime.yml's summary prints it: a registry reference pinned by a
+real sha256 digest. It is recorded in platform/platform.json (images.agent.runtime), and every agent's Dockerfile, the agent template's
+first, starts FROM it. Until it is given, the committed zero-digest placeholder stays: the builder release and push-bootstrap.sh refuse it.
+Like the links, a later run may change it (after each runtime release).
 
 The edge selector and identity header come from the deploy owners. There are no defaults: the committed
 platform/platform.json carries `replace-me` placeholders for them, so an unconfigured tree is refused by the
@@ -113,6 +121,14 @@ PLACEHOLDER_STATE = {
     "bootstrap/golden-road-portal/.github/workflows/security-scans.yml": "ORG_PLACEHOLDER",
     "bootstrap/golden-road-portal/.github/workflows/scorecard.yml": "ORG_PLACEHOLDER",
     "bootstrap/golden-road-portal/.github/CODEOWNERS": "ORG_PLACEHOLDER",
+    "bootstrap/golden-road-agent-template/deploy/base/cilium-egress.yaml": "llm.replace-me.invalid",
+    "bootstrap/golden-road-agent-template/deploy/base/deployment.yaml": "llm.replace-me.invalid",
+    "bootstrap/golden-road-agent-template/deploy/base/networkpolicy.yaml": "replace-me",
+    "bootstrap/golden-road-agent-template/.github/workflows/ci.yml": "ORG_PLACEHOLDER",
+    "bootstrap/golden-road-agent-template/.github/workflows/promote.yml": "ORG_PLACEHOLDER",
+    "bootstrap/golden-road-agent-template/.github/workflows/security-scans.yml": "ORG_PLACEHOLDER",
+    "bootstrap/golden-road-agent-template/.github/workflows/scorecard.yml": "ORG_PLACEHOLDER",
+    "bootstrap/golden-road-agent-template/.github/CODEOWNERS": "ORG_PLACEHOLDER",
     "bootstrap/scorecard-factory/intake/ORG_PLACEHOLDER/golden-road-portal.yaml": "ORG_PLACEHOLDER",
     "bootstrap/scorecard-factory/.github/CODEOWNERS": "ORG_PLACEHOLDER",
     "bootstrap/scorecard-factory/.github/workflows/factory-check.yml": "ORG_PLACEHOLDER",
@@ -217,13 +233,14 @@ def _relaxed_ruleset(path: Path) -> bytes:
 
 
 def single_approver_files(app: Path, factory: Path | None = None, agents: Path | None = None, portal: Path | None = None,
-                          deploy: Path | None = None, pending: dict[Path, bytes] | None = None) -> dict[Path, bytes]:
-    """New content for the files that --single-approver relaxes: hello-app's ruleset and prod environment (and the portal's, when the
-    tree has it), the review rulesets (main-review) of the scorecard factory and golden-road-deploy, the main ruleset of
+                          deploy: Path | None = None, pending: dict[Path, bytes] | None = None,
+                          template: Path | None = None) -> dict[Path, bytes]:
+    """New content for the files that --single-approver relaxes: hello-app's ruleset and prod environment (and the portal's and the agent
+    template's, when the tree has them), the review rulesets (main-review) of the scorecard factory and golden-road-deploy, the main ruleset of
     golden-road-agents, and deploy-check's SINGLE_APPROVER_PROMOTIONS (refuse becomes accept), when the tree has them. Raises
     ValueError if a file is not as expected. `pending` holds content already computed for a file (deploy-check's org) to build on."""
     files = {}
-    for target in (app, portal):
+    for target in (app, portal, template):
         if target is None or (target is not app and not is_real_dir(target)):
             continue
         ruleset_path, env_path = target / RULESET_REL, target / PROD_ENV_REL
@@ -250,6 +267,7 @@ def single_approver_files(app: Path, factory: Path | None = None, agents: Path |
 SCORECARD_CONTEXT = "scorecard / assessed"
 # In central mode the platform's scorecard callers are not needed: the factory's poller assesses every ready PR. configure.py removes them.
 SCORECARD_CALLERS = ("hello-app/.github/workflows/scorecard.yml", "golden-road-portal/.github/workflows/scorecard.yml",
+                     "golden-road-agent-template/.github/workflows/scorecard.yml",
                      "golden-road-agents/skill/templates/workflows/scorecard.yml")  # under bootstrap/
 FINDINGS_CONTEXT = "scorecard / findings"
 FINDINGS_RULESET_REL = Path(".github/rulesets/scorecard-findings.json")  # the app's only ruleset with a bypass actor
@@ -257,6 +275,8 @@ APP_ID = re.compile(r"[1-9][0-9]{0,9}")
 TEAM_SLUG = re.compile(r"[a-z0-9][a-z0-9_-]{0,99}")
 SKILLS_REPO = re.compile(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}")  # builder.config.SKILLS_REPO
 MCP_GATEWAY_PLACEHOLDERS = {"test": "mcp-test.example.com", "prod": "mcp.example.com"}  # platform/platform.json as committed
+IMAGE_REF = re.compile(r"[a-z0-9.-]+(:[0-9]+)?/[a-z0-9._/-]+@sha256:[0-9a-f]{64}")  # builder.config.IMAGE_REF
+ZERO_DIGEST = "@sha256:" + "0" * 64  # the committed images.agent.runtime placeholder's digest
 
 
 def _entry(context: str) -> re.Pattern:
@@ -445,7 +465,8 @@ def loadable(config_text: str) -> None:
             raise ValueError(f"the scorecard config does not load: {exc}") from exc
 
 
-BUILDER_APPS = ("hello-app", "golden-road-portal")  # bootstrap apps the builder generates; configure and the version bump regenerate both
+# bootstrap apps the builder generates; configure and the version bump regenerate all three
+BUILDER_APPS = ("hello-app", "golden-road-portal", "golden-road-agent-template")
 
 
 def github_hosts(host: str) -> list[str]:
@@ -523,6 +544,9 @@ def main() -> int:
     p.add_argument("--mcp-gateway-test", default=None, help="the test environment's shared Cloudflare MCP gateway host (default mcp-test.example.com)")
     p.add_argument("--mcp-gateway-prod", default=None, help="the prod environment's shared Cloudflare MCP gateway host (default mcp.example.com)")
     p.add_argument("--skills-repo", default=None, help="the platform's reviewed skills catalog, OWNER/NAME (default <org>/golden-road-skills)")
+    p.add_argument("--agent-runtime-image", default=None,
+                   help="the agent runtime's image, pinned by digest (release-agent-runtime.yml's summary prints it); until given, the "
+                        "zero-digest placeholder stays and the builder release refuses it")
     args = p.parse_args()
     if args.scorecard_app_id is not None and (not APP_ID.fullmatch(args.scorecard_app_id) or int(args.scorecard_app_id) >= 2**31):
         sys.exit("invalid --scorecard-app-id (the App ID: a positive whole number below 2147483648)")
@@ -570,6 +594,9 @@ def main() -> int:
         portal_match = PORTAL_URL.fullmatch(args.portal_url)
         if not portal_match or not valid_host(portal_match.group(1).lower()):
             sys.exit("invalid --portal-url (an https URL with a host name and no path)")
+    if args.agent_runtime_image is not None and (not IMAGE_REF.fullmatch(args.agent_runtime_image)
+                                                 or args.agent_runtime_image.endswith(ZERO_DIGEST)):
+        sys.exit("invalid --agent-runtime-image (a registry reference pinned by a real sha256 digest, as release-agent-runtime.yml prints it)")
     url = args.scorecard_gateway_url or f"https://{args.gateway_host}/v1/chat/completions"
     match = SCORECARD_URL.fullmatch(url)
     if not match or not valid_host(match.group(1).lower()):
@@ -577,7 +604,7 @@ def main() -> int:
     for value in (args.org, args.gateway_host, args.edge_namespace, args.identity_header, url, args.github_host or "",
                   args.cert_oidc_issuer or "", args.landing_page_url or "", args.approved_models_url or "", args.portal_url or "",
                   args.classification_policy_url or "", args.findings_bypass_team or "", args.mcp_gateway_test or "",
-                  args.mcp_gateway_prod or "", args.skills_repo or "", *args.edge_label):
+                  args.mcp_gateway_prod or "", args.skills_repo or "", args.agent_runtime_image or "", *args.edge_label):
         if "replace-me" in value.lower():
             sys.exit(f"{value!r} is still a placeholder")
 
@@ -657,6 +684,8 @@ def main() -> int:
         sys.exit(f"the test and prod MCP gateways must differ (both are {gateways['test']})")
     platform["mcp_gateways"] = gateways
     platform["skills_repo"] = args.skills_repo or recorded_repo or f"{args.org}/golden-road-skills"
+    if args.agent_runtime_image:  # like the links, a later run may change it (after each runtime release)
+        platform["images"] = {**platform.get("images", {}), "agent": {"runtime": args.agent_runtime_image}}
     recorded = platform.get("gate2_single_approver", False)
     if type(recorded) is not bool:
         sys.exit("gate2_single_approver in platform/platform.json must be true or false")
@@ -711,6 +740,16 @@ def main() -> int:
         if errors or questions:
             sys.exit(f"golden-road-portal spec does not validate: {errors or questions}")
         specs["golden-road-portal"] = pspec
+    template_app = bootstrap / "golden-road-agent-template"
+    if is_real_dir(template_app):
+        template_spec_path = template_app / "builder-spec.json"
+        if template_spec_path.is_symlink() or not template_spec_path.is_file():
+            sys.exit(f"{template_spec_path} must be a regular file")
+        tspec = json.loads(read_regular(template_spec_path).decode("utf-8"))
+        errors, questions, _ = check_spec(tspec, template_app, platform)
+        if errors or questions:
+            sys.exit(f"golden-road-agent-template spec does not validate: {errors or questions}")
+        specs["golden-road-agent-template"] = tspec
 
     try:
         changes.update(scorecard_config(bootstrap, url, changes))
@@ -724,7 +763,7 @@ def main() -> int:
     if args.single_approver:
         try:
             changes.update(single_approver_files(app, bootstrap / "scorecard-factory", bootstrap / "golden-road-agents", portal_app,
-                                                 bootstrap / "golden-road-deploy", changes))
+                                                 bootstrap / "golden-road-deploy", changes, template=template_app))
         except (ValueError, OSError) as exc:
             sys.exit(f"cannot apply --single-approver: {exc}")
 
@@ -758,7 +797,7 @@ def main() -> int:
                      "restore with git checkout -- bootstrap platform")
 
     if team is not None:
-        for target in (app, portal_app):
+        for target in (app, portal_app, template_app):
             if not is_real_dir(target):
                 continue
             path = target / FINDINGS_RULESET_REL
@@ -772,7 +811,7 @@ def main() -> int:
 
     removals = []
     if mode == "central":
-        for target in (app, portal_app):
+        for target in (app, portal_app, template_app):
             if not is_real_dir(target):
                 continue
             for rel, context in ((RULESET_REL, SCORECARD_CONTEXT), (FINDINGS_RULESET_REL, FINDINGS_CONTEXT)):

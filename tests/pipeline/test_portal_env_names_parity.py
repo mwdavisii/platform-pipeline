@@ -21,6 +21,6 @@ def test_the_reserved_names_and_prefixes_are_the_builder_s():
 
 
 @pytest.mark.parametrize("name", ["PORT", "HOME", "LD_PRELOAD", "PYTHONPATH", "NODE_X", "AZURE_CLIENT_ID", "DATABRICKS_HOST",
-                                  "SECRETSERVER_TOKEN", "NOTES_DB_PASSWORD", "_X", "A1"])
+                                  "SECRETSERVER_TOKEN", "NOTES_DB_PASSWORD", "_X", "A1", "AGENT_GATEWAY_KEY"])
 def test_the_portal_refuses_exactly_what_the_builder_reserves(name):
     assert (env_names.refused(name) is not None) == (spec.reserved_reason(name) is not None)

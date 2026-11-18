@@ -30,6 +30,6 @@ golden_road = ["data/*.json"]
 scorecard = ["standards/*.csv", "prompts/*.md"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "reference/security-scans/tests", "bootstrap/golden-road-portal/tests"]
+testpaths = ["tests", "reference/security-scans/tests", "bootstrap/golden-road-portal/tests", "images/agent-runtime/tests"]
 addopts = "-m 'not docker'"
 markers = ["docker: builds and runs container images (run with: pytest -m docker)"]

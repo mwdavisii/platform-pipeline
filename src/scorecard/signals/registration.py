@@ -24,7 +24,7 @@ from ..config import CLASSIFICATION_ORDER, TIER_ORDER
 CAPS = {"builder-spec.json": 65536, ".builder.lock": 65536, "requirements.txt": 262144, "package-lock.json": 10485760}
 MAX_ITEMS = 100
 MAX_NAME = 200
-LOCKFILES = {"python": ("requirements.txt",), "node": ("package-lock.json",), "static": ()}
+LOCKFILES = {"python": ("requirements.txt",), "node": ("package-lock.json",), "static": (), "agent": ()}
 PINNED = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(\[[A-Za-z0-9,._-]+\])?==\S+")
 VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 SHOWN = 10

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from helpers import unconfigure_deploy, builder_cmd, builder_env, unconfigure_agents, unconfigure_factory, unconfigure_hello_app, unconfigure_platform, unconfigure_portal
+from helpers import unconfigure_deploy, builder_cmd, builder_env, unconfigure_agents, unconfigure_factory, unconfigure_hello_app, unconfigure_platform, unconfigure_portal, unconfigure_agent_template
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -22,6 +22,7 @@ def workspace(tmp_path):
     unconfigure_platform(tmp_path / "platform")
     unconfigure_hello_app(tmp_path / "bootstrap/hello-app")
     unconfigure_portal(tmp_path / "bootstrap/golden-road-portal")
+    unconfigure_agent_template(tmp_path / "bootstrap/golden-road-agent-template")
     unconfigure_factory(tmp_path / "bootstrap/scorecard-factory", org)
     unconfigure_deploy(tmp_path / "bootstrap/golden-road-deploy", org)
     unconfigure_agents(tmp_path / "bootstrap/golden-road-agents", org, live.get("github_host"), live.get("actions_oidc_issuer"))
@@ -785,3 +786,70 @@ def test_a_bad_recorded_policy_url_is_refused_on_a_rerun_without_the_flag(worksp
     before = path.read_bytes()
     out = configure(workspace, *GOOD)
     assert out.returncode != 0 and "classification-policy-url" in out.stderr and path.read_bytes() == before
+
+
+RUNTIME = "ghcr.io/example-org/golden-road-agent-runtime@sha256:" + "2" * 64
+TEMPLATE_REL = "bootstrap/golden-road-agent-template"
+
+
+def test_configure_pins_the_agent_runtime_and_regenerates_the_template(workspace):
+    out = configure(workspace, *GOOD, "--agent-runtime-image", RUNTIME)
+    assert out.returncode == 0, out.stderr
+    assert json.loads((workspace / "platform/platform.json").read_text())["images"] == {"agent": {"runtime": RUNTIME}}
+    template = workspace / TEMPLATE_REL
+    assert f"FROM {RUNTIME}\n" in (template / "Dockerfile").read_text()
+    assert "https://llm.example.org/v1" in (template / "deploy/base/deployment.yaml").read_text()
+    assert "llm.example.org" in (template / "deploy/base/cilium-egress.yaml").read_text()
+    assert "edge-ns" in (template / "deploy/base/networkpolicy.yaml").read_text()
+    assert "example-org/platform-pipeline" in (template / ".github/workflows/ci.yml").read_text()
+    assert "golden-road-agent-template" in out.stdout
+    env = builder_env(BUILDER_PLATFORM_CONFIG=str(workspace / "platform/platform.json"), PATH="")
+    verify = subprocess.run([*builder_cmd(), "verify", str(template)], capture_output=True, text=True, env=env)
+    assert verify.returncode == 0, verify.stdout
+
+
+def test_a_later_run_may_change_the_runtime_and_keeps_it_when_not_given(workspace):
+    assert configure(workspace, *GOOD, "--agent-runtime-image", RUNTIME).returncode == 0
+    other = RUNTIME.replace("2" * 64, "3" * 64)
+    assert configure(workspace, *GOOD, "--agent-runtime-image", other).returncode == 0
+    assert f"FROM {other}\n" in (workspace / TEMPLATE_REL / "Dockerfile").read_text()
+    assert configure(workspace, *GOOD).returncode == 0
+    assert json.loads((workspace / "platform/platform.json").read_text())["images"]["agent"]["runtime"] == other
+
+
+def test_without_the_flag_the_runtime_keeps_its_placeholder(workspace):
+    assert configure(workspace, *GOOD).returncode == 0
+    assert "@sha256:" + "0" * 64 in (workspace / TEMPLATE_REL / "Dockerfile").read_text()
+
+
+@pytest.mark.parametrize("bad", ["ghcr.io/x/y:latest", "ghcr.io/x/y@sha256:" + "0" * 64, "ghcr.io/replace-me/y@sha256:" + "2" * 64, "not a ref", "",
+                                 "GHCR.io/x/y@sha256:" + "2" * 64, "ghcr.io/x/y@sha256:" + "2" * 63])
+def test_a_bad_runtime_reference_is_refused_before_anything_is_written(workspace, bad):
+    before = (workspace / "platform/platform.json").read_bytes()
+    template = (workspace / TEMPLATE_REL / "Dockerfile").read_bytes()
+    out = configure(workspace, *GOOD, "--agent-runtime-image", bad)
+    assert out.returncode != 0 and ("--agent-runtime-image" in out.stderr or "placeholder" in out.stderr)
+    assert (workspace / "platform/platform.json").read_bytes() == before and (workspace / TEMPLATE_REL / "Dockerfile").read_bytes() == template
+
+
+def test_single_approver_relaxes_the_template_too(workspace):
+    assert configure(workspace, *GOOD, "--single-approver").returncode == 0
+    rules = json.loads((workspace / TEMPLATE_REL / ".github/rulesets/main.json").read_text())["rules"]
+    review = next(r for r in rules if r["type"] == "pull_request")["parameters"]
+    assert review["required_approving_review_count"] == 0
+    assert json.loads((workspace / TEMPLATE_REL / ".github/environment-prod.json").read_text())["prevent_self_review"] is False
+
+
+def test_the_helper_restores_a_configured_template_to_the_committed_state(workspace):
+    from helpers import unconfigure_agent_template
+    assert configure(workspace, *GOOD, "--single-approver", "--agent-runtime-image", RUNTIME).returncode == 0
+    unconfigure_platform(workspace / "platform")
+    unconfigure_agent_template(workspace / TEMPLATE_REL)
+    if live_tree_is_pristine():
+        for path in sorted((ROOT / TEMPLATE_REL).rglob("*")):
+            if path.is_file():
+                rel = path.relative_to(ROOT)
+                if path.suffix == ".json":  # the approval settings are put back as values (as for hello-app), not as the committed layout
+                    assert json.loads((workspace / rel).read_text()) == json.loads(path.read_text()), rel
+                else:
+                    assert (workspace / rel).read_bytes() == path.read_bytes(), rel

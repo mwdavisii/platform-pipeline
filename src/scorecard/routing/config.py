@@ -34,7 +34,7 @@ SPEC = {
     "data_classification": "ordered", "resources_tier": "ordered", "app_type": "enum", "role_count": "number",
     "write_role_count": "number", "read_role_write_grants": "grants", "secret_env": "list", "egress_hosts": "list",
 }
-ENUMS = {"data_classification": CLASSIFICATIONS, "resources_tier": TIER_ORDER, "app_type": ("python", "node", "static")}
+ENUMS = {"data_classification": CLASSIFICATIONS, "resources_tier": TIER_ORDER, "app_type": ("python", "node", "static", "agent")}
 # For each value type: the operators it accepts, and the `changed` values among them.
 OPERATORS = {
     "bool": {"is": None},

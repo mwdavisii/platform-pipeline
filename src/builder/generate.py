@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 
 from . import VERSION
-from .config import load_base_images, load_platform, platform_sha256
+from .config import images_for, load_platform, platform_sha256
 from .errors import EXIT_INVALID, EXIT_NEEDS_INPUT, BuilderError
 from .lock import LOCK_PATH, SPEC_PATH, build_lock, canonical_json, sha256_text
 from .render.agents import MANAGED_FILES, merge, render_blocks
@@ -146,7 +146,7 @@ def generate(root: Path, spec: dict) -> dict:
     if questions:
         raise BuilderError(EXIT_NEEDS_INPUT, questions=questions, warnings=warnings)
 
-    files = render_all(spec, root, platform, load_base_images())
+    files = render_all(spec, root, platform, images_for(platform))
     blocks = render_blocks(spec, platform)
     lock = build_lock(spec, files, VERSION, platform_sha256(), blocks)
 

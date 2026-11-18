@@ -187,6 +187,12 @@ def probe(root, base_url: str, *, platform: dict | None = None, ready_timeout: f
     errors = retired_problems(spec) or validate("builder-spec.v1", spec)  # a retired level names its replacement (spec 2026-10-30 C4)
     if errors:
         raise InputError(f"builder-spec.json is invalid: {errors[0]}")
+    if spec.get("app_type") == "agent":
+        # An agent declares no authz (the edge guards it, and its runtime is the platform's): the probe checks that the runtime
+        # starts and answers its health path (spec 2026-11-17; the final review's C1).
+        if not wait_ready(base_url, spec["health_path"], ready_timeout):
+            return {"status": "fail", "reason": "the agent runtime did not start", "cases": 0, "denied": 0, "failures": [], "failures_total": 0}
+        return {"status": "not-declared"}
     if not spec.get("authz"):
         return {"status": "not-declared"}
     platform = platform or load_platform()

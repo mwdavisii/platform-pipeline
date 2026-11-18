@@ -8,14 +8,17 @@ import re
 from pathlib import Path
 
 from contracts.classification import retired_problems
+from contracts.agent_file import MAX_BYTES as AGENT_FILE_MAX_BYTES, AgentFileError, load as load_agent_file
 from contracts.schema import validate as schema_validate
 
-from .config import is_denied_egress, is_model_provider
+from .config import agent_gateway_url, agent_models, agent_runtime_image, is_denied_egress, is_model_provider
 from .detect import JS_SUFFIXES, MUTATING, PY_SUFFIXES, find_routes, node_reads_port
 from .source import Tree
 
 MODULE_ATTR = re.compile(r"^[A-Za-z_][\w.]*:[A-Za-z_]\w*$")
 STATIC_PORT = 8080  # the unprivileged nginx port
+AGENT_PORT = 8080  # the agent runtime listens here (images/agent-runtime/agent_runtime/__main__.py)
+AGENT_ENTRYPOINT, AGENT_HEALTH = "agent.yaml", "/healthz"
 
 
 def check_spec(spec: dict, root: Path, platform: dict) -> tuple[list[str], list[str], list[str]]:
@@ -26,6 +29,8 @@ def check_spec(spec: dict, root: Path, platform: dict) -> tuple[list[str], list[
     if errors:
         return errors, [], []
     tree = Tree(root)
+    if spec["app_type"] == "agent":  # the platform's runtime, so every field is fixed (decided while planning: item 8)
+        return _agent_errors(spec, tree, platform), [], []
     # Beyond-schema checks. A new check here needs a rule in guide.FIELDS (tests/builder/test_guide.py lists the fields).
     errors = _entrypoint_errors(spec, tree) + _authz_errors(spec) + _egress_errors(spec, platform) + _env_errors(spec)
     if spec["app_type"] == "static" and spec["port"] != STATIC_PORT:
@@ -98,6 +103,43 @@ def _entrypoint_errors(spec: dict, tree: Tree) -> list[str]:
     return errors
 
 
+def _agent_errors(spec: dict, tree: Tree, platform: dict) -> list[str]:
+    errors = []
+    if spec["entrypoint"] != AGENT_ENTRYPOINT:
+        errors.append("an agent's entrypoint is agent.yaml")
+    if spec["port"] != AGENT_PORT:
+        errors.append(f"an agent listens on port {AGENT_PORT} (the platform's runtime)")
+    if spec.get("health_path") != AGENT_HEALTH:
+        errors.append("an agent's health_path is /healthz (the platform's runtime serves it)")
+    if spec["egress"]:
+        errors.append("an agent has no egress of its own: the platform adds its model gateway, and its bindings add the rest")
+    if spec["env"]:
+        errors.append("an agent has no env of its own: the platform sets the runtime's settings, and its bindings add the rest")
+    if "server" in spec:
+        errors.append("server only applies to python apps")
+    if spec.get("authz"):
+        errors.append("authz does not apply to an agent; the edge protects it")
+    try:
+        if agent_runtime_image(platform) is None:
+            errors.append("the platform config names no agent runtime (images.agent.runtime): ask the platform team")
+        agent_gateway_url(platform)
+        models = [m["id"] for m in agent_models(platform)]
+    except ValueError as exc:
+        return errors + [str(exc)]
+    path = tree.root / AGENT_ENTRYPOINT
+    if path.is_symlink() or not path.is_file() or not tree.contains(path):
+        return errors + ["agent.yaml not found (it must be a regular file at the repo root)"]
+    try:
+        with path.open("rb") as handle:
+            raw = handle.read(AGENT_FILE_MAX_BYTES + 1)  # enough for load to refuse a larger file, never the whole of it
+        load_agent_file(raw, models=models)
+    except AgentFileError as exc:
+        errors.append(str(exc))
+    except OSError:
+        errors.append("agent.yaml can't be read")
+    return errors
+
+
 def _authz_errors(spec: dict) -> list[str]:
     authz = spec.get("authz")
     if not authz:
@@ -137,6 +179,7 @@ RESERVED_ENV_PREFIXES = {
     "SECRETSERVER_": "SECRETSERVER_* variables belong to the platform's Secret Server integration (secrets reach the app as the env names its binding chose), never builder-spec.json",
     "MCP_": "MCP_* variables are set by the platform from the app's binding (its MCP servers, picked in the portal), never from builder-spec.json",
     "CF_ACCESS_": "CF_ACCESS_* variables carry the app's Cloudflare service token from Secret Server, never builder-spec.json",
+    "AGENT_": "AGENT_* variables are set by the platform for an agent app (its model gateway and its key), never from builder-spec.json",
 }
 BINDING_ENV_PREFIXES = ("AZURE_", "DATABRICKS_", "SECRETSERVER_", "MCP_", "CF_ACCESS_")
 BINDING_ENV_NAMES = ("SKILLS_DIR",)

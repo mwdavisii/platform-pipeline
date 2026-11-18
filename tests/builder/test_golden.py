@@ -13,7 +13,7 @@ GOLDEN_VERSION = "0.2.0"
 HERE = Path(__file__).parent
 FIXTURES = HERE / "fixtures"
 GOLDEN = HERE / "golden"
-NAMES = ["python-fastapi", "node-express", "static-site"]
+NAMES = ["python-fastapi", "node-express", "static-site", "agent"]
 
 
 @pytest.mark.parametrize("name", NAMES)

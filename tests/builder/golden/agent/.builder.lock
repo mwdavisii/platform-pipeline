@@ -1,0 +1,19 @@
+{
+  "blocks": {
+    "AGENTS.md": "433fd82274f39521160b3f684745ee81737059b1585ce4faed537f1440e05bf0",
+    "CLAUDE.md": "80335c8c80902767fd3e773e3411f3e25b118b411de6e71de97616c818b5f1b7"
+  },
+  "builder_version": "0.2.0",
+  "files": {
+    ".dockerignore": "87ad57476030d2747d0564cac96abf8ab3a30f325998e7cd99ce54d595aed9f2",
+    "Dockerfile": "6a72b889ce6f52e7ba2ec56b0dbe78386024fc2b9b7b18f626f47c5604f538e7",
+    "deploy/base/cilium-egress.yaml": "3337fc3cfdd581531713e2c9175f85d0dd405b432b0a91499f8cd72ad7e8498b",
+    "deploy/base/deployment.yaml": "63ad482039e3477e47949262f140357f749c6c0e05df353663deed36b2ce2b10",
+    "deploy/base/kustomization.yaml": "02631caa8e959121188c9e01c8b927f4f126a5e4503ef34ed3a2fe790325938f",
+    "deploy/base/networkpolicy.yaml": "c7cdc595d036734d73256a9ec6d533263e1363c669ed56ba47a14e8ea04bd506",
+    "deploy/base/service.yaml": "58eff4b97b298025301284e765a32ec1cf0c48e80794d889eb24442eec0d6252",
+    "deploy/base/serviceaccount.yaml": "7eb9b3c6830eb42f6a72222a88bedfc741f016fdad1b81850adf3b71fa2dd5ee"
+  },
+  "platform_config_sha256": "bf2578671ddf376a3d0a31dbe1824955a3596ff9b032ff60bd012f33b3f148c8",
+  "spec_sha256": "ec51b5ed9635c0a06bbb050bf3c4ac01e3e2af40ead2da2a75cb378e14fc655b"
+}

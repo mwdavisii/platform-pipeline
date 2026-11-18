@@ -26,9 +26,9 @@ from builder.spec import reserved_reason
 from contracts.schema import validate
 
 from . import off_by_default, skills_catalog
-from .bindings import effects, mcp_token_name
-from .compose import (EXTERNAL_SECRET_STORE, EXTERNAL_SECRET_SUFFIX, MCP_TOKEN_KEYS, ComposeError, UniqueKeyLoader, cloudflare_access,
-                      compose, external_secret, kustomization)
+from .bindings import agent_key_name, effects, mcp_token_name
+from .compose import (AGENT_KEY, EXTERNAL_SECRET_STORE, EXTERNAL_SECRET_SUFFIX, MCP_TOKEN_KEYS, ComposeError, UniqueKeyLoader,
+                      agent_key_for, cloudflare_access, compose, external_secret, is_agent, kustomization, parse_manifests)
 from .io import InputError, write_text_atomic
 from .render import MAX_FILE_BYTES, _read_yaml
 
@@ -265,10 +265,12 @@ def _skills_for(binding, environment: str, catalog) -> dict | None:
     return files
 
 
-def _generated(d: Path, catalog=None, *, strict_gateway: bool = True, warnings: list | None = None) -> tuple[dict, dict | None]:
-    """({name: text} for the generated files, the binding they were composed from), from the files on disk. Raises InputError on
-    anything refused. The skills catalog is read only when the binding pins skills (default: skills_catalog.default_catalog()).
-    Compose reads the binding, and lifecycle.yaml (a suspension) when there is one."""
+def _generated(d: Path, catalog=None, *, strict_gateway: bool = True,
+               warnings: list | None = None) -> tuple[dict, dict | None, str | None]:
+    """({name: text} for the generated files, the binding they were composed from, the agent app's gateway key path or None for any
+    other app), from the files on disk. Raises InputError on anything refused. The skills catalog is read only when the binding
+    pins skills (default: skills_catalog.default_catalog()). Compose reads the binding, and lifecycle.yaml (a suspension) when there
+    is one."""
     release = load_release(d)
     binding = load_binding_v2(d, release)
     _reserved_secret_envs(binding)
@@ -292,16 +294,17 @@ def _generated(d: Path, catalog=None, *, strict_gateway: bool = True, warnings: 
     try:
         text = raw.decode("utf-8")
         texts = {"composed.yaml": compose(text, release["image"], binding, namespace=release["namespace"], skills=skills,
-                                         lifecycle=lifecycle),
+                                         lifecycle=lifecycle, repo=release["repo"], environment=release["environment"]),
                  "kustomization.yaml": kustomization(release["namespace"])}
         access = cloudflare_access(binding)
+        agent_key = agent_key_for(parse_manifests(text, release["image"]), release["repo"], release["environment"])
     except UnicodeDecodeError:
         raise InputError("base/manifests.yaml is not UTF-8") from None
     except ComposeError as exc:
         raise InputError(str(exc)) from None
     if access is not None:
         texts[CLOUDFLARE_ACCESS] = access
-    return texts, binding
+    return texts, binding, agent_key
 
 
 def plan_environment(d, *, strict_gateway: bool = True, warnings: list | None = None) -> dict:
@@ -314,7 +317,7 @@ def plan_environment(d, *, strict_gateway: bool = True, warnings: list | None = 
     if problems:
         raise InputError(problems[0])
     try:
-        texts, _ = _generated(d, strict_gateway=strict_gateway, warnings=warnings)
+        texts, _, _ = _generated(d, strict_gateway=strict_gateway, warnings=warnings)
     except InputError as exc:
         raise InputError(f"{_rel(d)}: {exc}") from None
     return {d / name: text for name, text in texts.items()}
@@ -333,10 +336,11 @@ def compose_environment(d) -> list[Path]:
     return write_planned(plan_environment(d))
 
 
-def _external_secret_problems(rel: str, composed: bytes, binding) -> list[str]:
+def _external_secret_problems(rel: str, composed: bytes, binding, agent_key=None) -> list[str]:
     """Defence in depth beside the drift check: the ExternalSecret in composed.yaml, as committed, is exactly the object compose
-    writes from the binding (the binding's secrets, then its MCP token's two entries at the token's fixed Secret Server path, from
-    the platform's ClusterSecretStore, into the app's own Secret), and composed.yaml carries no store of its own. The specific problems name what differs; the whole-object comparison catches the rest."""
+    writes from the binding (the binding's secrets, then its MCP token's two entries at the token's fixed Secret Server path, then an
+    agent app's gateway key at agent_key, its fixed path, from the platform's ClusterSecretStore, into the app's own Secret), and
+    composed.yaml carries no store of its own. The specific problems name what differs; the whole-object comparison catches the rest."""
     try:
         objects = [o for o in yaml.load_all(composed.decode("utf-8"), Loader=UniqueKeyLoader) if o is not None]
     except (UnicodeDecodeError, yaml.YAMLError, RecursionError) as exc:
@@ -349,12 +353,19 @@ def _external_secret_problems(rel: str, composed: bytes, binding) -> list[str]:
     want = [(env, str(sid), slug) for env, sid, slug in fx["secrets"]]
     if fx["mcp"]:
         want += [(key, fx["mcp"]["secret_path"], prop) for key, prop in MCP_TOKEN_KEYS]
+    if agent_key:
+        want.append((AGENT_KEY[0], agent_key, AGENT_KEY[1]))
     if len(found) > 1:
-        return problems + [f"{rel}: {len(found)} ExternalSecrets; an environment's secrets and MCP token make exactly one"]
+        return problems + [f"{rel}: {len(found)} ExternalSecrets; an environment's secrets, MCP token and agent gateway key make "
+                           "exactly one"]
     if not found:
-        return problems + ([f"{rel}: the binding has secrets or MCP servers but there is no ExternalSecret"] if want else [])
+        if not want:
+            return problems
+        if agent_key and not (fx["secrets"] or fx["mcp"]):
+            return problems + [f"{rel}: the agent app's gateway key needs an ExternalSecret"]
+        return problems + [f"{rel}: the binding has secrets or MCP servers but there is no ExternalSecret"]
     if not want:
-        return problems + [f"{rel}: an ExternalSecret, but the binding has no secrets or MCP servers"]
+        return problems + [f"{rel}: an ExternalSecret, but the binding has no secrets or MCP servers and the app is not an agent"]
     es = found[0]
     meta = es.get("metadata") if isinstance(es.get("metadata"), dict) else {}
     spec = es.get("spec") if isinstance(es.get("spec"), dict) else {}
@@ -376,11 +387,11 @@ def _external_secret_problems(rel: str, composed: bytes, binding) -> list[str]:
         problems.append(f"{rel}: the ExternalSecret's data is not a list of secretKey and remoteRef key and property")
     elif got != want:
         extra = sorted({f"{k}={i}/{p}" for k, i, p in got} - {f"{k}={i}/{p}" for k, i, p in want}, key=str)
-        problems.append(f"{rel}: the ExternalSecret's data is not the binding's secrets or MCP servers"
+        problems.append(f"{rel}: the ExternalSecret's data is not the binding's secrets or MCP servers, then an agent's gateway key"
                         + (f" (not in the binding: {', '.join(str(e) for e in extra)})"[:300] if extra else ""))
     # The whole object, so nothing the specific checks don't name (dataFrom, target.template, metadata.namespace, apiVersion, an
     # extra key) can ride along: it is exactly what compose writes from the binding.
-    if not problems and (not isinstance(app, str) or es != external_secret(app, fx["secrets"], fx["mcp"])):
+    if not problems and (not isinstance(app, str) or es != external_secret(app, fx["secrets"], fx["mcp"], agent_key)):
         problems.append(f"{rel}: the ExternalSecret is not exactly what golden-road compose writes from the binding")
     return problems
 
@@ -394,7 +405,7 @@ def verify_environment(d, *, strict_gateway: bool = True, warnings: list | None 
     if problems:
         return problems
     try:
-        texts, binding = _generated(d, strict_gateway=strict_gateway, warnings=warnings)
+        texts, binding, agent_key = _generated(d, strict_gateway=strict_gateway, warnings=warnings)
     except (InputError, OSError) as exc:
         return [f"{_rel(d)}: {exc}"]
     for name in GENERATED:
@@ -413,7 +424,7 @@ def verify_environment(d, *, strict_gateway: bool = True, warnings: list | None 
         problems.append(f"{_rel(d, CLOUDFLARE_ACCESS)} differs from what golden-road compose writes")
     composed = d / "composed.yaml"
     if composed.is_file() and composed.stat().st_size <= MAX_FILE_BYTES:
-        problems += _external_secret_problems(_rel(d, "composed.yaml"), composed.read_bytes(), binding)
+        problems += _external_secret_problems(_rel(d, "composed.yaml"), composed.read_bytes(), binding, agent_key)
     return problems
 
 
@@ -470,10 +481,23 @@ def changed_bindings(paths) -> set:
     return {m.group(1) for p in paths if (m := BINDING_CHANGE.fullmatch(p.strip()))}
 
 
+def _is_agent_dir(d: Path, release: dict) -> bool:
+    """The environment's signed manifests are an agent app's (compose.is_agent). False for any it can't read or parse:
+    verify_environment reports those."""
+    base = d / "base"
+    if base.is_symlink():
+        return False
+    try:
+        raw = _read_capped(base / "manifests.yaml", MAX_FILE_BYTES, "base/manifests.yaml")
+        return is_agent(parse_manifests(raw.decode("utf-8"), release["image"]))
+    except (InputError, OSError, UnicodeDecodeError, ComposeError):
+        return False
+
+
 def verify_tree(root, expect_url: str | None = None, changed: set | None = None) -> dict:
     """{"environments": n, "problems": [...]} for the whole deploy repo: every environment verified, the tree's shape, no two
-    environments sharing a namespace (not even one app's test and prod: the convention is <repo>-<env>) or an MCP token name (a
-    backstop: bindings.mcp_token_name is one-to-one), and every environment's
+    environments sharing a namespace (not even one app's test and prod: the convention is <repo>-<env>), an MCP token name or an
+    agent gateway key name (backstops: bindings.mcp_token_name and agent_key_name are one-to-one), and every environment's
     two adapters exactly as compose writes them, with no adapter left for an environment that is gone, and the whole repo off by
     default (golden_road.off_by_default). With `expect_url` (the workflows pass $GITHUB_SERVER_URL/$GITHUB_REPOSITORY), the Flux
     source's url must be this repository, and so must every adapter's (they are compared with what compose writes from it).
@@ -485,7 +509,7 @@ def verify_tree(root, expect_url: str | None = None, changed: set | None = None)
             check_repo_url(deploy_repo_url(root), expect_url)
         except InputError as exc:
             problems.append(str(exc))
-    by_namespace, by_token, loaded, warnings = {}, {}, {}, []
+    by_namespace, by_token, by_agent_key, loaded, warnings = {}, {}, {}, {}, []
     for d in environments:
         problems.extend(verify_environment(d, strict_gateway=changed is None or _rel(d) in changed, warnings=warnings))
         try:
@@ -499,12 +523,20 @@ def verify_tree(root, expect_url: str | None = None, changed: set | None = None)
                 by_token.setdefault(mcp_token_name(binding["repo"], binding["environment"]), []).append(_rel(d))
         except (InputError, OSError, ValueError):
             pass  # verify_environment reported it
+        if _is_agent_dir(d, release):
+            try:
+                by_agent_key.setdefault(agent_key_name(release["repo"], release["environment"]), []).append(_rel(d))
+            except ValueError:
+                pass  # verify_environment reported it (compose refuses an agent with no key name)
     for namespace, users in sorted(by_namespace.items()):
         if len(users) > 1:
             problems.append(f"namespace {namespace} is used by more than one environment: {', '.join(users)}")
     for token, users in sorted(by_token.items()):
         if len(users) > 1:
             problems.append(f"MCP token {token} is named by more than one environment: {', '.join(users)}")
+    for key, users in sorted(by_agent_key.items()):
+        if len(users) > 1:
+            problems.append(f"agent gateway key {key} is named by more than one environment: {', '.join(users)}")
     problems.extend(_verify_adapters(Path(root), environments, loaded))
     problems.extend(off_by_default.problems(root))  # nothing reconciles or denies on its own, read from every YAML document
     return {"environments": len(environments), "problems": problems, "warnings": warnings}

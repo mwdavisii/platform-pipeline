@@ -22,7 +22,8 @@ platform repos. In the personal PoC, the account owner (and a deputy, if there i
 | Cloudflare and ServiceNow | The job that reconciles `cloudflare-access.yaml` into Cloudflare (not built); the ServiceNow integration user the collector signs in as |
 | App repos | `/.github/` and the scanner ignore files (CODEOWNERS); the caller workflows and generated files come from the builder |
 | The portal | Its deploy kit (`deploy-kits/portal-homelab/`), its settings, its database roles and migrations |
-| GitHub Apps | The kit App, the scorecard App (central mode), the deploy App, the portal's read and write Apps, and the lifecycle App (archives a decommissioned app's repository) |
+| GitHub Apps | The kit App, the scorecard App (central mode), the deploy App, the portal's read and write Apps, the lifecycle App (archives a decommissioned app's repository) and the agent App (opens an agent's `agent.yaml` PR) |
+| Agents (0.8.0) | The agent runtime image (`images/agent-runtime`, `release-agent-runtime.yml`, `images.agent.runtime`), `golden-road-agent-template`, the agent App, and each agent app's gateway keys in Secret Server |
 | Lifecycle | The lifecycle App, migration 0012, failed archive steps, and bringing an app back after decommission (`docs/lifecycle.md`) |
 
 ## Before you start
@@ -279,8 +280,8 @@ Documented for the first real instance; the PoC uses the mock (`PORTAL_SERVICENO
    webhook (turn it off), no OAuth, no callback URL. It must be another App than the write App: the writer refuses to start when
    `PORTAL_LIFECYCLE_APP_ID` equals `PORTAL_WRITE_APP_ID`.
 2. Install it on app repos only ("Only select repositories"): never on `platform-pipeline`, `scorecard-factory`,
-   `golden-road-deploy`, `golden-road-portal`, `golden-road-agents` or `security-scans`. Before every archive the writer asks for the
-   App's installation on each of those six and fails the step (`lifecycle_app_on_platform_repo: <org>/<repo>`) if one exists. Add an
+   `golden-road-deploy`, `golden-road-portal`, `golden-road-agents`, `security-scans` or `golden-road-agent-template`. Before every
+   archive the writer asks for the App's installation on each of those seven and fails the step (`lifecycle_app_on_platform_repo: <org>/<repo>`) if one exists. Add an
    app repo to the installation before you decommission it (or install it on every app repo).
 3. Generate a private key. Put the App's id in the writer's Secret as `PORTAL_LIFECYCLE_APP_ID` and the key as `lifecycle-app.pem`
    (`deploy-kits/portal-homelab/secrets.example.yaml`); the kit's `writer.yaml` mounts it at
@@ -290,7 +291,7 @@ Documented for the first real instance; the PoC uses the mock (`PORTAL_SERVICENO
    (`kubectl -n golden-road-portal delete pod -l app.kubernetes.io/name=golden-road-portal-writer`), then delete the old key in the App's settings.
    Do the same at once if the key may have leaked.
 
-The writer's calls with it: as the App, `GET /repos/<org>/<platform repo>/installation` for each of the six (each must be a 404) and
+The writer's calls with it: as the App, `GET /repos/<org>/<platform repo>/installation` for each of the seven (each must be a 404) and
 `GET /repos/<owner>/<repo>/installation`, then `POST /app/installations/<id>/access_tokens` for the one repository with only
 `administration: write` (a token GitHub grants wider or narrower is revoked unused). The token makes exactly three calls:
 `GET /repos/<owner>/<repo>` (already archived: the step is done), `PATCH /repos/<owner>/<repo>` with `{"archived": true}`, and
@@ -373,6 +374,80 @@ back only once its decommission is applied in git or stopped").
 **Check:** the app page shows no banner and its Lifecycle panel reads Active, the register form takes the repo, and `/admin/audit`
 shows your `lifecycle.brought_back` entry.
 
+### 19. Release and pin the agent runtime
+
+**Goal:** every agent's Dockerfile starts `FROM` a runtime this repo built and signed, and the builder bakes in its digest.
+
+The runtime is released before the builder of the same version: the builder image bakes `platform/platform.json`, so the runtime's
+digest must be in it first.
+1. Make sure the tag ruleset (`.github/rulesets/builder-tags.json`) on `platform-pipeline` covers `refs/tags/agent-runtime-v*` as
+   well as `refs/tags/builder-v*` (update it with `gh api -X PUT repos/<org>/platform-pipeline/rulesets/<id> --input ...`).
+2. From the configured tree, tag `agent-runtime-v<version>` (the builder's version) and push the tag. `release-agent-runtime.yml`
+   builds `images/agent-runtime`, pushes `ghcr.io/<org>/golden-road-agent-runtime`, cosign-signs it and prints `ref@digest` in the
+   run's summary. Make the package readable by every agent app's CI (public in the personal PoC).
+3. Run `scripts/configure.py` again with your flags plus `--agent-runtime-image <ref@digest>`. Commit `platform/platform.json` and
+   every regenerated app under `bootstrap/` (`hello-app`, `golden-road-portal`, `golden-road-agent-template`): each `.builder.lock`
+   records `platform_config_sha256`, so all three change, and the template's `Dockerfile` too.
+4. Then tag `builder-v<version>` (procedure 2). `release-builder.yml` refuses the zero-digest placeholder and cosign-verifies that the
+   pinned digest carries `release-agent-runtime.yml`'s signature from an `agent-runtime-v` tag of this repo.
+
+The public export keeps the zero placeholder (`ghcr.io/example/golden-road-agent-runtime@sha256:000...`): the export refuses a
+pinned one, so pin only in the configured tree. A base-image fix for Python is one bump for both: the runtime's base is the
+builder's Python runtime image.
+
+**Check:** `jq .images platform/platform.json` shows the digest, `bootstrap/golden-road-agent-template/Dockerfile` is `FROM` it, and
+the builder release's "Verify the agent runtime's signature" step passed.
+
+### 20. Create and install the agent App
+
+**Goal:** the portal's writer can open and update an agent's `agent.yaml` pull request, and the key that can do it reaches agent
+repos only.
+
+1. Create a GitHub App, for example `golden-road-agent`. Repository permissions: Contents: write and Pull requests: write, nothing
+   else (Metadata: read is added by GitHub). No organization permission, no webhook, no OAuth. It must be another App than the write
+   App, the lifecycle App and the read App: the writer exits 2 when `PORTAL_AGENT_APP_ID` is the write or lifecycle App's id, and
+   can't check the read App's (it never holds it).
+2. Install it with "Only select repositories", on agent repos only: never a platform repo (`platform-pipeline`,
+   `scorecard-factory`, `golden-road-deploy`, `golden-road-portal`, `golden-road-agents`, `security-scans`,
+   `golden-road-agent-template`) and never all repositories. Before each request the writer asks for the App's installation on each
+   platform repo and on the app's repo; while it is installed too wide every agent definition waits, retried each pass, and the
+   Agent page shows `agent_app_on_platform_repo: <org>/<repo>` or `agent_app_on_all_repositories`. Add each new agent repo to the
+   installation (and to the read App's).
+3. Generate a private key. Put the App's id in the writer's Secret as `PORTAL_AGENT_APP_ID` and the key as `agent-app.pem`
+   (`deploy-kits/portal-homelab/secrets.example.yaml`); the kit's `writer.yaml` mounts it at `/secrets/agent-app/agent-app.pem`
+   (`PORTAL_AGENT_APP_KEY_FILE`). The writer reads both or neither, and no other pod gets them. The 0.8.0 kit always sets the key
+   file's path: fill both keys before you apply it, or remove the two agent App entries from `writer.yaml` until the App exists, or
+   the writer exits 2 and restarts in a loop. Without the App every agent definition waits with `no_agent_app`.
+4. Rotate the key as the lifecycle App's (procedure 15, step 4).
+
+The writer's calls with it: as the App, `GET /repos/<org>/<platform repo>/installation` for each platform repo (each a 404),
+`GET /repos/<owner>/<repo>/installation`, `GET /app`, then one token for the one repository with exactly `contents: write` and
+`pull_requests: write` (any other grant, or a token that lists another repository, is revoked unused). The token reads the repo, its
+default branch, `builder-spec.json` and `agent.yaml`, lists the PRs from `portal/agent-definition`, recreates that branch when no PR
+of the App's is open, writes `agent.yaml`, opens or updates the PR, and is revoked (`DELETE /installation/token`). It never merges.
+
+**Check:** the writer starts (no `writer: PORTAL_AGENT_APP_ID ...` line in its log), the App's installation page lists agent repos
+only, and a saved definition's PR is opened by `<app slug>[bot]`.
+
+### 21. Create an agent app's gateway keys
+
+**Goal:** every environment of an agent app has its model gateway key before the agent's first deploy.
+
+Compose adds `AGENT_GATEWAY_KEY` to every environment of an agent app, from the fixed Secret Server path
+`/golden-road/agent-gateway-keys/agent-<owner>--<repo>-<env>` (lower case, property `key`), as the last entry of the environment's
+`<app>-delinea` ExternalSecret. No job creates the key.
+1. For a new agent repo, before its first pin PR merges in the deploy repo, ask the gateway's owners for one key per environment
+   for this app (spend shows per app key at the gateway).
+2. Create a secret in Secret Server at `/golden-road/agent-gateway-keys/agent-<owner>--<repo>-test` (and `-prod`) with the key in
+   its field `key`, and share it with `golden-road-eso`, as for an MCP token.
+
+If the key is missing, External Secrets fails the whole ExternalSecret: none of its entries sync, so the pod loses the
+environment's other secrets too and doesn't start. In the personal PoC there is no running Secret Server: record the paths.
+Per-team gateway tokens are the next step: the key comes from a binding-set variable, so that changes which binding provides it.
+
+**Check:** `grep -n 'agent-gateway-keys' apps/<owner>/<repo>/<env>/composed.yaml` in the deploy repo names a path that exists in
+Secret Server, and the ExternalSecret's status is `SecretSynced` once something reconciles.
+
 ## What you must never do
 
 - Never release the builder before configuring the tree, and never move or reuse a `builder-v*` tag.
@@ -382,6 +457,10 @@ shows your `lifecycle.brought_back` entry.
 - Never add the write App, the deploy App or anyone to a `main` ruleset's bypass list.
 - Never install the lifecycle App on a platform repository, give it any permission but Administration: write, or give its key to
   any process but the writer. Never use the write App's id for it.
+- Never install the agent App on a platform repository or on all repositories, give it any permission but Contents and Pull
+  requests write, or give its key to any process but the writer. Never use the write, lifecycle or read App's id for it.
+- Never tag `builder-v<version>` before `agent-runtime-v<version>` is released and its digest pinned, and never commit the pin to
+  the source tree (the export keeps the placeholder).
 - Never change `lifecycle_state`, `lifecycle_step` or `lifecycle_events` by hand except as procedure 18 and portal-admin
   procedure 14 say, with an audit entry.
 - Never switch on a Flux adapter, an Argo CD automated sync or the image policy's `enforce` mode from git: `deploy-check` and the
@@ -404,6 +483,10 @@ shows your `lifecycle.brought_back` entry.
 | The writer logs `writer: PORTAL_LIFECYCLE_APP_ID must be another App than PORTAL_WRITE_APP_ID: the write App never archives` | The lifecycle App's id is the write App's | Create the lifecycle App (procedure 15) |
 | A decommission ends Refused with `recheck: no_lifecycle_app` | The writer runs without the lifecycle App | Procedure 15; the admin asks again |
 | The archive step failed | The lifecycle App's installation or permission | Procedure 17 |
+| The builder release fails "images.agent.runtime is not pinned" or its runtime signature check | The runtime wasn't released and pinned first, or the pin is another image | Procedure 19 |
+| The writer exits 2 with `PORTAL_AGENT_APP_ID` in its log after the 0.8.0 kit | Only one agent App setting reached it, or the id is the write or lifecycle App's | Procedure 20, step 3 |
+| Agent definitions wait with `no_agent_app`, `agent_app_on_platform_repo` or `agent_app_on_all_repositories` | No agent App, or it is installed too wide | Procedure 20 |
+| An agent's pod doesn't start and its ExternalSecret isn't synced | Its gateway key isn't in Secret Server | Procedure 21 |
 | The collector logs `collectors: PORTAL_BASE_URL is not set: the ServiceNow notes link the portal's request` and exits 2 | `PORTAL_SERVICENOW` is set and the collector has no `PORTAL_BASE_URL` | Take the 0.7.0 kit's `collector.yaml` |
 | A lifecycle step failed `merged_with_other_commits` | A person merged the writer's PR with commits the writer didn't write, so the writer can't say what the merge applied | Check the merge commit by hand (`gh pr view <n> --repo <org>/<repo> --json mergeCommit,commits`) and revert what shouldn't be there. Then the admin presses Retry: the writer recognizes a merged PR it already judged by its own `failed` note (only the writer can write those notes), so the Retry plans the step again at `main` (a new PR for what is missing, or done if `main` holds it) instead of failing it again for the same merge. `merged_file_differs` and `merged_file_missing` work the same way |
 | After the write App was renamed, the writer refuses its own new PRs (`pr_not_ours`) | The writer reads the write App's bot login (`<app slug>[bot]`) at startup | Restart the writer, then Retry |
@@ -435,3 +518,6 @@ shows your `lifecycle.brought_back` entry.
   the app is suspended is not suspended; bringing an app back resets the portal's state by hand (procedure 18).
 - **The writer reads the write App's bot login at startup:** a renamed App needs a writer restart.
 - **Scheduled workflows silently stop** after 60 days without activity on a public repo.
+- **Agent gateway keys are made by hand** (procedure 21), and the model, Databricks and Graph are mocks in the PoC. The agent's
+  own CI doesn't verify the runtime's signature on its `FROM` image (the builder release does). The runtime has no caps: the pod's
+  memory limit is the only bound.

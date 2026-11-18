@@ -108,3 +108,18 @@ def test_the_classification_question_names_the_levels_and_the_policy(python_app)
     questions = detect(python_app)["questions"]
     [question] = [q for q in questions if q.startswith("What data does this app handle")]
     assert "public, confidential or protected" in question and "https://policies.example.com/data-classification" in question
+
+
+def test_a_repo_with_only_agent_yaml_is_an_agent(tmp_path):
+    from builder.detect import detect
+    (tmp_path / "agent.yaml").write_text("schema: agent/v1\ndisplay_name: A\nmodel: chat-default\ninstructions: Help.\n")
+    (tmp_path / "README.md").write_text("An agent.\n")
+    draft = detect(tmp_path)["draft_spec"]
+    assert (draft["app_type"], draft["entrypoint"], draft["health_path"], draft["port"]) == ("agent", "agent.yaml", "/healthz", 8080)
+
+
+def test_agent_yaml_beside_python_code_is_not_an_agent(tmp_path):
+    from builder.detect import detect_app_type
+    (tmp_path / "agent.yaml").write_text("schema: agent/v1\n")
+    (tmp_path / "app.py").write_text("print('hi')\n")
+    assert detect_app_type(tmp_path) == ("python", [])

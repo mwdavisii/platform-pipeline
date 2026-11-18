@@ -115,3 +115,36 @@ def test_platform_without_in_cluster_map_still_renders(notes_spec):
 def test_no_egress_means_dns_only(notes_spec):
     notes_spec["egress"] = []
     assert len(docs(notes_spec)["cilium-egress.yaml"]["spec"]["egress"]) == 1
+
+
+AGENT_SPEC = {"app_name": "agent-calendar", "app_type": "agent", "entrypoint": "agent.yaml", "port": 8080, "health_path": "/healthz",
+              "data_classification": "confidential", "egress": [], "env": [], "resources_tier": "default"}
+
+
+def test_an_agent_gets_the_gateway_url_and_the_gateway_s_egress():
+    from builder.config import load_platform
+    from builder.render.k8s import cilium_egress, deployment
+    platform = {**load_platform(), "model_gateway_hosts": ["llm.example.org"]}
+    container = deployment(AGENT_SPEC, platform, 10001)["spec"]["template"]["spec"]["containers"][0]
+    assert container["env"] == [{"name": "PORT", "value": "8080"}, {"name": "AGENT_GATEWAY_URL", "value": "https://llm.example.org/v1"}]
+    assert container["readinessProbe"]["httpGet"] == {"path": "/healthz", "port": "http"}
+    rules = cilium_egress(AGENT_SPEC, platform)["spec"]["egress"]
+    assert {"toFQDNs": [{"matchName": "llm.example.org"}], "toPorts": [{"ports": [{"port": "443", "protocol": "TCP"}]}]} in rules
+
+
+def test_an_in_cluster_gateway_is_reached_by_its_pods():
+    from builder.config import load_platform
+    from builder.render.k8s import cilium_egress
+    platform = {**load_platform(), "model_gateway_hosts": ["litellm.internal"],
+                "in_cluster_egress": {"litellm.internal": {"namespace": "llm", "pod_labels": {"app": "litellm"}, "port": 4000}}}
+    rules = cilium_egress(AGENT_SPEC, platform)["spec"]["egress"]
+    assert {"toEndpoints": [{"matchLabels": {"io.kubernetes.pod.namespace": "llm", "app": "litellm"}}],
+            "toPorts": [{"ports": [{"port": "4000", "protocol": "TCP"}]}]} in rules
+
+
+def test_other_apps_get_neither():
+    from builder.config import load_platform
+    from builder.render.k8s import deployment
+    spec = {**AGENT_SPEC, "app_type": "python", "entrypoint": "app:app", "server": "uvicorn"}
+    env = deployment(spec, load_platform(), 10001)["spec"]["template"]["spec"]["containers"][0]["env"]
+    assert [e["name"] for e in env] == ["PORT"]

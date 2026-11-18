@@ -161,3 +161,53 @@ def test_a_bad_gateway_map_is_refused(bad):
 def test_a_bad_skills_repo_is_refused(bad):
     with pytest.raises(ValueError, match="skills_repo"):
         skills_repo({"skills_repo": bad})
+
+
+from builder.config import AGENT_UID, agent_gateway_url, agent_models, agent_runtime_image, images_for, load_base_images
+
+RUNTIME = "ghcr.io/example-org/golden-road-agent-runtime@sha256:" + "1" * 64
+
+
+def test_the_agent_runtime_is_a_digest_pinned_reference():
+    assert agent_runtime_image({"images": {"agent": {"runtime": RUNTIME}}}) == RUNTIME
+    assert agent_runtime_image({}) is None
+    for bad in ({"images": {"agent": {"runtime": "ghcr.io/x/y:latest"}}}, {"images": {"agent": {"runtime": RUNTIME, "uid": 1}}},
+                {"images": {"other": {}}}, {"images": []}):
+        with pytest.raises(ValueError, match="images"):
+            agent_runtime_image(bad)
+
+
+def test_images_for_adds_the_agent_runtime_with_its_user():
+    images = images_for({"images": {"agent": {"runtime": RUNTIME}}})
+    assert images["agent"] == {"runtime": RUNTIME, "uid": AGENT_UID} and AGENT_UID == 10001
+    assert {k: v for k, v in images.items() if k != "agent"} == load_base_images()
+    assert "agent" not in images_for({})
+
+
+def test_agent_models_are_distinct_ids_with_labels():
+    assert agent_models({"agent_models": [{"id": "chat-default", "label": "Default chat model"}]}) == [
+        {"id": "chat-default", "label": "Default chat model"}]
+    assert agent_models({}) == []
+    for bad in ([{"id": "Chat", "label": "x"}], [{"id": "a", "label": ""}], [{"id": "a", "label": "x"}, {"id": "a", "label": "y"}],
+                [{"id": "a"}], [{"id": "a", "label": "x\ny"}], [{"id": f"m{i}", "label": "x"} for i in range(21)], {"id": "a"}):
+        with pytest.raises(ValueError, match="agent_models"):
+            agent_models({"agent_models": bad})
+
+
+def test_the_gateway_url_is_the_first_model_gateway_s():
+    assert agent_gateway_url({"model_gateway_hosts": ["llm.example.org", "other.example.org"]}) == "https://llm.example.org/v1"
+
+
+@pytest.mark.parametrize("path", ["src/builder/data/platform.json", "platform/platform.json"])
+def test_both_platform_files_name_the_models_and_the_runtime(path):
+    import json
+    from pathlib import Path
+    doc = json.loads((Path(__file__).resolve().parents[2] / path).read_text())
+    assert agent_models(doc) == [{"id": "chat-default", "label": "Default chat model"}]
+    assert agent_runtime_image(doc) is not None  # the placeholder (zero digest) until configure.py --agent-runtime-image
+
+
+@pytest.mark.parametrize("hosts", [[], ["Not A Host"], "llm.example.org", [None], None])
+def test_the_gateway_url_needs_a_host(hosts):
+    with pytest.raises(ValueError, match="model_gateway_hosts"):
+        agent_gateway_url({"model_gateway_hosts": hosts})

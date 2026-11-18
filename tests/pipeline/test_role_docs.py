@@ -150,3 +150,18 @@ def test_the_0_7_0_procedures_are_there():
         assert needle in snow, needle
     index = (ROLES / "README.md").read_text()
     assert "[servicenow-admin.md](servicenow-admin.md)" in index and "ServiceNow admin" in index.split("## Who to ask")[1]
+
+
+def test_the_0_8_0_procedures_are_there():
+    """Spec 2026-11-17: the platform team releases and pins the agent runtime, creates the agent App and each agent's gateway keys."""
+    platform = (ROLES / "platform-team.md").read_text()
+    for heading in ("### 19. Release and pin the agent runtime", "### 20. Create and install the agent App",
+                    "### 21. Create an agent app's gateway keys"):
+        assert heading in platform, heading
+    flat = " ".join(platform.split())
+    for needle in ("agent-runtime-v<version>", "--agent-runtime-image", "release-agent-runtime.yml", "Contents: write",
+                   "Pull requests: write", "Only select repositories", "PORTAL_AGENT_APP_ID", "agent-app.pem",
+                   "agent_app_on_platform_repo", "agent_app_on_all_repositories", "/golden-road/agent-gateway-keys/agent-<owner>--<repo>-<env>",
+                   "property `key`", "before the agent's first deploy", "the whole ExternalSecret", "golden-road-agent-template",
+                   "every regenerated app under `bootstrap/`", "platform_config_sha256"):
+        assert needle in flat, needle

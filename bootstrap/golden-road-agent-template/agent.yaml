@@ -1,0 +1,8 @@
+schema: agent/v1
+display_name: My agent
+model: chat-default
+instructions: |
+  You are a helpful assistant for the team.
+  Answer briefly, and say which tools you used.
+starters:
+  - What can you do?

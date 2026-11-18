@@ -11,7 +11,7 @@ import json
 import pytest
 import yaml
 
-from helpers import unconfigure_deploy, unconfigure_agents, unconfigure_factory, unconfigure_hello_app, unconfigure_platform, unconfigure_portal
+from helpers import unconfigure_deploy, unconfigure_agents, unconfigure_factory, unconfigure_hello_app, unconfigure_platform, unconfigure_portal, unconfigure_agent_template
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = "scripts/bump-builder-version.py"
@@ -41,6 +41,7 @@ def make_scratch(root, source=ROOT):
     unconfigure_platform(root / "platform")
     unconfigure_hello_app(root / "bootstrap/hello-app")
     unconfigure_portal(root / "bootstrap/golden-road-portal")
+    unconfigure_agent_template(root / "bootstrap/golden-road-agent-template")
     unconfigure_factory(root / "bootstrap/scorecard-factory", live.get("org"))
     unconfigure_deploy(root / "bootstrap/golden-road-deploy", live.get("org"))
     unconfigure_agents(root / "bootstrap/golden-road-agents", live.get("org"), live.get("github_host"), live.get("actions_oidc_issuer"))
@@ -99,7 +100,8 @@ def test_a_bump_changes_the_version_and_hello_app_s_lock_and_dockerfile_and_is_r
     after = snapshot(scratch)
     changed = {str(p) for p in before if after.get(p) != before[p]} | {str(p) for p in after if p not in before}
     assert changed == {"src/builder/__init__.py", "bootstrap/hello-app/.builder.lock", "bootstrap/hello-app/Dockerfile",
-                       "bootstrap/golden-road-portal/.builder.lock", "bootstrap/golden-road-portal/Dockerfile"}
+                       "bootstrap/golden-road-portal/.builder.lock", "bootstrap/golden-road-portal/Dockerfile",
+                       "bootstrap/golden-road-agent-template/.builder.lock", "bootstrap/golden-road-agent-template/Dockerfile"}
     assert current_version(scratch) == new
     again = run(scratch, new)
     assert again.returncode == 0 and snapshot(scratch) == after
@@ -120,7 +122,8 @@ def test_after_a_bump_a_tree_configured_with_the_sample_config_still_passes_its_
     after = snapshot(scratch)
     changed = {str(p) for p in configured if after.get(p) != configured[p]}
     assert changed == {"src/builder/__init__.py", "bootstrap/hello-app/.builder.lock", "bootstrap/hello-app/Dockerfile",
-                       "bootstrap/golden-road-portal/.builder.lock", "bootstrap/golden-road-portal/Dockerfile"}
+                       "bootstrap/golden-road-portal/.builder.lock", "bootstrap/golden-road-portal/Dockerfile",
+                       "bootstrap/golden-road-agent-template/.builder.lock", "bootstrap/golden-road-agent-template/Dockerfile"}
     assert b"example-org" in (scratch / "bootstrap/hello-app/.github/workflows/ci.yml").read_bytes()
     run_relevant_tests(scratch)
 

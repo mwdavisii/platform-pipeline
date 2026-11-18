@@ -129,7 +129,7 @@ def test_configure_fills_the_org(tmp_path):
     import subprocess
     import sys
     from golden_road.deploy import deploy_repo_url, verify_tree
-    from helpers import unconfigure_agents, unconfigure_deploy, unconfigure_factory, unconfigure_hello_app, unconfigure_platform, unconfigure_portal
+    from helpers import unconfigure_agents, unconfigure_deploy, unconfigure_factory, unconfigure_hello_app, unconfigure_platform, unconfigure_portal, unconfigure_agent_template
 
     shutil.copytree(ROOT / "platform", tmp_path / "platform")
     shutil.copytree(ROOT / "bootstrap", tmp_path / "bootstrap", ignore=shutil.ignore_patterns("__pycache__"))
@@ -137,6 +137,7 @@ def test_configure_fills_the_org(tmp_path):
     unconfigure_platform(tmp_path / "platform")
     unconfigure_hello_app(tmp_path / "bootstrap/hello-app")
     unconfigure_portal(tmp_path / "bootstrap/golden-road-portal")
+    unconfigure_agent_template(tmp_path / "bootstrap/golden-road-agent-template")
     unconfigure_factory(tmp_path / "bootstrap/scorecard-factory", live.get("org"))
     unconfigure_deploy(tmp_path / "bootstrap/golden-road-deploy", live.get("org"))
     unconfigure_agents(tmp_path / "bootstrap/golden-road-agents", live.get("org"), live.get("github_host"), live.get("actions_oidc_issuer"))

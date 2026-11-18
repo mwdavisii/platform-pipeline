@@ -301,3 +301,43 @@ def test_the_enforcement_doc_has_the_service_principal_row():
     for needle in ("portal/mock_graph_scopes.json", "creation_problem", "0013", "sys_created_by", "correlation_display", "403", "mock",
                    "closed_by", "the requester's own ServiceNow user", "ACLs", "sysapproval_approver", "decommissioned"):
         assert needle in row, needle
+
+
+def test_the_portal_readme_describes_building_an_agent():
+    """Spec 2026-11-17: the README names the pages, the request, the writer's PR, the agent App, the collector's part and the data,
+    as built (plan 2026-11-17, Rounds 5 to 7)."""
+    text = " ".join((PORTAL / "README.md").read_text().split())
+    for needle in ("## Build an agent (0.8.0, mock model, Databricks and Graph)", "/agents/new", "/apps/<owner>/<repo>/agent",
+                   "agent_definition", "agent/v1", "portal/agent-definition", "superseded", "the agent App", "Contents: write",
+                   "no_agent_app", "no attempt cap", "collectors: agents:", "agent_observed", "agent_yaml_missing", "agent_yaml_invalid",
+                   "`0014`", "portal/agent_models.json", "golden-road-agent-template", "a person merges",
+                   # as built
+                   "agent_app_on_platform_repo", "agent_app_on_all_repositories", "Only select repositories", "pr_not_ours",
+                   "merged_file_differs", "pr_closed", "not_an_agent_repo", "platform_repo", "`PORTAL_AGENT_APP_ID`",
+                   "`PORTAL_AGENT_APP_KEY_FILE`", "`DELETE /installation/token`", "Define the agent for <repo> (portal request <id>)"):
+        assert needle in text, needle
+    section = text[text.index("## Build an agent (0.8.0"):text.index("## Development")]
+    assert "read App" in section and "lifecycle App" in section
+
+
+def test_the_enforcement_doc_has_the_agent_row():
+    """Spec 2026-11-17 (A1, A2, A6, A7, A11): where "an agent runs only the platform's runtime" is enforced, as built."""
+    text = (ROOT / "docs/enforcement.md").read_text()
+    row = next(line for line in text.splitlines() if line.startswith("| An agent runs only the platform's runtime and its agent.yaml"))
+    for needle in ("builder.agent-extra-file", "images.agent.runtime", "release-agent-runtime.yml", "AGENT_GATEWAY_KEY", "databricks_query",
+                   "graph_read", "VC-INJ", "the agent App", "cosign", "defence in depth", "Unity Catalog", "read_files",
+                   "agent_app_on_platform_repo", "No token, turn or time limit"):
+        assert needle in row, needle
+
+
+def test_every_platform_repo_list_in_the_kit_readme_is_complete():
+    """The final review's M5: where the kit README lists the platform repos an App must never be installed on, it lists them all."""
+    import re
+    source = (PORTAL / "portal/lifecycle.py").read_text()
+    repos = re.findall(r'"([a-z-]+)"', source[source.index("PLATFORM_REPOS = ("):source.index(")", source.index("PLATFORM_REPOS = ("))])
+    assert "golden-road-agent-template" in repos
+    lines = [l for l in (ROOT / "deploy-kits/portal-homelab/README.md").read_text().splitlines() if "never on `platform-pipeline`" in l]
+    assert lines
+    for line in lines:
+        for repo in repos:
+            assert f"`{repo}`" in line, (repo, line[:80])

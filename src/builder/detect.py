@@ -81,6 +81,8 @@ def detect_app_type(root) -> tuple[str | None, list[str]]:
     root = tree.root
     has_py = bool(tree.files(PY_SUFFIXES)) or (root / "requirements.txt").is_file() or (root / "pyproject.toml").is_file()
     pkg = tree.package_json()
+    if pkg is None and not has_py and (root / "agent.yaml").is_file() and not (root / "agent.yaml").is_symlink():
+        return "agent", []
     if pkg is None:
         if has_py:
             return "python", []
@@ -135,6 +137,8 @@ def detect_entrypoint(root, app_type: str | None) -> tuple[dict, list[str], list
         if pkg is not None and "build" in pkg.get("scripts", {}):
             return {"entrypoint": "dist"}, ["Assumed the build writes to dist/. Confirm the build output directory."], []
         return {"entrypoint": "."}, [], []
+    if app_type == "agent":
+        return {"entrypoint": "agent.yaml", "health_path": "/healthz"}, [], []
     return {}, [], []
 
 

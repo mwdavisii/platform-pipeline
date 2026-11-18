@@ -203,7 +203,7 @@ OPTIONAL_PASSED = {"web": {"PORTAL_DIRECTORY", "PORTAL_IDENTITY_PROCESS_URL", "P
                            "PORTAL_LIFECYCLE_GRACE_DAYS"},
                    "writer": {"PORTAL_DIRECTORY", "PORTAL_REPO_ADMINS_STALE_AFTER", "PORTAL_SECRET_SERVER", "PORTAL_CLOUDFLARE",
                               "PORTAL_MCP_GATEWAY_TEST", "PORTAL_MCP_GATEWAY_PROD", "PORTAL_SKILLS_CATALOG", "PORTAL_LIFECYCLE_APP_ID",
-                              "PORTAL_LIFECYCLE_APP_KEY_FILE"},
+                              "PORTAL_LIFECYCLE_APP_KEY_FILE", "PORTAL_AGENT_APP_ID", "PORTAL_AGENT_APP_KEY_FILE"},
                    "collector": {"PORTAL_REVIEW_DUE_SOON_DAYS", "PORTAL_REREVIEW_SIGNALS", "PORTAL_ARTIFACT_HOSTS", "PORTAL_SERVICENOW",
                                  "PORTAL_BASE_URL"}}
 
@@ -554,4 +554,42 @@ def test_the_kit_s_readme_names_the_lifecycle_settings():
     text = " ".join((KIT / "README.md").read_text().split())
     for needle in ("## Lifecycle (0.7.0)", "`PORTAL_LIFECYCLE_APP_ID`", "`PORTAL_LIFECYCLE_APP_KEY_FILE`", "lifecycle-app.pem",
                    "Administration: write", "app repos only", "`PORTAL_BASE_URL`", "collectors: lifecycle write-back: N sent", "0012"):
+        assert needle in text, needle
+
+
+@needs_kustomize
+def test_the_agent_app_is_the_writer_s_alone(built):
+    """Spec 2026-11-17 (decided while planning: item 27): PORTAL_AGENT_APP_ID and the key are in the writer's Secret only."""
+    writer_deployment = built[("Deployment", "golden-road-portal-writer")]
+    writer = provided(built, writer_deployment)
+    assert writer["PORTAL_AGENT_APP_ID"] == ("secret", "golden-road-portal-writer", "PORTAL_AGENT_APP_ID")
+    assert writer["PORTAL_AGENT_APP_KEY_FILE"] == ("literal", "/secrets/agent-app/agent-app.pem")
+    volume = next(v for v in pod(writer_deployment)["volumes"] if v["name"] == "agent-app-key")
+    assert volume["secret"]["secretName"] == "golden-road-portal-writer" and volume["secret"]["optional"] is True
+    assert volume["secret"]["items"] == [{"key": "agent-app.pem", "path": "agent-app.pem"}]
+    assert volume["secret"]["defaultMode"] == 0o440
+    mounts = {m["mountPath"]: m for m in containers(writer_deployment)[0]["volumeMounts"]}
+    assert mounts["/secrets/agent-app"]["readOnly"] is True and mounts["/secrets/agent-app"]["name"] == "agent-app-key"
+    secret_ref = next(e for e in containers(writer_deployment)[0]["env"] if e["name"] == "PORTAL_AGENT_APP_ID")
+    assert secret_ref["valueFrom"]["secretKeyRef"]["optional"] is True  # both or neither: the kit runs without the agent App
+    for name in ("golden-road-portal", "golden-road-portal-collector"):
+        env = provided(built, built[("Deployment", name)])
+        assert "PORTAL_AGENT_APP_ID" not in env and "PORTAL_AGENT_APP_KEY_FILE" not in env, name
+        assert "agent-app" not in json.dumps(built[("Deployment", name)]), name
+    assert "PORTAL_AGENT_APP_ID" not in built[("ConfigMap", "golden-road-portal-config")]["data"]
+
+
+def test_the_example_secrets_give_the_agent_app_to_the_writer_only():
+    docs = [d for d in yaml.safe_load_all((KIT / "secrets.example.yaml").read_text()) if d]
+    holders = {d["metadata"]["name"] for d in docs if {"PORTAL_AGENT_APP_ID", "agent-app.pem"} & set(d.get("stringData") or {})}
+    assert holders == {"golden-road-portal-writer"}
+    writer = next(d for d in docs if d["metadata"]["name"] == "golden-road-portal-writer")["stringData"]
+    assert writer["PORTAL_AGENT_APP_ID"] == "REPLACE_ME" and writer["agent-app.pem"] == "REPLACE_ME"
+
+
+def test_the_kit_s_readme_names_the_agent_app():
+    text = " ".join((KIT / "README.md").read_text().split())
+    for needle in ("## Build an agent (0.8.0)", "`PORTAL_AGENT_APP_ID`", "`PORTAL_AGENT_APP_KEY_FILE`", "agent-app.pem", "Contents: write",
+                   "Pull requests: write", "agent repos only", "0014", "collectors: agents:", "no_agent_app",
+                   "another App than the read App too", "Only select repositories", "agent_app_on_all_repositories"):
         assert needle in text, needle

@@ -57,3 +57,11 @@ esac
 url=$(gh repo view "$org/$name" --json url --jq .url)
 git -c credential.helper= -c credential.helper='!gh auth git-credential' push -u "$url" main
 echo "pushed $org/$name ($actual)"
+# The agent template is a GitHub template repository: people create their agent repos from it (spec 2026-11-17 A4).
+if [ "$name" = "golden-road-agent-template" ]; then
+  gh repo edit "$org/$name" --template || {
+    echo "ERROR: $org/$name is pushed but could not be marked a template repository. Finish with: gh repo edit $org/$name --template" >&2
+    exit 1
+  }
+  echo "marked $org/$name as a template repository"
+fi

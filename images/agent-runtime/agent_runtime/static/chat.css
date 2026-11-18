@@ -1,0 +1,12 @@
+body { font-family: system-ui, sans-serif; margin: 0; background: #faf8f2; color: #1f1d1a; }
+main { max-width: 44rem; margin: 0 auto; padding: 1.5rem; }
+.starters { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: .5rem; }
+button { font: inherit; padding: .4rem .8rem; border-radius: .4rem; border: 1px solid #8a7a4a; background: #fff; cursor: pointer; }
+button[disabled] { opacity: .5; cursor: wait; }
+#messages { list-style: none; padding: 0; }
+#messages li { margin: .75rem 0; padding: .6rem .8rem; border-radius: .5rem; background: #fff; white-space: pre-wrap; }
+#messages li.user { background: #efe8d4; }
+#messages li.error { background: #f7dcdc; }
+.tools, .hint { font-size: .85rem; color: #5c574d; }
+textarea { width: 100%; box-sizing: border-box; font: inherit; }
+label { display: block; margin-bottom: .25rem; }

@@ -30,11 +30,11 @@ def write_gitrepository(root, url="https://github.com/acme/golden-road-deploy"):
     return path
 
 
-def env_dir(tmp_path, app, binding=None, environment="test"):
+def env_dir(tmp_path, app, binding=None, environment="test", signed=None):
     write_gitrepository(tmp_path)
     d = tmp_path / "apps/acme/notes" / environment
     (d / "base").mkdir(parents=True)
-    signed = render(app, IMAGE, "notes-api")
+    signed = render(app, IMAGE, "notes-api") if signed is None else signed
     (d / "base/manifests.yaml").write_text(signed)
     release = {"schema": "deploy-release/v1", "repo": "acme/notes", "environment": environment, "namespace": f"notes-{environment}",
                "release": f"{environment}-20261029132351-42fa829", "image": IMAGE,
@@ -529,3 +529,91 @@ def test_two_environments_naming_one_token_are_refused(tmp_path, app, monkeypatc
     monkeypatch.setattr(deploy, "mcp_token_name", lambda repo, environment: "cf-mcp-forced--x-test")  # a forced collision
     problems = deploy.verify_tree(tmp_path)["problems"]
     assert any("MCP token cf-mcp-forced--x-test is named by more than one environment" in p for p in problems), problems
+
+
+# ---- an agent app (spec 2026-11-17 A5, decided while planning items 10 and 11): its gateway key, checked like the MCP token ----
+
+AGENT_KEY_PATH = "/golden-road/agent-gateway-keys/agent-acme--notes-test"
+
+
+def agent_dir(tmp_path, app, binding=None):
+    from test_compose_agent import agent_manifests  # the agent's signed manifests (AGENT_GATEWAY_URL in the Deployment's env)
+    return env_dir(tmp_path, app, binding=binding, signed=agent_manifests(app, IMAGE))
+
+
+def test_an_agent_s_environment_composes_its_gateway_key_and_verify_passes(tmp_path, app):
+    d = agent_dir(tmp_path, app)
+    compose_environment(d)
+    es = external_secret(docs((d / "composed.yaml").read_text()))
+    assert es["spec"]["data"] == [{"secretKey": "AGENT_GATEWAY_KEY", "remoteRef": {"key": AGENT_KEY_PATH, "property": "key"}}]
+    assert verify_environment(d) == []
+
+
+def test_an_agent_s_key_with_a_binding_comes_after_the_secrets_and_verify_passes(tmp_path, app):
+    d = agent_dir(tmp_path, app, binding=binding_v2(secrets=[SECRET]))
+    compose_environment(d)
+    es = external_secret(docs((d / "composed.yaml").read_text()))
+    assert [i["secretKey"] for i in es["spec"]["data"]] == [SECRET["env"], "AGENT_GATEWAY_KEY"]
+    assert verify_environment(d) == []
+
+
+def test_an_agent_s_key_pointed_at_another_app_s_path_is_reported(tmp_path, app):
+    d = agent_dir(tmp_path, app)
+    compose_environment(d)
+    edit_composed(d, lambda o: external_secret(o)["spec"]["data"][0]["remoteRef"].update(
+        key="/golden-road/agent-gateway-keys/agent-acme--other-test"))
+    problems = verify_environment(d)
+    assert any("composed.yaml differs" in p for p in problems)
+    assert any("the ExternalSecret's data is not" in p and "agent-acme--other-test" in p for p in problems), problems
+
+
+def test_an_agent_s_environment_without_its_external_secret_is_reported(tmp_path, app):
+    d = agent_dir(tmp_path, app)
+    compose_environment(d)
+    edit_composed(d, lambda o: o.remove(external_secret(o)))
+    assert any("the agent app's gateway key needs an ExternalSecret" in p for p in verify_environment(d))
+
+
+def test_an_agent_s_key_moved_ahead_of_a_secret_is_reported(tmp_path, app):
+    d = agent_dir(tmp_path, app, binding=binding_v2(secrets=[SECRET]))
+    compose_environment(d)
+    edit_composed(d, lambda o: external_secret(o)["spec"]["data"].reverse())
+    problems = verify_environment(d)
+    assert any("composed.yaml differs" in p for p in problems)
+    assert any("the ExternalSecret's data is not" in p for p in problems), problems
+
+
+def test_an_agent_without_its_gateway_key_env_entry_is_reported(tmp_path, app):
+    d = agent_dir(tmp_path, app)
+    compose_environment(d)
+
+    def drop(objects):
+        container = next(o for o in objects if o["kind"] == "Deployment")["spec"]["template"]["spec"]["containers"][0]
+        container["env"] = [e for e in container["env"] if e["name"] != "AGENT_GATEWAY_KEY"]
+    edit_composed(d, drop)
+    assert any("composed.yaml differs" in p for p in verify_environment(d))
+
+
+def test_two_agent_externalsecrets_name_the_gateway_key_in_the_problem(tmp_path, app):
+    d = agent_dir(tmp_path, app)
+    compose_environment(d)
+    edit_composed(d, lambda o: o.append(dict(external_secret(o))))
+    assert any("2 ExternalSecrets" in p and "gateway key" in p for p in verify_environment(d))
+
+
+def test_two_environments_naming_one_gateway_key_are_refused(tmp_path, app, monkeypatch):
+    import golden_road.deploy as deploy
+    d = agent_dir(tmp_path, app)
+    compose_environment(d)
+    other = tmp_path / "apps/acme/notes/prod"
+    other.mkdir()
+    for name in ("release.yaml", "base"):
+        (shutil.copytree if name == "base" else shutil.copy)(d / name, other / name)
+    release = yaml.safe_load((other / "release.yaml").read_text())
+    (other / "release.yaml").write_text(yaml.safe_dump({**release, "environment": "prod", "namespace": "notes-prod",
+                                                        "release": "prod-20261029132351-42fa829"}))
+    compose_environment(other)
+    assert not any("gateway key" in p for p in deploy.verify_tree(tmp_path)["problems"])
+    monkeypatch.setattr(deploy, "agent_key_name", lambda repo, environment: "agent-forced--x-test")  # a forced collision
+    problems = deploy.verify_tree(tmp_path)["problems"]
+    assert any("agent gateway key agent-forced--x-test is named by more than one environment" in p for p in problems), problems

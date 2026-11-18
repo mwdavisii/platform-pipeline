@@ -10,12 +10,28 @@ from helpers import builder_cmd, builder_env, scorecard_integration_id
 
 ROOT = Path(__file__).resolve().parents[2]
 APP = ROOT / "bootstrap/hello-app"
+TEMPLATE = ROOT / "bootstrap/golden-road-agent-template"
 
 
 def test_hello_app_verifies_with_platform_config():
     env = {**os.environ, **builder_env(), "BUILDER_PLATFORM_CONFIG": str(ROOT / "platform/platform.json")}
     out = subprocess.run([*builder_cmd(), "verify", str(APP)], capture_output=True, text=True, env=env)
     assert out.returncode == 0, out.stdout
+
+
+def test_the_agent_template_verifies_with_platform_config():
+    env = {**os.environ, **builder_env(), "BUILDER_PLATFORM_CONFIG": str(ROOT / "platform/platform.json")}
+    out = subprocess.run([*builder_cmd(), "verify", str(TEMPLATE)], capture_output=True, text=True, env=env)
+    assert out.returncode == 0, out.stdout
+
+
+def test_the_agent_template_holds_only_what_an_agent_repo_may():
+    from builder.verify import AGENT_ROOT_DIRS, AGENT_ROOT_FILES
+    names = {p.name for p in TEMPLATE.iterdir()}
+    assert names <= AGENT_ROOT_FILES | AGENT_ROOT_DIRS and "agent.yaml" in names and not (TEMPLATE / ".github/dependabot.yml").exists()
+    for name in ("ci.yml", "promote.yml"):
+        assert re.search(r"uses: [A-Za-z0-9_-]+/platform-pipeline/\.github/workflows/golden-road(-promote)?\.yml@main", (TEMPLATE / ".github/workflows" / name).read_text())
+    assert "app_name: golden-road-agent-template" in (TEMPLATE / ".github/workflows/ci.yml").read_text()
 
 
 def test_callers_point_at_platform_pipeline():
@@ -55,7 +71,7 @@ def test_environment_prevents_self_review():
 def test_builder_tag_ruleset_is_admin_only():
     doc = json.loads((ROOT / ".github/rulesets/builder-tags.json").read_text())
     assert doc["target"] == "tag" and doc["enforcement"] == "active"
-    assert doc["conditions"]["ref_name"]["include"] == ["refs/tags/builder-v*"]
+    assert doc["conditions"]["ref_name"]["include"] == ["refs/tags/builder-v*", "refs/tags/agent-runtime-v*"]
     assert {r["type"] for r in doc["rules"]} == {"creation", "update", "deletion"}
     assert [(b["actor_type"], b["actor_id"]) for b in doc["bypass_actors"]] == [("RepositoryRole", 5)]  # 5 = admin
 
@@ -107,13 +123,17 @@ def test_push_bootstrap_refuses_unconfigured_placeholder(tmp_path):
         assert calls == ""
 
 
-def push_tree(tmp_path, view_output, readme="demo\n", args=(), env=None, owner_type="User", login="org"):
-    """A copy of the script next to a placeholder-free bootstrap tree, with stub gh and git that log every call."""
+def push_tree(tmp_path, view_output, readme="demo\n", args=(), env=None, owner_type="User", login="org", name="demo", files=None, edit_exit=0):
+    """A copy of the script next to a placeholder-free bootstrap tree (bootstrap/<name> with a README and `files`), with stub gh and git
+    that log every call."""
     tmp_path.mkdir(parents=True, exist_ok=True)
     tree = tmp_path / "tree"
     (tree / "scripts").mkdir(parents=True)
-    (tree / "bootstrap/demo").mkdir(parents=True)
-    (tree / "bootstrap/demo/README.md").write_text(readme)
+    (tree / "bootstrap" / name).mkdir(parents=True)
+    (tree / "bootstrap" / name / "README.md").write_text(readme)
+    for rel, text in (files or {}).items():
+        (tree / "bootstrap" / name / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tree / "bootstrap" / name / rel).write_text(text)
     script = tree / "scripts/push-bootstrap.sh"
     script.write_text((ROOT / "scripts/push-bootstrap.sh").read_text())
     script.chmod(0o755)
@@ -133,6 +153,7 @@ case "$*" in
   "api users/"*) printf '%s\\n' '{owner_type}' ;;
   *"--json visibility"*) printf '%s' '{view_output}' ;;
   *"--json url"*) echo https://example.invalid/org/demo ;;
+  "repo edit "*) exit {edit_exit} ;;
 esac
 exit 0
 """)
@@ -141,7 +162,7 @@ exit 0
                                  f"echo \"git $*\" >> '{calls}'\nexit 0\n")
     for stub in bin_dir.iterdir():
         stub.chmod(0o755)
-    out = subprocess.run([str(script), "org", "demo", *args], capture_output=True, text=True,
+    out = subprocess.run([str(script), "org", name, *args], capture_output=True, text=True,
                          env={"PATH": f"{bin_dir}:/usr/bin:/bin", **(env or {})})
     return out, calls.read_text() if calls.exists() else ""
 
@@ -358,10 +379,10 @@ def test_personal_poc_doc_covers_the_scans_codeql_dependabot_and_the_known_gap()
                    "sp-finance-reports", "AZURE_CLIENT_ID", "bindings/<you>/hello-app.yaml"):
         assert needle in text, needle
     steps = [int(m) for m in re.findall(r"^## (\d+)\.", text, re.M)]
-    assert steps == list(range(0, 29))
+    assert steps == list(range(0, 30))
     # the scans repo is published before hello-app is pushed, and the builder is released again only after both exist
     assert text.index("## 4. Publish `security-scans`") < text.index("## 5. Create `hello-app`") < text.index("## 11.") < text.index("## 12.")
-    assert text.index("## 13. Risk scorecard") < text.index("## 14. ") < text.index("## 16. Central AI review") < text.index("## 17. Switch the review to risk routing") < text.index("## 18. High findings hold the merge") < text.index("## 19. App connections (mock)") < text.index("## 20. The deploy repo (mock)") < text.index("## 21. Delinea Secret Server secrets (mock)") < text.index("## 22. Builder 0.5.0: three classification levels, the policy link and the portal reskin") < text.index("## 23. Builder 0.5.1: changing a registration and the re-review list") < text.index("## 24. Builder 0.6.0: MCP servers, skills and the CMDB record (mock)") < text.index("## 25. Builder 0.6.1") < text.index("## 26. Builder 0.7.0: suspend, resume and decommission (mock ServiceNow)") < text.index("## 27. Builder 0.7.1") < text.index("## 28. Builder 0.7.2: create a service principal (mock)") < text.index("## PoC gaps to record")
+    assert text.index("## 13. Risk scorecard") < text.index("## 14. ") < text.index("## 16. Central AI review") < text.index("## 17. Switch the review to risk routing") < text.index("## 18. High findings hold the merge") < text.index("## 19. App connections (mock)") < text.index("## 20. The deploy repo (mock)") < text.index("## 21. Delinea Secret Server secrets (mock)") < text.index("## 22. Builder 0.5.0: three classification levels, the policy link and the portal reskin") < text.index("## 23. Builder 0.5.1: changing a registration and the re-review list") < text.index("## 24. Builder 0.6.0: MCP servers, skills and the CMDB record (mock)") < text.index("## 25. Builder 0.6.1") < text.index("## 26. Builder 0.7.0: suspend, resume and decommission (mock ServiceNow)") < text.index("## 27. Builder 0.7.1") < text.index("## 28. Builder 0.7.2: create a service principal (mock)") < text.index("## 29. Builder 0.8.0: build an agent (mock model, Databricks and Graph)") < text.index("## PoC gaps to record")
     twenty = text[text.index("## 20. The deploy repo (mock)"):text.index("## 21. Delinea Secret Server secrets (mock)")]
     for needle in ("golden-road-deploy", "deploy-check", "suspend: true", "composed.yaml", "Mock only", "DEPLOY_APP_ID", "DEPLOY_APP_KEY",
                    "environments/bump", "namespace: hello-app-test", "SINGLE_APPROVER_PROMOTIONS", "mode: warn", "### 20.8 Proof items",
@@ -424,7 +445,7 @@ def test_personal_poc_doc_covers_the_scans_codeql_dependabot_and_the_known_gap()
     assert turn_on.index("lifecycle App") < turn_on.index("deploy-check.yml") < turn_on.index("0012")
     for needle in ("applied in git", "Administration: write is broader than archive", "u_golden_road_", "first pinned while the app is suspended"):
         assert needle in gaps, needle
-    twenty_eight = text[text.index("## 28. Builder 0.7.2"):text.index("## PoC gaps to record")]
+    twenty_eight = text[text.index("## 28. Builder 0.7.2"):text.index("## 29. Builder 0.8.0")]
     for needle in ("Mock only", "### 28.1", "### 28.2", "### 28.3", "### 28.4 Proof items", "### 28.5 Roll back", "0013",
                    "no kit change", "collectors: service principals:", "Create a service principal", "Calendars.Read",
                    "Calendars.ReadWrite", "SCTASK0010007", "/mock/servicenow/tasks/SCTASK0010007", "Mock: acting as the ServiceNow approver",
@@ -442,6 +463,41 @@ def test_personal_poc_doc_covers_the_scans_codeql_dependabot_and_the_known_gap()
                    # the final review's fixes
                    "the app is decommissioned", "who closed the task is checked against the requester", "ACLs",
                    "read like another app's", "admin rights aren't checked again"):
+        assert needle in gaps, needle
+    twenty_nine = text[text.index("## 29. Builder 0.8.0"):text.index("## PoC gaps to record")]
+    for needle in ("Mock only", "### 29.0", "### 29.1", "### 29.2", "### 29.3", "### 29.4 Proof items", "### 29.5 Roll back", "0014",
+                   "agent-runtime-v0.8.0", "--agent-runtime-image", "golden-road-agent-template", "Use this template", "the agent App",
+                   "Define the agent", "portal/agent-definition", "AGENT_GATEWAY_URL", "AGENT_GATEWAY_KEY",
+                   "/golden-road/agent-gateway-keys/agent-<you>--agent-calendar-test", "agent_runtime.mock_gateway",
+                   "Hello from the mock model. You asked: When is everyone free on Thursday?", "builder.agent-extra-file",
+                   "VC-INJ/reviewer-directive", "Model: pick one of the platform's models.", "collectors: agents: 0 agent repos (0 with a problem)",
+                   # as built (plan 2026-11-17, Rounds 1 to 7, and their reviews)
+                   "builder-tags.json", "agent-runtime-v*", "Contents: write", "Pull requests: write", "Only select repositories",
+                   "agent_app_on_platform_repo", "agent_app_on_all_repositories", "PORTAL_AGENT_APP_ID", "PORTAL_AGENT_APP_KEY_FILE",
+                   "agent-app.pem", "remove the two agent App entries from `writer.yaml`", "platform_repo", "golden-road-",
+                   "lower-case letters, digits and `-`", "My agent", "the whole ExternalSecret", "before the agent's first deploy",
+                   "defence in depth", "Unity Catalog", "read_files", "the pod's memory limit", "per app key", "0014_agent_definitions",
+                   "golden-road-agent-template-delinea", "The writer is retrying: no_agent_app: PORTAL_AGENT_APP_ID is not set.",
+                   "zero-digest placeholder", "is_template"):
+        assert needle in twenty_nine, needle
+    roll_out = twenty_nine[twenty_nine.index("### 29.1"):twenty_nine.index("### 29.2")]
+    assert roll_out.index("builder-tags.json") < roll_out.index("agent-runtime-v0.8.0") < roll_out.index("--agent-runtime-image") \
+        < roll_out.index("Release builder 0.8.0") < roll_out.index("deploy-check.yml") < roll_out.index("regenerate PRs") \
+        < roll_out.index("push-bootstrap.sh") < roll_out.index("The agent App") < roll_out.index("0014")
+    assert roll_out.index("remove the two agent App entries") < roll_out.index("0014"), "the writer's Secret before the kit's apply"
+    what_changes = twenty_nine[twenty_nine.index("### 29.0"):twenty_nine.index("### 29.1")]
+    for part in (what_changes, roll_out):  # the final review's M4
+        assert "`AGENT_*` is reserved" in part and "rename it before 0.8.0" in part
+    pin = roll_out[roll_out.index("**Pin it.**"):roll_out.index("Release builder 0.8.0")]
+    for needle in ("platform/platform.json", "every regenerated app under `bootstrap/`", "platform_config_sha256", "hello-app", "golden-road-portal"):
+        assert needle in pin, needle  # the final review's I2: every app's .builder.lock changes with the platform config's hash
+    demo = twenty_nine[twenty_nine.index("### 29.2"):twenty_nine.index("### 29.3")]
+    assert demo.index("Use this template") < demo.index("Define the agent") < demo.index("Register it") \
+        < demo.index("/golden-road/agent-gateway-keys/agent-<you>--agent-calendar-test") < demo.index("bump.yml") \
+        < demo.index("incident-triage") < demo.index("agent_runtime.mock_gateway")
+    for needle in ("The model, Databricks and Graph are mocks", "created by hand in Secret Server", "per-team tokens",
+                   "binding-set variable", "listed once at start", "a tripwire", "no timeout", "doesn't verify the runtime's signature",
+                   "MCP tool descriptions", "residual", "rate limit", "the pod's memory limit"):
         assert needle in gaps, needle
     twenty_four = text[text.index("## 24. Builder 0.6.0"):text.index("## 25. Builder 0.6.1")]
     for needle in ("PORTAL_CLOUDFLARE=mock", "PORTAL_SKILLS_CATALOG=mock", "PORTAL_SERVICENOW=mock", "--mcp-gateway-test", "--skills-repo",
@@ -509,7 +565,7 @@ def test_push_bootstrap_accepts_a_pinned_digest_and_a_guard_that_names_the_zero_
 
 
 def test_the_findings_ruleset_is_the_only_one_with_a_bypass():
-    for app in (APP, ROOT / "bootstrap/golden-road-portal"):
+    for app in (APP, ROOT / "bootstrap/golden-road-portal", TEMPLATE):
         rulesets = app / ".github/rulesets"
         doc = json.loads((rulesets / "scorecard-findings.json").read_text())
         assert doc["name"] == "scorecard-findings" and doc["target"] == "branch" and doc["enforcement"] == "active"

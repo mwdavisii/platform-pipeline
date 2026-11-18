@@ -50,6 +50,12 @@ jobs:
           set -euo pipefail
           [[ "$APP" =~ ^[a-z]([a-z0-9-]{0,40}[a-z0-9])?$ ]] || { echo "::error::invalid app_name"; exit 1; }
           [ "$(jq -r .app_name src/builder-spec.json)" = "$APP" ] || { echo "::error::app_name does not match builder-spec.json"; exit 1; }
+          # The release names an agent's image after its repo and refuses a name it can't use; check it here too, so the first PR fails.
+          if [ "$(jq -r .app_type src/builder-spec.json)" = "agent" ]; then
+            name="${GITHUB_REPOSITORY#*/}"
+            [[ "$name" =~ ^[a-z0-9]([a-z0-9-]{0,98}[a-z0-9])?$ ]] || { echo "::error::an agent repo's name must be lower-case letters, digits and - (it names the image)"; exit 1; }
+            [[ "$name" != golden-road-* || "$name" == golden-road-agent-template ]] || { echo "::error::an agent repo's name must not start with golden-road- (the platform's own packages are named so)"; exit 1; }
+          fi
 
       - name: Drift check
         id: drift
@@ -169,7 +175,11 @@ jobs:
           set -euo pipefail
           port=$(jq -r .port src/builder-spec.json)
           [[ "$port" =~ ^[0-9]+$ ]] || { echo "::error::builder-spec.json has no numeric port"; exit 1; }
-          cid=$(docker run -d --network none --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges golden-road-preview:pr)
+          # An agent's runtime stops at start without its gateway settings: give it placeholders. The container has no network, so
+          # nothing is ever sent to them.
+          probe_env=()
+          if [ "$(jq -r .app_type src/builder-spec.json)" = "agent" ]; then probe_env=(-e AGENT_GATEWAY_URL=http://127.0.0.1:9/v1 -e AGENT_GATEWAY_KEY=probe); fi
+          cid=$(docker run -d --network none --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges "${probe_env[@]}" golden-road-preview:pr)
           guard="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
           # The app's log is hostile text: it is written to a file, and its tail is shown between stop-commands and a random end token.
           trap 'docker logs "$cid" > out/app.log 2>&1 || true; docker rm -f "$cid" > /dev/null || true; echo "::stop-commands::$guard"; tail -n 50 out/app.log; echo "::$guard::"' EXIT
@@ -361,7 +371,13 @@ jobs:
         run: |
           set -euo pipefail
           owner="${GITHUB_REPOSITORY_OWNER,,}"
-          image="ghcr.io/${owner}/${APP}"
+          name="$APP"
+          if [ "$(jq -r .app_type src/builder-spec.json)" = "agent" ]; then  # every agent repo shares the template's app_name: name the image after the repo
+            name="${GITHUB_REPOSITORY#*/}"
+            [[ "$name" =~ ^[a-z0-9]([a-z0-9-]{0,98}[a-z0-9])?$ ]] || { echo "::error::an agent repo's name must be lower-case letters, digits and - (it names the image)"; exit 1; }
+            [[ "$name" != golden-road-* || "$name" == golden-road-agent-template ]] || { echo "::error::an agent repo's name must not start with golden-road- (the platform's own packages are named so)"; exit 1; }
+          fi
+          image="ghcr.io/${owner}/${name}"
           { [ -f src/Dockerfile ] && [ ! -L src/Dockerfile ]; } || { echo "::error::src/Dockerfile must be a regular file, not a symlink"; exit 1; }
           docker buildx build -f src/Dockerfile --sbom=true --provenance=mode=max \
             --output "type=image,name=${image},push-by-digest=true,push=true" --metadata-file out/build.json src
@@ -377,7 +393,11 @@ jobs:
           port=$(jq -r .port src/builder-spec.json)
           [[ "$port" =~ ^[0-9]+$ ]] || { echo "::error::builder-spec.json has no numeric port"; exit 1; }
           docker pull -q "$REF"
-          cid=$(docker run -d --network none --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges "$REF")
+          # An agent's runtime stops at start without its gateway settings: give it placeholders. The container has no network, so
+          # nothing is ever sent to them.
+          probe_env=()
+          if [ "$(jq -r .app_type src/builder-spec.json)" = "agent" ]; then probe_env=(-e AGENT_GATEWAY_URL=http://127.0.0.1:9/v1 -e AGENT_GATEWAY_KEY=probe); fi
+          cid=$(docker run -d --network none --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges "${probe_env[@]}" "$REF")
           trap 'docker logs "$cid" > out/app.log 2>&1 || true; docker rm -f "$cid" > /dev/null || true' EXIT
           docker run --rm --network "container:$cid" --read-only --tmpfs /tmp --user "$(id -u):$(id -g)" \
             -v "$PWD/src:/src:ro" -v "$PWD/out:/out" "$BUILDER_IMAGE" \

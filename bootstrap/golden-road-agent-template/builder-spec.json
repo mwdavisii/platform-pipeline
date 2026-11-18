@@ -1,0 +1,11 @@
+{
+  "app_name": "golden-road-agent-template",
+  "app_type": "agent",
+  "data_classification": "confidential",
+  "egress": [],
+  "entrypoint": "agent.yaml",
+  "env": [],
+  "health_path": "/healthz",
+  "port": 8080,
+  "resources_tier": "default"
+}

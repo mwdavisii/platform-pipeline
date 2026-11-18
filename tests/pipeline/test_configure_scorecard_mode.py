@@ -8,16 +8,19 @@ from pathlib import Path
 
 import pytest
 
-from helpers import unconfigure_deploy, COMMITTED_FINDINGS_RULESET, COMMITTED_SCORECARD_CALLER, unconfigure_agents, unconfigure_factory, unconfigure_hello_app, unconfigure_platform, unconfigure_portal
+from helpers import unconfigure_deploy, COMMITTED_FINDINGS_RULESET, COMMITTED_SCORECARD_CALLER, unconfigure_agents, unconfigure_factory, unconfigure_hello_app, unconfigure_platform, unconfigure_portal, unconfigure_agent_template
 from test_configure import GOOD, configure, live_tree_is_pristine, workspace  # noqa: F401 - workspace is the fixture
 
 ROOT = Path(__file__).resolve().parents[2]
 CENTRAL = ["--scorecard-mode", "central", "--scorecard-app-id", "123456"]
-RULESETS = ("bootstrap/hello-app/.github/rulesets/main.json", "bootstrap/golden-road-portal/.github/rulesets/main.json")
+RULESETS = ("bootstrap/hello-app/.github/rulesets/main.json", "bootstrap/golden-road-portal/.github/rulesets/main.json",
+            "bootstrap/golden-road-agent-template/.github/rulesets/main.json")
 CALLERS = ("bootstrap/hello-app/.github/workflows/scorecard.yml", "bootstrap/golden-road-portal/.github/workflows/scorecard.yml",
+           "bootstrap/golden-road-agent-template/.github/workflows/scorecard.yml",
            "bootstrap/golden-road-agents/skill/templates/workflows/scorecard.yml")
 FACTORY_CALLER = "bootstrap/scorecard-factory/.github/workflows/scorecard.yml"
-FINDINGS = ("bootstrap/hello-app/.github/rulesets/scorecard-findings.json", "bootstrap/golden-road-portal/.github/rulesets/scorecard-findings.json")
+FINDINGS = ("bootstrap/hello-app/.github/rulesets/scorecard-findings.json", "bootstrap/golden-road-portal/.github/rulesets/scorecard-findings.json",
+            "bootstrap/golden-road-agent-template/.github/rulesets/scorecard-findings.json")
 
 
 def snapshot(root):
@@ -164,6 +167,7 @@ def test_the_helpers_restore_a_central_tree_to_the_committed_state(workspace):
     unconfigure_platform(workspace / "platform")
     unconfigure_hello_app(workspace / "bootstrap/hello-app")
     unconfigure_portal(workspace / "bootstrap/golden-road-portal")
+    unconfigure_agent_template(workspace / "bootstrap/golden-road-agent-template")
     unconfigure_factory(workspace / "bootstrap/scorecard-factory", "example-org")
     unconfigure_deploy(workspace / "bootstrap/golden-road-deploy", "example-org")
     unconfigure_agents(workspace / "bootstrap/golden-road-agents", "example-org", live.get("github_host"), live.get("actions_oidc_issuer"))

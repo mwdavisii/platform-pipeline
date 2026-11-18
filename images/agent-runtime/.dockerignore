@@ -1,0 +1,5 @@
+# The build context is the runtime's package and its lock only.
+tests
+**/__pycache__
+**/*.pyc
+requirements.in

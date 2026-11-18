@@ -1,0 +1,7 @@
+schema: agent/v1
+display_name: Calendar helper
+model: chat-default
+instructions: |
+  You help the team find free time across calendars.
+starters:
+  - When is everyone free on Thursday?

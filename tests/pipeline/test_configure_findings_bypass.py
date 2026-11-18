@@ -29,7 +29,7 @@ def test_a_team_replaces_the_actor_and_is_recorded(workspace):
 
 def test_main_keeps_no_bypass_actor_with_a_team(workspace):
     assert configure(workspace, *GOOD, "--findings-bypass-team", "platform-admins").returncode == 0
-    for app in ("hello-app", "golden-road-portal"):
+    for app in ("hello-app", "golden-road-portal", "golden-road-agent-template"):
         assert not json.loads((workspace / "bootstrap" / app / ".github/rulesets/main.json").read_text()).get("bypass_actors"), app
 
 

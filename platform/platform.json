@@ -74,6 +74,17 @@
     "test": "mcp-test.example.com",
     "prod": "mcp.example.com"
   },
+  "agent_models": [
+    {
+      "id": "chat-default",
+      "label": "Default chat model"
+    }
+  ],
+  "images": {
+    "agent": {
+      "runtime": "ghcr.io/example/golden-road-agent-runtime@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
   "org": "mwdavisii",
   "github_host": "github.com",
   "actions_oidc_issuer": "https://token.actions.githubusercontent.com",

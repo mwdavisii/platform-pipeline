@@ -54,3 +54,45 @@ esac
     pushed = sorted(git(tmp_path, "--git-dir", str(remote), "ls-tree", "-r", "--name-only", "main").split())
     assert pushed == ["README.md", "src/app.py"]
     assert git(tmp_path, "--git-dir", str(remote), "show", "main:src/app.py") == "print('changed')\n"
+
+
+TEMPLATE_DOCKERFILE = "FROM ghcr.io/example-org/golden-road-agent-runtime@sha256:" + "2" * 64 + "\nCOPY agent.yaml /app/agent.yaml\n"
+
+
+def test_the_agent_template_is_marked_a_template_repository_after_the_push(tmp_path):
+    """(decided while planning: item 35) People create their agent repos from it, so the push ends by marking it a GitHub template."""
+    from test_bootstrap import push_tree
+
+    out, calls = push_tree(tmp_path, "PRIVATE", name="golden-road-agent-template", files={"Dockerfile": TEMPLATE_DOCKERFILE})
+    assert out.returncode == 0, out.stderr
+    lines = calls.splitlines()
+    assert lines[-1] == "gh repo edit org/golden-road-agent-template --template"
+    assert next(i for i, l in enumerate(lines) if l.startswith("git ") and " push " in f"{l} ") < len(lines) - 1
+    assert "marked org/golden-road-agent-template as a template repository" in out.stdout
+
+
+def test_the_template_is_not_pushed_while_its_runtime_is_the_zero_digest(tmp_path):
+    from test_bootstrap import push_tree
+
+    zero = TEMPLATE_DOCKERFILE.replace("2" * 64, "0" * 64)
+    out, calls = push_tree(tmp_path, "PRIVATE", name="golden-road-agent-template", files={"Dockerfile": zero})
+    assert out.returncode == 2 and "configure.py" in out.stderr and calls == ""
+
+
+def test_no_other_repository_is_marked_a_template(tmp_path):
+    from test_bootstrap import push_tree
+
+    for i, name in enumerate(("hello-app", "golden-road-portal", "golden-road-agent-template-old")):
+        out, calls = push_tree(tmp_path / str(i), "PRIVATE", name=name)
+        assert out.returncode == 0, out.stderr
+        assert "repo edit" not in calls, name
+
+
+def test_a_failed_template_mark_after_the_push_says_how_to_finish(tmp_path):
+    """The content is already pushed when `gh repo edit --template` runs: a failure exits non-zero and prints the one command left to run."""
+    from test_bootstrap import push_tree
+
+    out, calls = push_tree(tmp_path, "PRIVATE", name="golden-road-agent-template", files={"Dockerfile": TEMPLATE_DOCKERFILE}, edit_exit=1)
+    assert out.returncode != 0 and calls.splitlines()[-1] == "gh repo edit org/golden-road-agent-template --template"
+    assert "pushed org/golden-road-agent-template" in out.stdout and "marked" not in out.stdout
+    assert "gh repo edit org/golden-road-agent-template --template" in out.stderr

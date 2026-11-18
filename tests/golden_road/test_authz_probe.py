@@ -382,3 +382,34 @@ def test_a_deeply_nested_spec_is_an_input_error(python_app):
     (python_app / "builder-spec.json").write_text('{"data_classification": ' + "[" * 3000 + "]" * 3000 + "}")
     with pytest.raises(InputError, match="builder-spec.json is invalid"):
         probe(python_app, "http://127.0.0.1:9", platform=PLATFORM)
+
+
+
+def _agent_root(tmp_path):
+    from pathlib import Path
+    spec = json.loads((Path(__file__).resolve().parents[2] / "bootstrap/golden-road-agent-template/builder-spec.json").read_text())
+    (tmp_path / "builder-spec.json").write_text(json.dumps(spec))
+    return tmp_path, spec
+
+
+def test_an_agent_is_probed_for_its_start_only(tmp_path):
+    """An agent declares no authz (the edge guards it): the probe waits for the runtime's health path and says not-declared."""
+    root, spec = _agent_root(tmp_path)
+    seen = []
+
+    def app(environ, start_response):
+        seen.append(environ["PATH_INFO"])
+        return ok_app(environ, start_response)
+
+    server, url = serve(app)
+    try:
+        assert probe(root, url, platform=PLATFORM) == {"status": "not-declared"}
+    finally:
+        server.shutdown()
+    assert seen == [spec["health_path"]]
+
+
+def test_an_agent_that_does_not_start_fails_the_probe(tmp_path):
+    root, _ = _agent_root(tmp_path)
+    result = probe(root, "http://127.0.0.1:9", platform=PLATFORM, ready_timeout=1)
+    assert result["status"] == "fail" and "agent runtime did not start" in result["reason"]

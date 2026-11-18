@@ -110,6 +110,8 @@ def unconfigure_platform(platform_dir):
     doc["identity_header"] = "X-replace-me"
     doc["classification_policy_url"] = "https://policies.example.com/data-classification"  # contracts.classification.POLICY_PLACEHOLDER
     doc["mcp_gateways"] = {"test": "mcp-test.example.com", "prod": "mcp.example.com"}
+    doc["images"] = {"agent": {"runtime": "ghcr.io/example/golden-road-agent-runtime@sha256:" + "0" * 64}}
+    doc["agent_models"] = [{"id": "chat-default", "label": "Default chat model"}]
     path.write_text(json.dumps(doc, indent=2) + "\n")
 
 
@@ -311,6 +313,26 @@ def unconfigure_portal(app_dir):
     spec["egress"] = [{"host": "api.github.com", "port": 443, "reason": "GitHub API: identity linking"},
                       {"host": "github.com", "port": 443, "reason": "GitHub OAuth: identity linking"}]
     spec_path.write_text(json.dumps(spec, indent=2) + "\n")
+    platform_path = app.parent.parent / "platform/platform.json"
+    out = subprocess.run([*builder_cmd(), "generate", str(app)], capture_output=True, text=True, env=builder_env(BUILDER_PLATFORM_CONFIG=str(platform_path)))
+    assert out.returncode == 0, out.stdout + out.stderr
+
+
+def unconfigure_agent_template(app_dir):
+    """Reset bootstrap/golden-road-agent-template to the committed placeholder state, as unconfigure_portal does the portal: the caller org
+    placeholders, the committed CODEOWNERS, the default approval settings, and the generated files against the unconfigured platform
+    file (which must sit at <app>/../../platform, already reset by unconfigure_platform: its images carry the runtime's placeholder)."""
+    app = Path(app_dir)
+    if not app.is_dir():
+        return
+    _restore_scorecard_caller(app / ".github/workflows/scorecard.yml")
+    _repin_scorecard(app / ".github/rulesets/main.json")
+    _restore_findings_ruleset(app)
+    for rel in (".github/workflows/ci.yml", ".github/workflows/promote.yml", ".github/workflows/security-scans.yml", ".github/workflows/scorecard.yml"):
+        path = app / rel
+        path.write_text(re.sub(r"uses: [A-Za-z0-9-]+/(platform-pipeline|security-scans|scorecard-factory)/", r"uses: ORG_PLACEHOLDER/\1/", path.read_text()))
+    (app / ".github/CODEOWNERS").write_text(COMMITTED_CODEOWNERS)
+    _restore_default_approval(app)
     platform_path = app.parent.parent / "platform/platform.json"
     out = subprocess.run([*builder_cmd(), "generate", str(app)], capture_output=True, text=True, env=builder_env(BUILDER_PLATFORM_CONFIG=str(platform_path)))
     assert out.returncode == 0, out.stdout + out.stderr
